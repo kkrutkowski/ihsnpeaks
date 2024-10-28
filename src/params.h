@@ -15,8 +15,10 @@ typedef struct {
     float fmax;
     float treshold;
     float oversamplingFactor;
+    float epsilon;
     int npeaks;
     int nterms;
+    bool isFile;
     bool spectrum;
     bool debug;
 } parameters;
@@ -35,6 +37,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.treshold = 4.0;
     params.npeaks = 10;
     params.nterms = 3;
+    params.epsilon = 0.001;
     params.spectrum = false;
     params.debug = false;
 
@@ -58,6 +61,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"treshold", ko_required_argument, 't'},
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
+        {"epsilon", ko_required_argument, 'e'},
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
         {NULL, 0, 0}
@@ -68,7 +72,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 3; // Start parsing options from argv[3]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:s", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:s", longopts)) >= 0) {
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -84,6 +88,9 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'f':
                 params.fmin = atof(opt.arg);
+                break;
+            case 'e':
+                params.epsilon = atof(opt.arg);
                 break;
             case 's':
                 params.spectrum = true;
