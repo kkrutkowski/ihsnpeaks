@@ -14,7 +14,8 @@ int main(int argc, char *argv[]) {
     process_path(&params, &targets);
 
     // Output results
-    for (size_t i = 0; i < kv_size(targets); i++) {printf("File: %s\n", kv_A(targets, i).path);}
+    //for (size_t i = 0; i < kv_size(targets); i++) {printf("File: %s\n", kv_A(targets, i).path);}
+    //printf("File: %s\n", kv_A(targets, kv_size(targets)-1).path);
 
     // Output parsed parameters for verification
     printf("Parsed parameters:\n");
@@ -23,6 +24,7 @@ int main(int argc, char *argv[]) {
     printf("  Minimum frequency: %.2f\n", params.fmin);
     printf("  Oversampling Factor: %.2f\n", params.oversamplingFactor);
     printf("  Detection threshold: %.2f\n", params.treshold);
+    printf("  Expected systemic variation: %.1e\n", params.epsilon);
     printf("  Npeaks: %d\n", params.npeaks);
     printf("  Nterms: %d\n", params.nterms);
     printf("  Spectrum: %s\n", params.spectrum ? "true" : "false");

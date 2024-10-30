@@ -10,7 +10,8 @@
 #include <string.h>
 
 typedef struct {
-    char **target;
+    char**  target;
+    float** buffer;
     float fmin;
     float fmax;
     float treshold;
@@ -18,6 +19,7 @@ typedef struct {
     float epsilon;
     int npeaks;
     int nterms;
+    int bufferSize;
     bool isFile;
     bool spectrum;
     bool debug;
@@ -33,11 +35,12 @@ static parameters init_parameters(int argc, char *argv[]) {
 
     params.fmax = atof(argv[2]);
     params.fmin = 0.0;
-    params.oversamplingFactor = 3.0;
     params.treshold = 4.0;
+    params.oversamplingFactor = 3.0;
+    params.epsilon = 0.001;
     params.npeaks = 10;
     params.nterms = 3;
-    params.epsilon = 0.001;
+    params.bufferSize = -1;
     params.spectrum = false;
     params.debug = false;
 
@@ -45,7 +48,10 @@ static parameters init_parameters(int argc, char *argv[]) {
 }
 
 // Free allocated memory for parameters
-void free_parameters(parameters *params) {free(params->target[1]); free(params->target);}
+void free_parameters(parameters *params) {
+    free(params->target[0]); // Free the allocated string
+    free(params->target);     // Free the array of pointers
+}
 
 
 // Function to parse command-line arguments into a parameters struct
@@ -59,6 +65,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"peaks", ko_required_argument, 'p'},
         {"terms", ko_required_argument, 'n'},
         {"treshold", ko_required_argument, 't'},
+        {"bsize", ko_required_argument, 'b'},
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
         {"epsilon", ko_required_argument, 'e'},
@@ -72,7 +79,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 3; // Start parsing options from argv[3]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:s", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:b:f:e:sd", longopts)) >= 0) {
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -82,6 +89,9 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'n':
                 params.nterms = atoi(opt.arg);
+                break;
+            case 'b':
+                params.bufferSize = atoi(opt.arg);
                 break;
             case 't':
                 params.treshold = atof(opt.arg);
