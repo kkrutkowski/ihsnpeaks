@@ -1,10 +1,13 @@
+#define DEFAULT_MEASUREMENT_SIZE 24 //typical for OGLE and MACHO .dat files. Change if needed.
+
 #define MI_OVERRIDE 1
 #include "../include/mimalloc/mimalloc.h"
+
+#include <stdio.h>
 
 #include "params.h"
 #include "metadata.h"
 
-#include <stdio.h>
 
 int main(int argc, char *argv[]) {
     parameters params = read_parameters(argc, argv);
@@ -32,7 +35,6 @@ int main(int argc, char *argv[]) {
 
     // Free the allocated memory
     free_targets(&targets);
-
     free_parameters(&params);
 
     return 0;
