@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 typedef struct {
     char**  target;
@@ -19,11 +20,16 @@ typedef struct {
     float epsilon;
     int npeaks;
     int nterms;
-    int measurementSize;
-    int bufferSize;
     bool isFile;
     bool spectrum;
     bool debug;
+
+        //Variables used to estimate optimal hyperparameters from metadata
+    uint32_t measurementSize; //number of bytes per measurement in .dat files
+    uint32_t blockSize;       //size of the FFT plan applied
+    uint32_t bufferSize;      //size of the FFT buffer
+    uint32_t maxLen;          //number of measurements in the longest time series of the processed batch
+    uint64_t avgLen;          //average number of measurements per time series in the batch
 } parameters;
 
 // Function to initialize parameters with default values
@@ -47,6 +53,20 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.debug = false;
 
     return params;
+}
+
+void print_parameters(parameters *params) {
+    printf("Parsed parameters:\n");
+    printf("  Target: %s\n", params->target ? *params->target : "(none)");
+    printf("  Maximum frequency: %.2f\n", params->fmax);
+    printf("  Minimum frequency: %.2f\n", params->fmin);
+    printf("  Oversampling Factor: %.2f\n", params->oversamplingFactor);
+    printf("  Detection threshold: %.2f\n", params->treshold);
+    printf("  Expected systemic variation: %.1e\n", params->epsilon);
+    printf("  Npeaks: %d\n", params->npeaks);
+    printf("  Nterms: %d\n", params->nterms);
+    printf("  Spectrum: %s\n", params->spectrum ? "true" : "false");
+    printf("  Is file: %s\n", params->isFile ? "true" : "false");
 }
 
 // Free allocated memory for parameters
