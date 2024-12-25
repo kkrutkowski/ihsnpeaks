@@ -118,6 +118,7 @@ static void process_path(parameters *params, kvec_target_t *targets, uint32_t *m
             }
         }
         closedir(dir);
+        if (kv_size(*targets) == 1){params->isFile = true;}
     }
 }
 
