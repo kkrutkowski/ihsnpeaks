@@ -47,7 +47,6 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.epsilon = 0.001;
     params.npeaks = 10;
     params.nterms = 3;
-    params.measurementSize = DEFAULT_MEASUREMENT_SIZE;
     params.bufferSize = -1;
     params.spectrum = false;
     params.debug = false;
@@ -111,9 +110,6 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'n':
                 params.nterms = atoi(opt.arg);
-                break;
-            case 'm':
-                params.measurementSize = atoi(opt.arg);
                 break;
             case 't':
                 params.treshold = atof(opt.arg);

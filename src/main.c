@@ -1,6 +1,3 @@
-#define DEFAULT_MEASUREMENT_SIZE 24 //typical for OGLE and MACHO .dat files. Change if needed.
-
-#define MI_OVERRIDE 1
 #include "../include/mimalloc/mimalloc.h"
 
 #include <stdio.h>
