@@ -16,8 +16,9 @@ int main(int argc, char *argv[]) {
     print_parameters(&params);
 
     // Initialize a kvec for target structs
-    kvec_target_t targets;
-    process_path(&params, &targets);
+    kvec_target_t targets; uint32_t maxLen;
+    process_path(&params, &targets, &maxLen);
+    printf("  Largest file's size: %i\n", maxLen);
 
     // Output results
     //for (size_t i = 0; i < kv_size(targets); i++) {printf("File: %s\n", kv_A(targets, i).path);}

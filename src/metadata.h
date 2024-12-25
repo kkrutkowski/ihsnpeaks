@@ -31,8 +31,9 @@ static int is_directory(const char *path) {
 }
 
 // Function to process the path and populate the target vector
-static void process_path(parameters *params, kvec_target_t *targets) {
+static void process_path(parameters *params, kvec_target_t *targets, uint32_t *maxLen) {
     kv_init(*targets);
+    *maxLen = 0;
 
     const char *path = params->target[0]; // Use the first target path
 
@@ -44,6 +45,24 @@ static void process_path(parameters *params, kvec_target_t *targets) {
         target.path = strdup(path);
         target.params = params;
         kv_push(target_t, *targets, target); // Store the target in the vector
+
+        // Check newline count for this single file
+        FILE *file = fopen(path, "r");
+        if (!file) {
+            perror("fopen");
+            exit(EXIT_FAILURE);
+        }
+
+        uint32_t newline_count = 0;
+        int ch;
+        while ((ch = fgetc(file)) != EOF) {
+            if (ch == '\n') {
+                newline_count++;
+            }
+        }
+        fclose(file);
+
+        *maxLen = newline_count;
     } else {
         params->isFile = false;
         DIR *dir = opendir(path);
@@ -53,11 +72,43 @@ static void process_path(parameters *params, kvec_target_t *targets) {
         }
 
         struct dirent *entry;
+        off_t largest_size = 0;
+
         while ((entry = readdir(dir)) != NULL) {
             if (entry->d_type == DT_REG) {
                 // Construct the full path for each file
                 char full_path[256];
                 snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+
+                // Get the file size
+                struct stat file_stat;
+                if (stat(full_path, &file_stat) != 0) {
+                    perror("stat");
+                    exit(EXIT_FAILURE);
+                }
+
+                // Check if it's the largest file so far
+                if (file_stat.st_size > largest_size) {
+                    largest_size = file_stat.st_size;
+
+                    // Open and count newlines in this file
+                    FILE *file = fopen(full_path, "r");
+                    if (!file) {
+                        perror("fopen");
+                        exit(EXIT_FAILURE);
+                    }
+
+                    uint32_t newline_count = 0;
+                    int ch;
+                    while ((ch = fgetc(file)) != EOF) {
+                        if (ch == '\n') {
+                            newline_count++;
+                        }
+                    }
+                    fclose(file);
+
+                    *maxLen = newline_count;
+                }
 
                 // Allocate and populate a target struct with the file path and params pointer
                 target_t target;
