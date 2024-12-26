@@ -26,25 +26,31 @@ typedef struct {
     //D_VEC*    bufd2;
 } buffer_t;
 
-inline int alloc_buffer (buffer_t* buffer, int n) {
-    if (!buffer -> x)     {buffer -> x = aligned_alloc(64, n * sizeof(double));
-        if (!buffer->x) return fprintf(stderr, "Failed to allocate buffer\n"), -1;}
-    if (!buffer -> y)     {buffer -> y = aligned_alloc(64, n * sizeof(float));
-        if (!buffer->y) return fprintf(stderr, "Failed to allocate buffer\n"), -1;}
-    if (!buffer -> dy)    {buffer -> dy = aligned_alloc(64, n * sizeof(float));
-        if (!buffer->dy) return fprintf(stderr, "Failed to allocate buffer\n"), -1;}
-    if (!buffer -> gidx)  {buffer -> gidx = aligned_alloc(64, n * sizeof(uint32_t));
-        if (!buffer->gidx) return fprintf(stderr, "Failed to allocate buffer\n"), -1;}
-    if (!buffer -> pidx)  {buffer -> pidx = aligned_alloc(64, 1024 * sizeof(uint32_t));
-        if (!buffer->pidx) return fprintf(stderr, "Failed to allocate buffer\n"), -1;}
-return 0;}
-
 inline void free_buffer (buffer_t* buffer) {
     if (buffer -> x)     {free(buffer -> x);  buffer -> x = NULL;}
     if (buffer -> y)     {free(buffer -> y);  buffer -> y = NULL;}
     if (buffer -> dy)    {free(buffer -> dy); buffer-> dy  = NULL;}
     if (buffer -> gidx)  {free(buffer -> gidx); buffer-> gidx  = NULL;}
     if (buffer -> pidx)  {free(buffer -> pidx); buffer-> pidx  = NULL;}
+}
+
+inline int alloc_buffer(buffer_t* buffer, int n) {
+    buffer->x = aligned_alloc(64, n * sizeof(double));
+    if (!buffer->x) goto error;
+    buffer->y = aligned_alloc(64, n * sizeof(float));
+    if (!buffer->y) goto error;
+    buffer->dy = aligned_alloc(64, n * sizeof(float));
+    if (!buffer->dy) goto error;
+    buffer->gidx = aligned_alloc(64, n * sizeof(uint32_t));
+    if (!buffer->gidx) goto error;
+    buffer->pidx = aligned_alloc(64, 1024 * sizeof(uint32_t));
+    if (!buffer->pidx) goto error;
+    return 0;
+
+error:
+    free_buffer(buffer);
+    fprintf(stderr, "Failed to allocate buffer\n");
+    return -1;
 }
 
 typedef struct {
