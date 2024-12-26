@@ -1,5 +1,5 @@
+#define DEFAULT_MEASUREMENT_SIZE 24
 #include "../include/mimalloc/mimalloc.h"
-
 #include <stdio.h>
 #include <unistd.h>
 
@@ -17,7 +17,7 @@ int main(int argc, char *argv[]) {
     kvec_target_t targets; uint32_t maxLen; uint32_t maxSize;
     process_path(&params, &targets, &maxLen, &maxSize);
     print_parameters(&params);
-    printf("  Largest file's size: %i\n", maxLen);
+    printf("  Largest file's length: %i\n", maxLen);
     printf("  Read buffer size: %i\n", maxSize);
 
     // Output results
@@ -26,10 +26,14 @@ int main(int argc, char *argv[]) {
 
     if(kv_size(targets) == 1){
         printf("Single file mode\n");
+        buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
+        alloc_buffer(&buffer, maxLen, maxSize);
+        read_dat(kv_A(targets, 0).path, &buffer);
         //process the data here
+        free_buffer(&buffer); //segfaults
         free_targets(&targets);
         free_parameters(&params);
-    return EXIT_SUCCESS;} //end the program's execution here if only one target is provided'
+    return 0;} //end the program's execution here if only one target is provided'
 
 
 

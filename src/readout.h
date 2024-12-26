@@ -15,9 +15,10 @@
 #include "../include/fast_convert.h"
 
 typedef struct {
-    char*  readBuf;
+    bool allocated;
     int        len;
     int          n;
+    char*  readBuf;
     double*      x;
     float*       y;
     float*      dy;
@@ -29,7 +30,7 @@ typedef struct {
     //D_VEC*    bufd2;
 } buffer_t;
 
-inline void free_buffer (buffer_t* buffer) {
+static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> x)     {free(buffer -> x);  buffer -> x = NULL;}
     if (buffer -> y)     {free(buffer -> y);  buffer -> y = NULL;}
     if (buffer -> dy)    {free(buffer -> dy); buffer-> dy  = NULL;}
@@ -38,8 +39,8 @@ inline void free_buffer (buffer_t* buffer) {
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
 }
 
-inline int alloc_buffer(buffer_t* buffer, int n, int size) {
-    buffer->len = n;
+static inline int alloc_buffer(buffer_t* buffer, int n, int size) {
+    buffer->len = n; buffer->allocated = true;
     if (!buffer->x) {buffer->x = aligned_alloc(64, n * sizeof(double));}
         if (!buffer->x) goto error;
     if (!buffer->y) {buffer->y = aligned_alloc(64, n * sizeof(float));}
@@ -68,7 +69,7 @@ typedef struct {
 
 
 
-inline void read_dat(const char* in_file, buffer_t* buffer) {
+void read_dat(const char* in_file, buffer_t* buffer) {
     // Open the file
     int fd = open(in_file, O_RDONLY);
     if (fd == -1) {
@@ -113,7 +114,7 @@ inline void read_dat(const char* in_file, buffer_t* buffer) {
         buffer->x[idx] = tempX;
         buffer->y[idx] = tempY;
         buffer->dy[idx] = tempDY;
-        idx++;
+        idx++; buffer->n = idx;
     }
 
     // Close the file
