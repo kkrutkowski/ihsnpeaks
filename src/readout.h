@@ -15,6 +15,7 @@
 #include "../include/fast_convert.h"
 
 typedef struct {
+    int          n;
     double*      x;
     float*       y;
     float*      dy;
@@ -35,6 +36,7 @@ inline void free_buffer (buffer_t* buffer) {
 }
 
 inline int alloc_buffer(buffer_t* buffer, int n) {
+    buffer->n = n;
     buffer->x = aligned_alloc(64, n * sizeof(double));
     if (!buffer->x) goto error;
     buffer->y = aligned_alloc(64, n * sizeof(float));
@@ -108,7 +110,7 @@ inline void read_dat(const char* in_file, buffer_t* buffer) {
     float tempY, tempDY;
     size_t idx = 0;
 
-    while (it < end) {
+    while (it < end && idx < buffer->n) {
         // Parse tempX
         tempX = fast_strtod(it, &it);
         if (it == NULL || it >= end) break; it++;
