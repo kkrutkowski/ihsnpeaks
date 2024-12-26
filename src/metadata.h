@@ -31,7 +31,7 @@ static int is_directory(const char *path) {
 }
 
 // Function to process the path and populate the target vector
-static void process_path(parameters *params, kvec_target_t *targets, uint32_t *maxLen) {
+static void process_path(parameters *params, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize) {
     kv_init(*targets);
     *maxLen = 0;
 
@@ -45,6 +45,15 @@ static void process_path(parameters *params, kvec_target_t *targets, uint32_t *m
         target.path = strdup(path);
         target.params = params;
         kv_push(target_t, *targets, target); // Store the target in the vector
+
+        // Use stat to get the file size
+        struct stat file_stat;
+        if (stat(path, &file_stat) != 0) {
+            perror("stat");
+        exit(EXIT_FAILURE);
+        }
+
+        *maxSize = file_stat.st_size + 1;
 
         // Check newline count for this single file
         FILE *file = fopen(path, "r");
@@ -62,6 +71,7 @@ static void process_path(parameters *params, kvec_target_t *targets, uint32_t *m
         }
         fclose(file);
 
+        *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
     } else {
         params->isFile = false;
@@ -90,6 +100,7 @@ static void process_path(parameters *params, kvec_target_t *targets, uint32_t *m
                 // Check if it's the largest file so far
                 if (file_stat.st_size > largest_size) {
                     largest_size = file_stat.st_size;
+                    *maxSize = largest_size + 1;
 
                     // Open and count newlines in this file
                     FILE *file = fopen(full_path, "r");

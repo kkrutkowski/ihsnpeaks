@@ -14,10 +14,11 @@ int main(int argc, char *argv[]) {
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN); void *thread_pool;
 
     // Initialize a kvec for target structs
-    kvec_target_t targets; uint32_t maxLen;
-    process_path(&params, &targets, &maxLen);
+    kvec_target_t targets; uint32_t maxLen; uint32_t maxSize;
+    process_path(&params, &targets, &maxLen, &maxSize);
     print_parameters(&params);
     printf("  Largest file's size: %i\n", maxLen);
+    printf("  Read buffer size: %i\n", maxSize);
 
     // Output results
     //for (size_t i = 0; i < kv_size(targets); i++) {printf("File: %s\n", kv_A(targets, i).path);}
