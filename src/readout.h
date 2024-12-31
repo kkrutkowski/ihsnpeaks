@@ -68,6 +68,12 @@ error:
     return -1;
 }
 
+void print_buffer(buffer_t* buffer) {
+    for (int i = 0; i < buffer->n; i++) {
+        printf("%.2f\t%.2f\t%.2f\n", buffer->x[i], buffer->y[i], buffer->dy[i]);
+    }
+}
+
 void read_dat(const char* in_file, buffer_t* buffer) {
     // Open the file
     int fd = open(in_file, O_RDONLY);
@@ -110,6 +116,7 @@ void read_dat(const char* in_file, buffer_t* buffer) {
         tempY = fast_strtof(it, &it); if (it == NULL || it >= end) break; it++;
         tempDY = fast_strtof(it, &it); if (it == NULL || it >= end) break; it++;
 
+        //printf("%f\t%f\t%f\n", tempX, tempY, tempDY); // ok
         buffer->x[idx] = tempX;
         buffer->y[idx] = tempY;
         buffer->dy[idx] = tempDY;
@@ -119,8 +126,6 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     // Close the file
     close(fd);
 }
-
-
 
 
 #endif

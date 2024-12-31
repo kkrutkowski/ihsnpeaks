@@ -22,10 +22,11 @@ int main(int argc, char *argv[]) {
     if(kv_size(params.targets) == 1){
         printf("Single file mode\n");
         buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
-        //alloc_buffer(&buffer, params.maxLen, params.maxSize);
-        //read_dat(kv_A(params.targets, 0).path, &buffer);
+        alloc_buffer(&buffer, params.maxLen, params.maxSize);
+        read_dat(kv_A(params.targets, 0).path, &buffer);
+        print_buffer(&buffer);
         //process the data here
-        //free_buffer(&buffer);
+        free_buffer(&buffer);
         free_parameters(&params);
     return 0;} //end the program's execution here if only one target is provided'
 
