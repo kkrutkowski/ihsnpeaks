@@ -14,6 +14,8 @@
 #include "../include/klib/kvec.h"
 #include "../include/fast_convert.h"
 
+//struct parameters;
+
 typedef struct {
     bool allocated;
     int        len;
@@ -24,10 +26,13 @@ typedef struct {
     float*      dy;
     uint32_t* gidx; //grid indices for NFFT
     uint16_t* pidx; //phase indices for counting sort
+
     //S_VEC*    bufs1;
     //S_VEC*    bufs2;
     //D_VEC*    bufd1;
     //D_VEC*    bufd2;
+
+    float ** grids; //used to compute the FFT
 } buffer_t;
 
 static inline void free_buffer (buffer_t* buffer) {
@@ -60,14 +65,6 @@ error:
     fprintf(stderr, "Failed to allocate buffer\n");
     return -1;
 }
-
-typedef struct {
-    kvec_t(double) x;
-    kvec_t(float)  y;
-    kvec_t(float) dy;
-} star_t;
-
-
 
 void read_dat(const char* in_file, buffer_t* buffer) {
     // Open the file

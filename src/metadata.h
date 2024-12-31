@@ -9,12 +9,13 @@
 #include <stdbool.h>
 
 #include "params.h"
+//struct parameters;
 #include "../include/klib/kvec.h"
+
 
 // Define the target struct to hold file path and a pointer to the parameters struct
 typedef struct {
     char *path;
-    parameters *params;
 } target_t;
 
 // Define a kvec type for target_t structs
@@ -31,19 +32,15 @@ static int is_directory(const char *path) {
 }
 
 // Function to process the path and populate the target vector
-static void process_path(parameters *params, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize) {
+static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize) {
     kv_init(*targets);
     *maxLen = 0;
 
-    const char *path = params->target[0]; // Use the first target path
-
     if (!is_directory(path)) {
-        params->isFile = true;
 
         // Allocate and populate a target struct with the file path and params pointer
         target_t target;
         target.path = strdup(path);
-        target.params = params;
         kv_push(target_t, *targets, target); // Store the target in the vector
 
         // Use stat to get the file size
@@ -73,8 +70,8 @@ static void process_path(parameters *params, kvec_target_t *targets, uint32_t* m
 
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
+        return true;
     } else {
-        params->isFile = false;
         DIR *dir = opendir(path);
         if (!dir) {
             perror("opendir");
@@ -124,14 +121,13 @@ static void process_path(parameters *params, kvec_target_t *targets, uint32_t* m
                 // Allocate and populate a target struct with the file path and params pointer
                 target_t target;
                 target.path = strdup(full_path);
-                target.params = params;
                 kv_push(target_t, *targets, target); // Store the target in the vector
             }
         }
         closedir(dir);
-        if (kv_size(*targets) == 1){params->isFile = true;}
     }
-}
+
+return false;}
 
 // Function to free all memory allocated in the kvec and destroy it
 static void free_targets(kvec_target_t *targets) {

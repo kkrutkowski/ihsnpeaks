@@ -10,6 +10,9 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "metadata.h"
+#include "readout.h"
+
 typedef struct {
     char**  target;
     float** buffer;
@@ -24,12 +27,16 @@ typedef struct {
     bool spectrum;
     bool debug;
 
-        //Variables used to estimate optimal hyperparameters from metadata
-    uint32_t measurementSize; //number of bytes per measurement in .dat files
-    uint32_t blockSize;       //size of the FFT plan applied
-    uint32_t bufferSize;      //size of the FFT buffer
+    //Variables used to estimate optimal hyperparameters from metadata
+    //uint32_t blockSize;       //size of the FFT plan applied
+    //uint32_t bufferSize;      //size of the FFT buffer
+    uint32_t maxSize;         //number of bytes in the longest time series of the processed batch
     uint32_t maxLen;          //number of measurements in the longest time series of the processed batch
     uint64_t avgLen;          //average number of measurements per time series in the batch
+
+    kvec_target_t targets;
+
+    buffer_t** buffers;
 } parameters;
 
 // Function to initialize parameters with default values
@@ -47,7 +54,6 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.epsilon = 0.001;
     params.npeaks = 10;
     params.nterms = 3;
-    params.bufferSize = -1;
     params.spectrum = false;
     params.debug = false;
 
@@ -72,6 +78,7 @@ void print_parameters(parameters *params) {
 void free_parameters(parameters *params) {
     free(params->target[0]); // Free the allocated string
     free(params->target);     // Free the array of pointers
+    free_targets(&params -> targets);
 }
 
 
