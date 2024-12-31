@@ -120,11 +120,11 @@ void read_dat(const char* in_file, buffer_t* buffer) {
         buffer->x[idx] = tempX;
         buffer->y[idx] = tempY;
         buffer->dy[idx] = tempDY;
-        idx++; buffer->n = idx;
+        idx++;
     }
 
     // Close the file
-    close(fd);
+    close(fd); buffer->n = idx;
 }
 
 
