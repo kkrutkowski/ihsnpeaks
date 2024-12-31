@@ -72,6 +72,8 @@ void print_parameters(parameters *params) {
     printf("  Nterms: %d\n", params->nterms);
     printf("  Spectrum: %s\n", params->spectrum ? "true" : "false");
     printf("  Is file: %s\n", params->isFile ? "true" : "false");
+    printf("  Largest file's length: %i\n", params->maxLen);
+    printf("  Read buffer size: %i\n", params->maxSize);
 }
 
 // Free allocated memory for parameters
@@ -142,7 +144,8 @@ static parameters read_parameters(int argc, char *argv[]) {
         }
     }
 
-    return params;
-}
+    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize);
+
+    return params;}
 
 #endif // PARAMS_H

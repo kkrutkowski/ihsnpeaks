@@ -13,11 +13,7 @@ int main(int argc, char *argv[]) {
     parameters params = read_parameters(argc, argv);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN); void *thread_pool;
 
-    // Initialize a kvec for target structs
-    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize);
     print_parameters(&params);
-    printf("  Largest file's length: %i\n", params.maxLen);
-    printf("  Read buffer size: %i\n", params.maxSize);
 
     // Output results
     //for (size_t i = 0; i < kv_size(params.targets); i++) {printf("File: %s\n", kv_A(params.targets, i).path);}
@@ -26,10 +22,10 @@ int main(int argc, char *argv[]) {
     if(kv_size(params.targets) == 1){
         printf("Single file mode\n");
         buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
-        alloc_buffer(&buffer, params.maxLen, params.maxSize);
-        read_dat(kv_A(params.targets, 0).path, &buffer);
+        //alloc_buffer(&buffer, params.maxLen, params.maxSize);
+        //read_dat(kv_A(params.targets, 0).path, &buffer);
         //process the data here
-        free_buffer(&buffer);
+        //free_buffer(&buffer);
         free_parameters(&params);
     return 0;} //end the program's execution here if only one target is provided'
 

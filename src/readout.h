@@ -44,19 +44,21 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
 }
 
+static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
+
 static inline int alloc_buffer(buffer_t* buffer, int n, int size) {
     buffer->len = n; buffer->allocated = true;
-    if (!buffer->x) {buffer->x = aligned_alloc(64, n * sizeof(double));}
+    if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
         if (!buffer->x) goto error;
-    if (!buffer->y) {buffer->y = aligned_alloc(64, n * sizeof(float));}
+    if (!buffer->y) {buffer->y = aligned_alloc(64, round_buffer(n * sizeof(float)));}
         if (!buffer->y) goto error;
-    if (!buffer->dy) {buffer->dy = aligned_alloc(64, n * sizeof(float));}
+    if (!buffer->dy) {buffer->dy = aligned_alloc(64, round_buffer(n * sizeof(float)));}
         if (!buffer->dy) goto error;
-    if (!buffer->gidx) {buffer->gidx = aligned_alloc(64, n * sizeof(uint32_t));}
+    if (!buffer->gidx) {buffer->gidx = aligned_alloc(64, round_buffer(n * sizeof(uint32_t)));}
         if (!buffer->gidx) goto error;
     if (!buffer->pidx) {buffer->pidx = (uint16_t*) malloc(n * sizeof(uint16_t));}
         if (!buffer->pidx) goto error;
-    if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, size);}
+    if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
         if (!buffer->readBuf) goto error;
     return 0;
 
