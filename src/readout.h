@@ -111,9 +111,8 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     size_t idx = 0;
 
     while (it < end && idx < buffer->len) {
-        // Parse tempX
-        tempX = fast_strtod(it, &it);
-        if (it == NULL || it >= end) break; it++;
+        // Parse temporary variables
+        tempX = fast_strtod(it, &it); if (it == NULL || it >= end) break; it++;
         tempY = fast_strtof(it, &it); if (it == NULL || it >= end) break; it++;
         tempDY = fast_strtof(it, &it); if (it == NULL || it >= end) break; it++;
 
