@@ -10,6 +10,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <complex.h>
 
 #include "../include/klib/kvec.h"
 #include "../include/fast_convert.h"
@@ -32,7 +33,7 @@ typedef struct {
     //D_VEC*    bufd1;
     //D_VEC*    bufd2;
 
-    float ** grids; //used to compute the FFT
+    complex float ** grids; //used to compute the FFT
 } buffer_t;
 
 static inline void free_buffer (buffer_t* buffer) {
