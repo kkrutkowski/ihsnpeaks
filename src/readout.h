@@ -21,6 +21,7 @@ typedef struct {
     bool allocated;
     int        len;
     int          n;
+
     char*  readBuf;
     double*      x;
     float*       y;
@@ -33,6 +34,8 @@ typedef struct {
     //D_VEC*    bufd1;
     //D_VEC*    bufd2;
 
+    float magnitude;
+    int gridSize;
     complex float ** grids; //used to compute the FFT
 } buffer_t;
 
@@ -73,6 +76,42 @@ void print_buffer(buffer_t* buffer) {
     for (int i = 0; i < buffer->n; i++) {
         printf("%.2f\t%.2f\t%.2f\n", buffer->x[i], buffer->y[i], buffer->dy[i]);
     }
+}
+
+void linreg_buffer(buffer_t* buffer){
+    double tmp = 0;
+
+    // Center the measurement times - increases precision of future computation
+    for (unsigned int i = 1; i < buffer->n; i++) {buffer->x[i] -= buffer->x[0];}
+    buffer->x[0] = 0;
+
+    // Initialize sums for weighted regression
+    double sumx = 0, sumxsq = 0, sumy = 0, sumxy = 0, sumw = 0; // Add sum of weights
+    double lin = 0, c = 0, w;
+
+    for (unsigned int i = 0; i < buffer->n; i++) {
+        w = 1 / (buffer->dy[i] * buffer->dy[i]); // weight as the inverse of variance
+        if (w > 0){
+            sumw += w;               // accumulate total weights
+            sumx += buffer->x[i] * w;       // weighted sum of x
+            sumxsq += buffer->x[i] * buffer->x[i] * w; // weighted sum of x^2
+            sumy += buffer->y[i] * w;       // weighted sum of y
+            sumxy += (buffer->x[i] * buffer->y[i]) * w; // weighted sum of x*y
+        }
+        else {buffer->dy[i] = 999.9;}
+    }
+
+    // Calculate the denominator for the slope and intercept
+    double denum = (sumw * sumxsq) - (sumx * sumx);
+
+    // Compute the slope (lin) and intercept (c)
+    lin = ((sumw * sumxy) - (sumx * sumy)) / denum;
+    c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
+
+    buffer->magnitude = lin;
+
+    // Adjust the y values based on the regression line
+    for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
 }
 
 void read_dat(const char* in_file, buffer_t* buffer) {

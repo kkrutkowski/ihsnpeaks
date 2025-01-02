@@ -24,6 +24,7 @@ int main(int argc, char *argv[]) {
         buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
         alloc_buffer(&buffer, params.maxLen, params.maxSize);
         read_dat(kv_A(params.targets, 0).path, &buffer);
+        linreg_buffer(&buffer);
         print_buffer(&buffer);
         //process the data here
         free_buffer(&buffer);
@@ -33,7 +34,8 @@ int main(int argc, char *argv[]) {
 
 
     //to avoid asigning more, than 1 thread per target
-    else {if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}}
+    else {
+    if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
     kt_forpool_t *fp = kt_forpool_init(nThreads);
 
 
@@ -44,5 +46,5 @@ int main(int argc, char *argv[]) {
     // Free the allocated memory
     free_parameters(&params);
 
-    return 0;
+    return 0;}
 }
