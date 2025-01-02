@@ -6,7 +6,7 @@
 #include "params.h"
 #include "metadata.h"
 #include "readout.h"
-#include "../include/klib/kthread_batch.h"
+#include "../include/klib/kthread.h"
 
 int main(int argc, char *argv[]) {
     if (argc < 3){return 1;}
