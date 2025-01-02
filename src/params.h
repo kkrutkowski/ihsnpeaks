@@ -41,7 +41,7 @@ typedef struct {
 
 // Function to initialize parameters with default values
 static parameters init_parameters(int argc, char *argv[]) {
-    parameters params;
+    parameters params = {0};
 
     params.target = (char **) malloc(sizeof(char*)); // Allocate memory for the target string and copy the value from argv[1]
     params.target[0] = (char *) malloc((strlen(argv[1]) + 1) * sizeof(char)); // +1 for the null terminator
