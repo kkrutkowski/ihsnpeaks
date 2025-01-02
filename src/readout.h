@@ -1,13 +1,12 @@
 #ifndef READOUT_H
 #define READOUT_H
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <string.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -79,7 +78,6 @@ void print_buffer(buffer_t* buffer) {
     }
 }
 
-
 void linreg_buffer(buffer_t* buffer){
     double tmp = 0;
 
@@ -116,7 +114,6 @@ void linreg_buffer(buffer_t* buffer){
     for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
 }
 
-
 void read_dat(const char* in_file, buffer_t* buffer) {
     // Open the file
     int fd = open(in_file, O_RDONLY);
@@ -134,17 +131,20 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     }
     size_t file_size = file_stat.st_size;
 
-    // Map the file into memory
-    char* dataBuffer = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (dataBuffer == MAP_FAILED) {
-        perror("Failed to mmap file");
-        close(fd);
-        return;
+    // Use existing buffer to avoid reallocation
+    char* dataBuffer = buffer->readBuf;
+
+    // Read the file
+    ssize_t bytes_read = read(fd, dataBuffer, file_size);
+    if (bytes_read == -1) {perror("Failed to read file"); close(fd); return;
+    } else if (bytes_read == 0) {
+        fprintf(stderr, "No data read from file\n"); close(fd); return;
     }
 
-    // Parse the data
+    dataBuffer[bytes_read] = '\0'; // Null-terminate the buffer
+
     char* it = dataBuffer;
-    char* end = dataBuffer + file_size;
+    char* end = dataBuffer + bytes_read;
     double tempX;
     float tempY, tempDY;
     size_t idx = 0;
@@ -155,16 +155,15 @@ void read_dat(const char* in_file, buffer_t* buffer) {
         tempY = fast_strtof(it, &it); if (it == NULL || it >= end) break; it++;
         tempDY = fast_strtof(it, &it); if (it == NULL || it >= end) break; it++;
 
+        //printf("%f\t%f\t%f\n", tempX, tempY, tempDY); // ok
         buffer->x[idx] = tempX;
         buffer->y[idx] = tempY;
         buffer->dy[idx] = tempDY;
         idx++;
     }
 
-    // Unmap the file and close it
-    munmap(dataBuffer, file_size);
-    close(fd);
-    buffer->n = idx;
+    // Close the file
+    close(fd); buffer->n = idx;
 }
 
 
