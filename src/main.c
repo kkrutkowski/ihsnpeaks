@@ -35,16 +35,16 @@ int main(int argc, char *argv[]) {
 
     //to avoid asigning more, than 1 thread per target
     else {
-    if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
-    kt_forpool_t *fp = kt_forpool_init(nThreads);
+        if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
+        kt_forpool_t *fp = kt_forpool_init(nThreads);
 
 
-    // Output parsed parameters for verification
+        // Output parsed parameters for verification
 
-    // Kill the worker threads before exiting
-    kt_forpool_destroy(fp);
-    // Free the allocated memory
-    free_parameters(&params);
+        // Kill the worker threads before exiting
+        kt_forpool_destroy(fp);
+        // Free the allocated memory
+        free_parameters(&params);
 
     return 0;}
 }
