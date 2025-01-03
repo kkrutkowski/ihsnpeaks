@@ -6,6 +6,8 @@
 #include "params.h"
 #include "metadata.h"
 #include "readout.h"
+#include "process.h"
+
 #include "../include/klib/kthread.h"
 
 int main(int argc, char *argv[]) {
@@ -23,9 +25,8 @@ int main(int argc, char *argv[]) {
         printf("Single file mode\n");
         buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
         alloc_buffer(&buffer, params.maxLen, params.maxSize);
-        read_dat(kv_A(params.targets, 0).path, &buffer);
-        linreg_buffer(&buffer);
-        print_buffer(&buffer);
+            process_target(kv_A(params.targets, 0).path, &buffer, &params);
+            //print_buffer(&buffer);
         //process the data here
         free_buffer(&buffer);
         free_parameters(&params);

@@ -27,6 +27,7 @@ typedef struct {
     double*      x;
     float*       y;
     float*      dy;
+
     uint32_t* gidx; //grid indices for NFFT
     uint16_t* pidx; //phase indices for counting sort
 
@@ -36,8 +37,8 @@ typedef struct {
     float magnitude;
     int gridSize;
     complex float ** grids; //used to compute the FFT
-
     mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
+
     kstring_t spectrum;
 } buffer_t;
 
