@@ -35,7 +35,7 @@ typedef struct {
     //D_VEC*    bufd2;
 
     float magnitude;
-    int gridSize;
+    int gridSize; int nGrids;
     complex float ** grids; //used to compute the FFT
     mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
 
@@ -70,7 +70,8 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
     if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
         if (!buffer->readBuf) goto error;
     if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float **));}
-        if (!buffer->readBuf) goto error;
+        if (!buffer->grids) goto error;
+        else buffer->nGrids = terms;
     return 0;
 
 error:
