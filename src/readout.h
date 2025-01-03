@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <complex.h>
 
-#include "../include/klib/kvec.h"
+#include "../include/klib/kstring.h"
 #include "../include/fast_convert.h"
 #include "../include/mufft/mufft.x86.h"
 
@@ -37,8 +37,8 @@ typedef struct {
     int gridSize;
     complex float ** grids; //used to compute the FFT
 
-    mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags);
-    // https://github.com/Themaister/muFFT/blob/master/bench.c
+    mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
+    kstring_t spectrum;
 } buffer_t;
 
 static inline void free_buffer (buffer_t* buffer) {
