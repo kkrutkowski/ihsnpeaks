@@ -43,17 +43,19 @@ typedef struct {
 } buffer_t;
 
 static inline void free_buffer (buffer_t* buffer) {
-    if (buffer -> x)     {free(buffer -> x);  buffer -> x = NULL;}
-    if (buffer -> y)     {free(buffer -> y);  buffer -> y = NULL;}
-    if (buffer -> dy)    {free(buffer -> dy); buffer-> dy  = NULL;}
-    if (buffer -> gidx)  {free(buffer -> gidx); buffer-> gidx  = NULL;}
-    if (buffer -> pidx)  {free(buffer -> pidx); buffer-> pidx  = NULL;}
+    buffer -> allocated = false;
+    if (buffer -> x)       {free(buffer -> x);  buffer -> x = NULL;}
+    if (buffer -> y)       {free(buffer -> y);  buffer -> y = NULL;}
+    if (buffer -> dy)      {free(buffer -> dy); buffer-> dy  = NULL;}
+    if (buffer -> gidx)    {free(buffer -> gidx); buffer-> gidx  = NULL;}
+    if (buffer -> pidx)    {free(buffer -> pidx); buffer-> pidx  = NULL;}
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
+    if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
 }
 
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
-static inline int alloc_buffer(buffer_t* buffer, int n, int size) {
+static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
     buffer->len = n; buffer->allocated = true;
     if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
         if (!buffer->x) goto error;
@@ -66,6 +68,8 @@ static inline int alloc_buffer(buffer_t* buffer, int n, int size) {
     if (!buffer->pidx) {buffer->pidx = (uint16_t*) malloc(n * sizeof(uint16_t));}
         if (!buffer->pidx) goto error;
     if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
+        if (!buffer->readBuf) goto error;
+    if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float **));}
         if (!buffer->readBuf) goto error;
     return 0;
 
