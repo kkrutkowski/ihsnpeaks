@@ -37,7 +37,7 @@ typedef struct {
     int gridSize;
     complex float ** grids; //used to compute the FFT
 
-    mufft_plan_1d *muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags);
+    mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags);
     // https://github.com/Themaister/muFFT/blob/master/bench.c
 } buffer_t;
 
