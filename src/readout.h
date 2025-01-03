@@ -29,8 +29,6 @@ typedef struct {
     uint32_t* gidx; //grid indices for NFFT
     uint16_t* pidx; //phase indices for counting sort
 
-    //S_VEC*    bufs1;
-    //S_VEC*    bufs2;
     //D_VEC*    bufd1;
     //D_VEC*    bufd2;
 
