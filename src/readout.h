@@ -22,13 +22,13 @@ typedef struct {
     bool allocated;
     uint32_t   len;
     uint32_t     n;
+    uint32_t terms;
 
     char*  readBuf;
     double*      x;
     float*       y;
     float*      dy;
 
-    uint32_t* gidx; //grid indices for NFFT
     uint16_t* pidx; //phase indices for counting sort
 
     //D_VEC*    bufd1;
@@ -37,6 +37,7 @@ typedef struct {
     float magnitude;
     uint32_t gridSize; uint32_t nGrids;
     complex float ** grids; //used to compute the FFT
+    uint32_t** gidx; //grid indices for NFFT
     mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
 
     kstring_t spectrum;
@@ -47,24 +48,23 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> x)       {free(buffer -> x);  buffer -> x = NULL;}
     if (buffer -> y)       {free(buffer -> y);  buffer -> y = NULL;}
     if (buffer -> dy)      {free(buffer -> dy); buffer-> dy  = NULL;}
-    if (buffer -> gidx)    {free(buffer -> gidx); buffer-> gidx  = NULL;}
     if (buffer -> pidx)    {free(buffer -> pidx); buffer-> pidx  = NULL;}
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
+    for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
+    if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
 }
 
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
 static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
-    buffer->len = n; buffer->allocated = true;
+    buffer->len = n; buffer->allocated = true; buffer->terms = terms;
     if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
         if (!buffer->x) goto error;
     if (!buffer->y) {buffer->y = aligned_alloc(64, round_buffer(n * sizeof(float)));}
         if (!buffer->y) goto error;
     if (!buffer->dy) {buffer->dy = aligned_alloc(64, round_buffer(n * sizeof(float)));}
         if (!buffer->dy) goto error;
-    if (!buffer->gidx) {buffer->gidx = aligned_alloc(64, round_buffer(n * sizeof(uint32_t)));}
-        if (!buffer->gidx) goto error;
     if (!buffer->pidx) {buffer->pidx = (uint16_t*) malloc(n * sizeof(uint16_t));}
         if (!buffer->pidx) goto error;
     if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
@@ -72,6 +72,12 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
     if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float **));}
         if (!buffer->grids) goto error;
         else buffer->nGrids = terms;
+    if (!buffer->gidx) {buffer->gidx = calloc(terms, sizeof(uint32_t **));}//
+        if (!buffer->gidx) goto error;
+        for (int i = 0; i < buffer->terms; i++){
+            buffer->gidx[i] = aligned_alloc(64, round_buffer(n * sizeof(uint32_t)));
+            if (!buffer->gidx[i]) goto error;
+        }
     return 0;
 
 error:
