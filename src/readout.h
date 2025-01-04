@@ -16,6 +16,8 @@
 #include "../include/fast_convert.h"
 #include "../include/mufft/mufft.x86.h"
 
+static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
+
 //struct parameters;
 
 typedef struct {
@@ -54,8 +56,6 @@ static inline void free_buffer (buffer_t* buffer) {
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
 }
-
-static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
 static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
     buffer->len = n; buffer->allocated = true; buffer->terms = terms;
