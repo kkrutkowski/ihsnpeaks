@@ -19,6 +19,10 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double number = 0.123456789; printf("\n%i\n", n); // placeholder line
     ksprintf(&buffer->spectrum, "%.*f", n, number); // printf("Formatted string: %s\n", buffer->spectrum.s); //prinft test
 
+    double fmax = params -> fmax; double fmin = params -> fmin;
+    double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
+    double span = (fmax - fmin) * 32 / 21; // used to compute the scale of FFT grid
+
 
 
 
