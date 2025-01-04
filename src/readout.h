@@ -20,8 +20,8 @@
 
 typedef struct {
     bool allocated;
-    int        len;
-    int          n;
+    uint32_t   len;
+    uint32_t     n;
 
     char*  readBuf;
     double*      x;
@@ -35,7 +35,7 @@ typedef struct {
     //D_VEC*    bufd2;
 
     float magnitude;
-    int gridSize; int nGrids;
+    uint32_t gridSize; uint32_t nGrids;
     complex float ** grids; //used to compute the FFT
     mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
 

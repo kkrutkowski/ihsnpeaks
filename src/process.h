@@ -2,6 +2,7 @@
 #define PROCESS_H
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
     double fmax = params -> fmax; double fmin = params -> fmin;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
-    double span = (fmax - fmin) * 32 / 21; // used to compute the scale of FFT grid
+    double fspan = (fmax - fmin) * 32 / 21; // used to compute the scale of FFT grid
+    uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
+    printf("Number of target frequencies: %i\n", nsteps);
 
 
 
