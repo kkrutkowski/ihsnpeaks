@@ -13,18 +13,31 @@
 #include "../include/klib/kstring.h"
 #include "../include/mufft/mufft.x86.h"
 
+uint32_t bitCeil(uint32_t n) {
+    int exp;
+    double mantissa = frexp((double)n, &exp);
+
+    // If the number is a power of two, return it as is
+    if (mantissa == 0.5) {return n;}
+    // Otherwise, return 2^exp
+    return 1 << exp;
+}
+
 void process_target(char* in_file, buffer_t* buffer, parameters* params){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
     int n = 2 + (int)(log(buffer->x[buffer->n-1]) * M_LOG10E); //number of significant digits required for the spectrum
 
-    double number = 0.123456789; printf("\n%i\n", n); // placeholder line
-    ksprintf(&buffer->spectrum, "%.*f", n, number); // printf("Formatted string: %s\n", buffer->spectrum.s); //prinft test
+        // double number = 0.123456789; printf("\n%i\n", n); // placeholder line
+        // ksprintf(&buffer->spectrum, "%.*f", n, number); printf("Formatted string: %s\n", buffer->spectrum.s); //prinft test
 
     double fmax = params -> fmax; double fmin = params -> fmin;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
     double fspan = (fmax - fmin) * 32 / 21; // used to compute the scale of FFT grid
     uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
-    printf("Number of target frequencies: %i\n", nsteps);
+
+        printf("Number of target frequencies: %i\n", nsteps);
+    uint32_t gridSize = bitCeil(nsteps);
+        printf("Grid size to be allocated: %i\n", gridSize);
 
 
 
