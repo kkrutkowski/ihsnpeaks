@@ -1032,14 +1032,20 @@ void mufft_free_plan_conv(mufft_plan_conv *plan)
     mufft_free(plan);
 }
 
-void *mufft_alloc(size_t size)
-{
+// Function to round up the size to the nearest multiple of alignment
+static size_t round_up_to_multiple(size_t size, size_t alignment) {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+void *mufft_alloc(size_t size) {
+    // Round up the size to the nearest multiple of MUFFT_ALIGNMENT
+    size_t aligned_size = round_up_to_multiple(size, MUFFT_ALIGNMENT);
+
 #if defined(_ISOC11_SOURCE)
-    return aligned_alloc(MUFFT_ALIGNMENT, size);
+    return aligned_alloc(MUFFT_ALIGNMENT, aligned_size);
 #elif (_POSIX_C_SOURCE >= 200112L) || (_XOPEN_SOURCE >= 600)
     void *ptr = NULL;
-    if (posix_memalign(&ptr, MUFFT_ALIGNMENT, size) < 0)
-    {
+    if (posix_memalign(&ptr, MUFFT_ALIGNMENT, aligned_size) < 0) {
         return NULL;
     }
     return ptr;
@@ -1047,15 +1053,14 @@ void *mufft_alloc(size_t size)
     // Align stuff ourselves. Kinda ugly, but will work anywhere.
     void **place;
     uintptr_t addr = 0;
-    void *ptr = malloc(MUFFT_ALIGNMENT + size + sizeof(uintptr_t));
+    void *ptr = malloc(MUFFT_ALIGNMENT + aligned_size + sizeof(uintptr_t));
 
-    if (ptr == NULL)
-    {
+    if (ptr == NULL) {
         return NULL;
     }
 
     addr = ((uintptr_t)ptr + sizeof(uintptr_t) + MUFFT_ALIGNMENT)
-        & ~(MUFFT_ALIGNMENT - 1);
+           & ~(MUFFT_ALIGNMENT - 1);
     place = (void**)addr;
     place[-1] = ptr;
 
