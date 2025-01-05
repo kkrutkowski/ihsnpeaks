@@ -34,13 +34,20 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
     double fspan = (fmax - fmin) * 32 / 21; // used to compute the scale of FFT grid
     uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
+    nsteps = bitCeil(nsteps);
 
         printf("Number of target frequencies: %i\n", nsteps);
-    uint32_t gridSize = bitCeil(nsteps);
+    uint32_t gridSize = nsteps;
         printf("Grid size to be allocated: %i\n", gridSize);
 
+    buffer->grids[0] = mufft_alloc((nsteps + 16) * sizeof(complex float));
+    printf("%i\n", (nsteps + 16) * sizeof(complex float));
+    buffer->plan = mufft_create_plan_1d_c2c(nsteps, MUFFT_FORWARD, 0);
+    mufft_execute_plan_1d(buffer->plan, buffer->grids[0], buffer->grids[0]);
 
 
+    if(buffer->grids[0]){free(buffer->grids[0]);}
+    mufft_free_plan_1d(buffer->plan);
 
 
 
