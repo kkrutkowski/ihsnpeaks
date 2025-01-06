@@ -86,12 +86,12 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
         //negative half
         for(uint32_t i = gridLen * 43 / 64; i < gridLen; i++)
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + (((double)fmax * (double)((i - (gridLen * 43 / 64)) * 32)) / (double)(gridLen * 21)),
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + (((double)(fmax-fmin) * (double)((i - (gridLen * 43 / 64)) * 32)) / (double)(gridLen * 21)),
             (creal(buffer->grids[0][i]) * creal(buffer->grids[0][i]) + cimag(buffer->grids[0][i]) * cimag(buffer->grids[0][i])));}
 
         //positive half
         for(uint32_t i = 0; i <= gridLen * 21 / 64; i++) // higher half
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + (((double)fmax * (double)((i) * 32)) / (double)(gridLen * 21)),
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + (((double)(fmax-fmin) * (double)((i) * 32)) / (double)(gridLen * 21)),
             (creal(buffer->grids[0][i]) * creal(buffer->grids[0][i]) + cimag(buffer->grids[0][i]) * cimag(buffer->grids[0][i])));}
     }
 
