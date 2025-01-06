@@ -70,7 +70,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
         if (idx_frac > 0.01){
             float dst = -7.0 - idx_frac; // ok
             for(uint32_t j = 0; j < 16; j++){
-                buffer->grids[0][idx + j] += val * sinf(dst * M_PI) * sinf(dst * M_PI / 3) / (dst * dst * M_PI * M_PI / 3); //sinc(x) * sinc(x/3)
+                buffer->grids[0][idx + j] += val * sin(dst * M_PI) * sin(dst * M_PI / 3) / (dst * dst * M_PI * M_PI / 3); //sinc(x) * sinc(x/3)
                 dst += 1.0;
             }
         } else {
