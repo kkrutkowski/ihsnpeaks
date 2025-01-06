@@ -27,31 +27,64 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
     int n = 2 + (int)(log(buffer->x[buffer->n-1]) * M_LOG10E); //number of significant digits required for the spectrum
 
-        // double number = 0.123456789; printf("\n%i\n", n); // placeholder line
-        // ksprintf(&buffer->spectrum, "%.*f", n, number); printf("Formatted string: %s\n", buffer->spectrum.s); //prinft test
+    //adjust the weights
+    for(uint32_t i = 0; i < buffer->n; i++){
+        buffer->dy[i] *= buffer->dy[i];
+        buffer->dy[i] += params->epsilon;
+        buffer->dy[i] = 1.0 / buffer->dy[i];
+    }
+
+    double wsum = 0; double wsqsum = 0; double neff = 0;
+
+    for(uint32_t i = 0; i < buffer->n; i++){wsum += abs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
+    neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
+    //printf("%f\n", neff); // ok
+    for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += abs(buffer->dy[i]);} // ok
+    wsum = sqrt(neff) / wsum; //sqrt because of square later
+    for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 
     double fmax = params -> fmax; double fmin = params -> fmin;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
-    double fspan = (fmax - fmin) * 32 / 21; // used to compute the scale of FFT grid
+    double fspan = (fmax - fmin) * (32.0 / 21.0); // used to compute the scale of FFT grid
     uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
-    nsteps = bitCeil(nsteps);
+    uint32_t gridLen = bitCeil(nsteps);
 
-        printf("Number of target frequencies: %i\n", nsteps);
-    uint32_t gridSize = nsteps;
-        printf("Grid size to be allocated: %i\n", gridSize);
+        //printf("Number of target frequencies: %i\n", nsteps);
+        printf("Grid size to be allocated: %i\n", gridLen);
 
-    uint32_t memBlockSize = (nsteps + 16) * sizeof(complex float);
+    uint32_t memBlockSize = (gridLen + 16) * sizeof(complex float);
 
     buffer->grids[0] = mufft_alloc(memBlockSize);
     memset(buffer->grids[0], 0, memBlockSize);
     //printf("%i\n", memBlockSize);
-    buffer->plan = mufft_create_plan_1d_c2c(nsteps, MUFFT_FORWARD, 0);
+    buffer->plan = mufft_create_plan_1d_c2c(gridLen, MUFFT_FORWARD, 0);
+
+    for(uint32_t i = 0; i < buffer->n; i++){
+        double idx_double = buffer->x[i] * fspan; // ok
+        uint32_t idx = (uint32_t)(idx_double); // ok
+        double idx_frac = idx_double - (double)idx; // ok
+        idx = idx % gridLen; // ok
+        float val = buffer->dy[i];
+        if (idx_frac > 0.01){
+            float dst = -7.0 - idx_frac; // ok
+            for(uint32_t j = 0; j < 16; j++){
+                buffer->grids[0][idx + j] += val * sinf(dst * M_PI) * sinf(dst * M_PI / 3) / (dst * dst * M_PI * M_PI / 3); //sinc(x) * sinc(x/3)
+                dst += 1.0;
+            }
+        } else {
+            buffer->grids[0][idx] += val;
+        }
+    }
+    for(uint32_t j = 0; j < 16; j++){buffer->grids[0][j] += buffer->grids[0][j+gridLen];}
+
     mufft_execute_plan_1d(buffer->plan, buffer->grids[0], buffer->grids[0]);
-    printf("%f + %f i\n", creal(buffer->grids[0][0]), cimag(buffer->grids[0][0]));
+    //printf("%f + %f i\n", creal(buffer->grids[0][1]), cimag(buffer->grids[0][1])); // ok?
 
-    if(buffer->grids[0]){mufft_free(buffer->grids[0]); buffer->grids[0] = NULL;}
-    mufft_free_plan_1d(buffer->plan);
-
+    if (params->spectrum){
+        for(uint32_t i = 0; i <= gridLen * 21 / 64; i++)
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, ((double)fmax * (double)((i) * 32)) / (double)(gridLen * 21),
+            (creal(buffer->grids[0][i]) * creal(buffer->grids[0][i]) + cimag(buffer->grids[0][i]) * cimag(buffer->grids[0][i])));}
+    }
 
 
     if (params->spectrum){
@@ -69,6 +102,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
     }
+
+                    if(buffer->grids[0]){mufft_free(buffer->grids[0]); buffer->grids[0] = NULL;}
+                    mufft_free_plan_1d(buffer->plan);
 
     if(buffer->spectrum.s){free(buffer->spectrum.s);}
 }
