@@ -65,7 +65,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
         uint32_t idx = (uint32_t)(idx_double); // ok
         double idx_frac = idx_double - (double)idx; // ok
         idx = idx % gridLen; // ok
-        fftwf_complex val = (cos(fmid * 2.0 * M_PI * buffer->x[i]) * buffer->dy[i]) + (-sin(fmid * 2.0 * M_PI * buffer->x[i]) * buffer->dy[i]) * I; // ok
+        fftwf_complex val = cexp(-2.0 * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok for fmin=0, fails otherwise
         if (idx_frac > 0.01){
             float dst = -7.0 - idx_frac; // ok
             for(uint32_t j = 0; j < 16; j++){
@@ -83,15 +83,14 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     fftwf_execute(plan);
 
     if (params->spectrum){
-
         //negative half
         for(uint32_t i = gridLen * 43 / 64; i < gridLen; i++)
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + (((double)fmax * (double)((i - (gridLen * 43 / 64)) * 32)) / (double)(gridLen * 21)),
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + (((double)(fmax - fmin) * (double)((i - (gridLen * 43 / 64)) * 32)) / (double)(gridLen * 21)),
             (crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i])));}
 
         //positive half
         for(uint32_t i = 0; i <= gridLen * 21 / 64; i++) // higher half
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + (((double)fmax * (double)((i) * 32)) / (double)(gridLen * 21)),
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + (((double)(fmax - fmin) * (double)((i) * 32)) / (double)(gridLen * 21)),
             (crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i])));}
     }
 
