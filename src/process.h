@@ -40,13 +40,16 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     uint32_t gridSize = nsteps;
         printf("Grid size to be allocated: %i\n", gridSize);
 
-    buffer->grids[0] = mufft_alloc((nsteps + 16) * sizeof(complex float));
-    printf("%i\n", (nsteps + 16) * sizeof(complex float));
+    uint32_t memBlockSize = (nsteps + 16) * sizeof(complex float);
+
+    buffer->grids[0] = mufft_alloc(memBlockSize);
+    memset(buffer->grids[0], 0, memBlockSize);
+    //printf("%i\n", memBlockSize);
     buffer->plan = mufft_create_plan_1d_c2c(nsteps, MUFFT_FORWARD, 0);
     mufft_execute_plan_1d(buffer->plan, buffer->grids[0], buffer->grids[0]);
+    printf("%f + %f i\n", creal(buffer->grids[0][0]), cimag(buffer->grids[0][0]));
 
-
-    if(buffer->grids[0]){free(buffer->grids[0]);}
+    if(buffer->grids[0]){mufft_free(buffer->grids[0]); buffer->grids[0] = NULL;}
     mufft_free_plan_1d(buffer->plan);
 
 

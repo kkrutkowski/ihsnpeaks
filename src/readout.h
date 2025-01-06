@@ -40,7 +40,7 @@ typedef struct {
     uint32_t gridSize; uint32_t nGrids;
     complex float ** grids; //used to compute the FFT
     uint32_t** gidx; //grid indices for NFFT
-    mufft_plan_1d* muplan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
+    mufft_plan_1d* plan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
 
     kstring_t spectrum;
 } buffer_t;
@@ -52,6 +52,7 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> dy)      {free(buffer -> dy); buffer-> dy  = NULL;}
     if (buffer -> pidx)    {free(buffer -> pidx); buffer-> pidx  = NULL;}
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
+    if (buffer -> grids) {for (int i = 0; i < buffer->terms; i++){if (buffer -> grids[i]){mufft_free(buffer -> grids[i]); buffer -> grids[i] = NULL;}}}
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
@@ -69,7 +70,7 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
         if (!buffer->pidx) goto error;
     if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
         if (!buffer->readBuf) goto error;
-    if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float **));}
+    if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float *));}
         if (!buffer->grids) goto error;
         else buffer->nGrids = terms;
     if (!buffer->gidx) {buffer->gidx = calloc(terms, sizeof(uint32_t **));}//
