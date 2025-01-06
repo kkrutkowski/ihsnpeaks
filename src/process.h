@@ -23,6 +23,7 @@ uint32_t bitCeil(uint32_t n) {
     return 1 << exp;
 }
 
+//wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
     int n = 2 + (int)(log(buffer->x[buffer->n-1]) * M_LOG10E); //number of significant digits required for the spectrum
@@ -64,7 +65,8 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
         uint32_t idx = (uint32_t)(idx_double); // ok
         double idx_frac = idx_double - (double)idx; // ok
         idx = idx % gridLen; // ok
-        float val = buffer->dy[i];
+        //complex float val = buffer->dy[i]; //ok
+        complex float val = (cos(fmid * 2.0 * M_PI * buffer->x[i]) * buffer->dy[i]) - I * (sin(fmid * 2.0 * M_PI * buffer->x[i]) * buffer->dy[i]); // ok
         if (idx_frac > 0.01){
             float dst = -7.0 - idx_frac; // ok
             for(uint32_t j = 0; j < 16; j++){
@@ -81,8 +83,15 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     //printf("%f + %f i\n", creal(buffer->grids[0][1]), cimag(buffer->grids[0][1])); // ok?
 
     if (params->spectrum){
-        for(uint32_t i = 0; i <= gridLen * 21 / 64; i++)
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, ((double)fmax * (double)((i) * 32)) / (double)(gridLen * 21),
+
+        //negative half
+        for(uint32_t i = gridLen * 43 / 64; i < gridLen; i++)
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + (((double)fmax * (double)((i - (gridLen * 43 / 64)) * 32)) / (double)(gridLen * 21)),
+            (creal(buffer->grids[0][i]) * creal(buffer->grids[0][i]) + cimag(buffer->grids[0][i]) * cimag(buffer->grids[0][i])));}
+
+        //positive half
+        for(uint32_t i = 0; i <= gridLen * 21 / 64; i++) // higher half
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + (((double)fmax * (double)((i) * 32)) / (double)(gridLen * 21)),
             (creal(buffer->grids[0][i]) * creal(buffer->grids[0][i]) + cimag(buffer->grids[0][i]) * cimag(buffer->grids[0][i])));}
     }
 
