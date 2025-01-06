@@ -58,6 +58,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     buffer->grids[0] = (fftwf_complex*) fftwf_malloc(memBlockSize);
     memset(buffer->grids[0], 0, memBlockSize);
 
+    //fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_MEASURE);
     fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_ESTIMATE);
 
     for(uint32_t i = 0; i < buffer->n; i++){
