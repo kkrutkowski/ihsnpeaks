@@ -83,15 +83,14 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     fftwf_execute(plan);
 
     if (params->spectrum){
-        double invGridLen = 1.0 / (double)(gridLen);
-        //negative half
-        for(uint32_t i = gridLen * 43 / 64; i < gridLen; i++)
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + (((double)(fspan) * (double)((i + 1) - (gridLen * 43 / 64))) * invGridLen),
+        double invGridLen = 1.0 / (double)(gridLen); uint32_t shift = (gridLen * 43 / 64);
+
+        for(uint32_t i = shift; i < gridLen; i++) //negative half
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + ((double)((i + 1) - shift) * invGridLen * fspan),
             (crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i])));}
 
-        //positive half
-        for(uint32_t i = 0; i < gridLen * 21 / 64; i++) // higher half
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + (((double)(fspan) * (double)(i + 1)) * invGridLen),
+        for(uint32_t i = 0; i < gridLen * 21 / 64; i++) //positive half
+        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + ((double)(i + 1) * invGridLen * fspan),
             (crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i])));}
     }
 
