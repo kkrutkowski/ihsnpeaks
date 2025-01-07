@@ -55,7 +55,8 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
     double fspan = (fmax - fmin) * (32.0 / 21.0); // used to compute the scale of FFT grid
     double fjump = (fmax - fmin); //used to switch to next transform
-    uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
+    double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
+    uint32_t nsteps = (uint32_t)(fspan / fstep);
     uint32_t gridLen = bitCeil(nsteps);
 
     printf("Grid size to be allocated: %i\n", gridLen);
@@ -84,7 +85,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             uint32_t idx = (uint32_t)(idx_double); // ok
             double idx_frac = idx_double - (double)idx; // ok
             idx = idx % gridLen; // ok
-            fftwf_complex val = cexp(-2.0 * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok for fmin=0, fails otherwise
+            fftwf_complex val = cexp(-2.0 * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok
             if (idx_frac > 0.01){
                 float dst = -7.0 - idx_frac; // ok
                 for(uint32_t j = 0; j < 16; j++){
