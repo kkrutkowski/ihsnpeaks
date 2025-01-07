@@ -96,10 +96,11 @@ if (params->spectrum) {
 
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
+    double freq = 0;
 
     for (uint32_t i = shift; i < gridLen; i++) { // negative half
         // Convert the first column value using dtoa
-        double freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan);
+        freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan); if (freq > fmax){goto end;}
         custom_dtoa(freq, n, stringBuff);
 
         // Append the formatted string to the kstring buffer
@@ -117,7 +118,7 @@ if (params->spectrum) {
 
     for (uint32_t i = 0; i < gridLen * 21 / 64; i++) { // positive half
         // Convert the first column value using dtoa
-        double freq = fmid + ((double)(i + 1) * invGridLen * fspan);
+        freq = fmid + ((double)(i + 1) * invGridLen * fspan);  if (freq > fmax){goto end;}
         custom_dtoa(freq, n, stringBuff);
 
         // Append the formatted string to the kstring buffer
@@ -133,6 +134,8 @@ if (params->spectrum) {
         kputc('\n', &buffer->spectrum);
     }
 }
+
+    end:
 
     if (params->spectrum){
         // Prepare the output file
