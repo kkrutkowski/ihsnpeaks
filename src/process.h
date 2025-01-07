@@ -51,7 +51,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     wsum = sqrt(neff) / wsum; //sqrt because of square later
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 
-    double fmax = params -> fmax; double fmin = params -> fmin;
+    double fmax = params->fmax; double fmin = params->fmin;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
     double fspan = (fmax - fmin) * (32.0 / 21.0); // used to compute the scale of FFT grid
     uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
@@ -96,46 +96,46 @@ if (params->spectrum) {
 
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
-    double freq = 0;
+    double freq = 0; float magnitude = 0;
 
-    for (uint32_t i = shift; i < gridLen; i++) { // negative half
-        // Convert the first column value using dtoa
-        freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan); if (freq > fmax){goto end;}
-        custom_dtoa(freq, n, stringBuff);
+    while(true){
+        for (uint32_t i = shift; i < gridLen; i++) { // negative half
+            // Convert the first column value using dtoa
+            freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
+            custom_dtoa(freq, n, stringBuff);
 
-        // Append the formatted string to the kstring buffer
-        kputs(stringBuff, &buffer->spectrum);
-        kputc('\t', &buffer->spectrum);
+            // Append the formatted string to the kstring buffer
+            kputs(stringBuff, &buffer->spectrum);
+            kputc('\t', &buffer->spectrum);
 
-        // Convert the second column value using ftoa
-        float magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
-        custom_ftoa(magnitude, 2, stringBuff);  // 2 decimal places
+            // Convert the second column value using ftoa
+            magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+            custom_ftoa(magnitude, 2, stringBuff);  // 2 decimal places
 
-        // Append the formatted string to the kstring buffer
-        kputs(stringBuff, &buffer->spectrum);
-        kputc('\n', &buffer->spectrum);
-    }
+            // Append the formatted string to the kstring buffer
+            kputs(stringBuff, &buffer->spectrum);
+            kputc('\n', &buffer->spectrum);
+        }
 
-    for (uint32_t i = 0; i < gridLen * 21 / 64; i++) { // positive half
-        // Convert the first column value using dtoa
-        freq = fmid + ((double)(i + 1) * invGridLen * fspan);  if (freq > fmax){goto end;}
-        custom_dtoa(freq, n, stringBuff);
+        for (uint32_t i = 0; i < gridLen * 21 / 64; i++) { // positive half
+            // Convert the first column value using dtoa
+            freq = fmid + ((double)(i + 1) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
+            custom_dtoa(freq, n, stringBuff);
 
-        // Append the formatted string to the kstring buffer
-        kputs(stringBuff, &buffer->spectrum);
-        kputc('\t', &buffer->spectrum);
+            // Append the formatted string to the kstring buffer
+            kputs(stringBuff, &buffer->spectrum);
+            kputc('\t', &buffer->spectrum);
 
-        // Convert the second column value using ftoa
-        float magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
-        custom_ftoa(magnitude, 2 , stringBuff);  // 2 decimal places
+            // Convert the second column value using ftoa
+            magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+            custom_ftoa(magnitude, 2 , stringBuff);  // 2 decimal places
 
-        // Append the formatted string to the kstring buffer
-        kputs(stringBuff, &buffer->spectrum);
-        kputc('\n', &buffer->spectrum);
-    }
-}
-
-    end:
+            // Append the formatted string to the kstring buffer
+            kputs(stringBuff, &buffer->spectrum);
+            kputc('\n', &buffer->spectrum);
+        }
+        fmin += fspan; fmid += fspan; fmax += fspan;}
+} end:
 
     if (params->spectrum){
         // Prepare the output file
