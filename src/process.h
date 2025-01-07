@@ -51,18 +51,18 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     wsum = sqrt(neff) / wsum; //sqrt because of square later
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 
-    double fmax = params->fmax; double fmin = params->fmin;
+    double fmin = params->fmin; double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
+    double fspan = (double)(params->gridLen) * fstep; // used to compute the scale of FFT grid
+    double fjump = fspan * (21.0/32.0); //used to switch to next transform
+    double fmax = fmin + fjump;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
-    double fspan = (fmax - fmin) * (32.0 / 21.0); // used to compute the scale of FFT grid
-    double fjump = (fmax - fmin); //used to switch to next transform
-    double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
-    uint32_t nsteps = (uint32_t)(fspan / fstep);
-    uint32_t gridLen = bitCeil(nsteps);
+    uint32_t nsteps = (uint32_t)(params->gridLen);
+    uint32_t gridLen = params->gridLen;
 
-    printf("Grid size to be allocated: %i\n", gridLen);
+    printf("Grid length: %i\n", params->gridLen);
+    printf("Number of target frequencies: %i\n", (int)((params->fmax - params->fmin)/fstep));
 
-    uint32_t memBlockSize = (gridLen + 16) * sizeof(fftwf_complex);
-    //uint32_t memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
+    uint32_t memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
 
     buffer->grids[0] = (fftwf_complex*) fftwf_malloc(memBlockSize);
 
@@ -76,7 +76,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double invGridLen = 1.0 / (double)(gridLen);
     uint32_t shift = (gridLen * 43 / 64);
 
-    while(fmin < 2.0 * params->fmax){
+    while(fmin < params->fmax){
 
         memset(buffer->grids[0], 0, memBlockSize);
 
@@ -88,7 +88,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             fftwf_complex val = cexp(-2.0 * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok
             if (idx_frac > 0.01){
                 float dst = -7.0 - idx_frac; // ok
-                for(uint32_t j = 0; j < 16; j++){
+                for(uint32_t j = 0; j < 16; j++){//replace with vectorized sinc
                     buffer->grids[0][idx + j] += val * sin(dst * M_PI) * sin(dst * M_PI / 3) / (dst * dst * M_PI * M_PI / 3); //sinc(x) * sinc(x/3)
                     dst += 1.0;
                 }
@@ -100,9 +100,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
     fftwf_execute(plan);
 
-        for (uint32_t i = shift; i < gridLen; i++) { // negative half
+        for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             // Convert the first column value using dtoa
-            freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan); if (freq > 2.0 * params->fmax){goto end;}
+            freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
             magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
             if (params->spectrum){
                 custom_dtoa(freq, n, stringBuff);
@@ -117,9 +117,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             }
         }
 
-        for (uint32_t i = 0; i < gridLen * 21 / 64; i++) { // positive half
+        for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             // Convert the first column value using dtoa
-            freq = fmid + ((double)(i + 1) * invGridLen * fspan);  if (freq > 2.0 * params->fmax){goto end;}
+            freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
             magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
             if (params->spectrum){
                 custom_dtoa(freq, n, stringBuff);

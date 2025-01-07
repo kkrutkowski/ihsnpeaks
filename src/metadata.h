@@ -13,6 +13,7 @@
 //struct parameters;
 #include "../include/klib/kvec.h"
 
+static inline uint32_t intmax(int32_t a, int32_t b) {return (a > b) ? a : b;}
 uint32_t bitCeil(uint32_t n) {
     int exp;
     double mantissa = frexp((double)n, &exp);
@@ -81,7 +82,7 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
         *avgLen = newline_count;
-            *gridLen = bitCeil(newline_count * 8); //to be modified (?)
+            *gridLen = intmax(2048, bitCeil(newline_count * 8)); //to be modified (?)
         return true;
     } else {
         DIR *dir = opendir(path);
