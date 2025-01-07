@@ -11,6 +11,7 @@
 #include "readout.h"
 #include "params.h"
 
+#include "../include/fast_convert.h"
 #include "../include/klib/kstring.h"
 #include "/usr/local/include/fftw3.h"  // Include FFTW3 header
 
@@ -24,10 +25,22 @@ uint32_t bitCeil(uint32_t n) {
     return 1 << exp;
 }
 
+unsigned int custom_ftoa(float v, int size, char *line){
+    int new_size = size + (int)ceil(log10(v));
+    if (new_size < 1){return fast_ftoa(0.0, new_size, line);}
+    else {return fast_ftoa(v, new_size, line);}
+}
+
+unsigned int custom_dtoa(double v, int size, char *line){
+    int new_size = size + (int)ceil(log10(v));
+    if (new_size < 1){return fast_dtoa(0.0, new_size, line);}
+    else {return fast_dtoa(v, new_size, line);}
+}
+
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
-    int n = 2 + (int)(log(buffer->x[buffer->n-1]) * M_LOG10E); //number of significant digits required for the spectrum
+    int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
 
     //adjust the weights
     for(uint32_t i = 0; i < buffer->n; i++){
@@ -83,17 +96,49 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
     fftwf_execute(plan);
 
-    if (params->spectrum){
-        double invGridLen = 1.0 / (double)(gridLen); uint32_t shift = (gridLen * 43 / 64);
+if (params->spectrum) {
+    double invGridLen = 1.0 / (double)(gridLen);
+    uint32_t shift = (gridLen * 43 / 64);
 
-        for(uint32_t i = shift; i < gridLen; i++) //negative half
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmin + ((double)((i + 1) - shift) * invGridLen * fspan),
-            (crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i])));}
+    // Single buffer to hold the converted strings
+    char stringBuff[32];  // Adjust size as needed
 
-        for(uint32_t i = 0; i < gridLen * 21 / 64; i++) //positive half
-        {ksprintf(&buffer->spectrum, "%.*f\t%.2f\n", n, fmid + ((double)(i + 1) * invGridLen * fspan),
-            (crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i])));}
+    for (uint32_t i = shift; i < gridLen; i++) { // negative half
+        // Convert the first column value using dtoa
+        double freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan);
+        custom_dtoa(freq, n, stringBuff);
+
+        // Append the formatted string to the kstring buffer
+        kputs(stringBuff, &buffer->spectrum);
+        kputc('\t', &buffer->spectrum);
+
+        // Convert the second column value using ftoa
+        float magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+        custom_ftoa(magnitude, 2, stringBuff);  // 2 decimal places
+
+        // Append the formatted string to the kstring buffer
+        kputs(stringBuff, &buffer->spectrum);
+        kputc('\n', &buffer->spectrum);
     }
+
+    for (uint32_t i = 0; i < gridLen * 21 / 64; i++) { // positive half
+        // Convert the first column value using dtoa
+        double freq = fmid + ((double)(i + 1) * invGridLen * fspan);
+        custom_dtoa(freq, n, stringBuff);
+
+        // Append the formatted string to the kstring buffer
+        kputs(stringBuff, &buffer->spectrum);
+        kputc('\t', &buffer->spectrum);
+
+        // Convert the second column value using ftoa
+        float magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+        custom_ftoa(magnitude, 2 , stringBuff);  // 2 decimal places
+
+        // Append the formatted string to the kstring buffer
+        kputs(stringBuff, &buffer->spectrum);
+        kputc('\n', &buffer->spectrum);
+    }
+}
 
     if (params->spectrum){
         // Prepare the output file
