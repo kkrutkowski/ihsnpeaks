@@ -75,7 +75,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double invGridLen = 1.0 / (double)(gridLen);
     uint32_t shift = (gridLen * 43 / 64);
 
-    while(true){
+    while(fmin < 2.0 * params->fmax){
 
         memset(buffer->grids[0], 0, memBlockSize);
 
