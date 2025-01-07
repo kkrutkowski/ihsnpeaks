@@ -7,11 +7,21 @@
 #include <dirent.h>
 #include <string.h>
 #include <stdbool.h>
+#include <math.h>
 
 #include "params.h"
 //struct parameters;
 #include "../include/klib/kvec.h"
 
+uint32_t bitCeil(uint32_t n) {
+    int exp;
+    double mantissa = frexp((double)n, &exp);
+
+    // If the number is a power of two, return it as is
+    if (mantissa == 0.5) {return n;}
+    // Otherwise, return 2^exp
+    return 1 << exp;
+}
 
 // Define the target struct to hold file path and a pointer to the parameters struct
 typedef struct {
@@ -32,7 +42,7 @@ static int is_directory(const char *path) {
 }
 
 // Function to process the path and populate the target vector
-static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize) {
+static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize, uint64_t* avgLen, uint32_t* gridLen) {
     kv_init(*targets);
     *maxLen = 0;
 
@@ -70,6 +80,8 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
 
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
+        *avgLen = newline_count;
+            *gridLen = bitCeil(newline_count * 8); //to be modified (?)
         return true;
     } else {
         DIR *dir = opendir(path);

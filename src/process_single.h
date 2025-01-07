@@ -15,6 +15,16 @@
 #include "../include/klib/kstring.h"
 #include "/usr/local/include/fftw3.h"  // Include FFTW3 header
 
+uint32_t bitCeil(uint32_t n) {
+    int exp;
+    double mantissa = frexp((double)n, &exp);
+
+    // If the number is a power of two, return it as is
+    if (mantissa == 0.5) {return n;}
+    // Otherwise, return 2^exp
+    return 1 << exp;
+}
+
 unsigned int custom_ftoa(float v, int size, char *line) {
     int new_size = size + (int)ceil(log10(v));
     if (new_size < 1) {
@@ -60,7 +70,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     printf("Grid size to be allocated: %i\n", gridLen);
 
     uint32_t memBlockSize = (gridLen + 16) * sizeof(fftwf_complex);
-    //uint32_t memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
 
     buffer->grids[0] = (fftwf_complex*) fftwf_malloc(memBlockSize);
     memset(buffer->grids[0], 0, memBlockSize);

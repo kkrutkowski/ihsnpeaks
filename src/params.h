@@ -32,6 +32,7 @@ typedef struct {
     //uint32_t bufferSize;      //size of the FFT buffer
     uint32_t maxSize;         //number of bytes in the longest time series of the processed batch
     uint32_t maxLen;          //number of measurements in the longest time series of the processed batch
+    uint32_t gridLen;         //length of the FFT grid used in transform
     uint64_t avgLen;          //average number of measurements per time series in the batch
 
     kvec_target_t targets;
@@ -144,7 +145,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         }
     }
 
-    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize);
+    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen);
 
     return params;}
 
