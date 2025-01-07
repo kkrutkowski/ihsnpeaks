@@ -54,6 +54,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double fmax = params->fmax; double fmin = params->fmin;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
     double fspan = (fmax - fmin) * (32.0 / 21.0); // used to compute the scale of FFT grid
+    double fjump = (fmax - fmin); //used to switch to next transform
     uint32_t nsteps = (uint32_t)((double)params->nterms * (double)params->oversamplingFactor * fspan * buffer->x[buffer->n - 1] * 0.5);
     uint32_t gridLen = bitCeil(nsteps);
 
@@ -63,79 +64,77 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     //uint32_t memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
 
     buffer->grids[0] = (fftwf_complex*) fftwf_malloc(memBlockSize);
-    memset(buffer->grids[0], 0, memBlockSize);
 
     //fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_MEASURE);
     fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_ESTIMATE);
-
-    for(uint32_t i = 0; i < buffer->n; i++){
-        double idx_double = buffer->x[i] * fspan; // ok
-        uint32_t idx = (uint32_t)(idx_double); // ok
-        double idx_frac = idx_double - (double)idx; // ok
-        idx = idx % gridLen; // ok
-        fftwf_complex val = cexp(-2.0 * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok for fmin=0, fails otherwise
-        if (idx_frac > 0.01){
-            float dst = -7.0 - idx_frac; // ok
-            for(uint32_t j = 0; j < 16; j++){
-                buffer->grids[0][idx + j] += val * sin(dst * M_PI) * sin(dst * M_PI / 3) / (dst * dst * M_PI * M_PI / 3); //sinc(x) * sinc(x/3)
-                dst += 1.0;
-            }
-        } else {
-            buffer->grids[0][idx] += val;
-        }
-    }
-    for(uint32_t j = 0; j < 16; j++){
-        buffer->grids[0][j] += buffer->grids[0][j+gridLen];
-    }
-
-    fftwf_execute(plan);
-
-if (params->spectrum) {
-    double invGridLen = 1.0 / (double)(gridLen);
-    uint32_t shift = (gridLen * 43 / 64);
 
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
     double freq = 0; float magnitude = 0;
 
+    double invGridLen = 1.0 / (double)(gridLen);
+    uint32_t shift = (gridLen * 43 / 64);
+
     while(true){
+
+        memset(buffer->grids[0], 0, memBlockSize);
+
+        for(uint32_t i = 0; i < buffer->n; i++){
+            double idx_double = buffer->x[i] * fspan; // ok
+            uint32_t idx = (uint32_t)(idx_double); // ok
+            double idx_frac = idx_double - (double)idx; // ok
+            idx = idx % gridLen; // ok
+            fftwf_complex val = cexp(-2.0 * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok for fmin=0, fails otherwise
+            if (idx_frac > 0.01){
+                float dst = -7.0 - idx_frac; // ok
+                for(uint32_t j = 0; j < 16; j++){
+                    buffer->grids[0][idx + j] += val * sin(dst * M_PI) * sin(dst * M_PI / 3) / (dst * dst * M_PI * M_PI / 3); //sinc(x) * sinc(x/3)
+                    dst += 1.0;
+                }
+            } else {
+                buffer->grids[0][idx] += val;
+            }
+        }
+    for(uint32_t j = 0; j < 16; j++){buffer->grids[0][j] += buffer->grids[0][j+gridLen];}
+
+    fftwf_execute(plan);
+
         for (uint32_t i = shift; i < gridLen; i++) { // negative half
             // Convert the first column value using dtoa
-            freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
-            custom_dtoa(freq, n, stringBuff);
-
-            // Append the formatted string to the kstring buffer
-            kputs(stringBuff, &buffer->spectrum);
-            kputc('\t', &buffer->spectrum);
-
-            // Convert the second column value using ftoa
+            freq = fmin + ((double)((i + 1) - shift) * invGridLen * fspan); if (freq > 2.0 * params->fmax){goto end;}
             magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
-            custom_ftoa(magnitude, 2, stringBuff);  // 2 decimal places
-
-            // Append the formatted string to the kstring buffer
-            kputs(stringBuff, &buffer->spectrum);
-            kputc('\n', &buffer->spectrum);
+            if (params->spectrum){
+                custom_dtoa(freq, n, stringBuff);
+                // Append the formatted string to the kstring buffer
+                kputs(stringBuff, &buffer->spectrum);
+                kputc('\t', &buffer->spectrum);
+                // Convert the second column value using ftoa
+                custom_ftoa(magnitude, 2, stringBuff);  // 2 decimal places
+                // Append the formatted string to the kstring buffer
+                kputs(stringBuff, &buffer->spectrum);
+                kputc('\n', &buffer->spectrum);
+            }
         }
 
         for (uint32_t i = 0; i < gridLen * 21 / 64; i++) { // positive half
             // Convert the first column value using dtoa
-            freq = fmid + ((double)(i + 1) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
-            custom_dtoa(freq, n, stringBuff);
-
-            // Append the formatted string to the kstring buffer
-            kputs(stringBuff, &buffer->spectrum);
-            kputc('\t', &buffer->spectrum);
-
-            // Convert the second column value using ftoa
+            freq = fmid + ((double)(i + 1) * invGridLen * fspan);  if (freq > 2.0 * params->fmax){goto end;}
             magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
-            custom_ftoa(magnitude, 2 , stringBuff);  // 2 decimal places
-
-            // Append the formatted string to the kstring buffer
-            kputs(stringBuff, &buffer->spectrum);
-            kputc('\n', &buffer->spectrum);
+            if (params->spectrum){
+                custom_dtoa(freq, n, stringBuff);
+                // Append the formatted string to the kstring buffer
+                kputs(stringBuff, &buffer->spectrum);
+                kputc('\t', &buffer->spectrum);
+                // Convert the second column value using ftoa
+                custom_ftoa(magnitude, 2 , stringBuff);  // 2 decimal places
+                // Append the formatted string to the kstring buffer
+                kputs(stringBuff, &buffer->spectrum);
+                kputc('\n', &buffer->spectrum);
+            }
         }
-        fmin += fspan; fmid += fspan; fmax += fspan;}
-} end:
+        fmin += fjump; fmid += fjump; fmax += fjump;
+    } end:
+
 
     if (params->spectrum){
         // Prepare the output file
