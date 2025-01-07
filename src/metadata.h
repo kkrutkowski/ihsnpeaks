@@ -82,7 +82,7 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
         *avgLen = newline_count;
-            *gridLen = intmax(2048, bitCeil(newline_count * 8)); //to be modified (?)
+        *gridLen = intmax(1<<11, bitCeil(newline_count * 16)); //to be modified (?)
         return true;
     } else {
         DIR *dir = opendir(path);
