@@ -4662,11 +4662,13 @@ fast_ftoa (float v, int size, char *line)
   }
 
   r = 0;
-  while ((q % 10) == 0) {
-    r++;
-    exp++;
-    q /= 10;
-  }
+  // Remove the loop that removes trailing zeros
+  // while ((q % 10) == 0) {
+  //   r++;
+  //   exp++;
+  //   q /= 10;
+  // }
+
   if (exp >= 0 && exp <= r) {
     q *= ipowers32[exp];
     s += fast_uint32 (q, s);
@@ -4855,19 +4857,21 @@ fast_dtoa (double v, int size, char *line)
   }
 
   r = 0;
-#if __WORDSIZE == 64
-  while ((q % 10) == 0) {
-    r++;
-    exp++;
-    q /= 10;
-  }
-#else
-  while ((q - div_10 (q) * 10) == 0) {
-    r++;
-    exp++;
-    q = div_10 (q);
-  }
-#endif
+  // Remove the loop that removes trailing zeros
+  // #if __WORDSIZE == 64
+  // while ((q % 10) == 0) {
+  //   r++;
+  //   exp++;
+  //   q /= 10;
+  // }
+  // #else
+  // while ((q - div_10 (q) * 10) == 0) {
+  //   r++;
+  //   exp++;
+  //   q = div_10 (q);
+  // }
+  // #endif
+
   if (exp >= 0 && exp <= r) {
     q *= ipowers64[exp];
     s += fast_uint64 (q, s);
