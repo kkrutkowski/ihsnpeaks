@@ -25,10 +25,13 @@ uint32_t bitCeil(uint32_t n) {
     return 1 << exp;
 }
 
-unsigned int custom_ftoa(float v, int size, char *line){
+unsigned int custom_ftoa(float v, int size, char *line) {
     int new_size = size + (int)ceil(log10(v));
-    if (new_size < 1){return fast_ftoa(0.0, new_size, line);}
-    else {return fast_ftoa(v, new_size, line);}
+    if (new_size < 1) {
+        line[0] = '0'; line[1] = '.';
+        for (int i = 0; i < size; i++) {line[2 + i] = '0';}
+        line[4] = '\0'; return 4; // Return the length of the string
+    } else {return fast_ftoa(v, new_size, line);}
 }
 
 unsigned int custom_dtoa(double v, int size, char *line){
