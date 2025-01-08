@@ -22,8 +22,9 @@ float correctPower(float K, float nInv) {
     //printf("%.2f\n", - inside_log); return K;}
 return K - inside_log;}
 
+inline float sabs(complex float z) {return (creal(z) * creal(z)) + (cimag(z) * cimag(z));}
 
-unsigned int custom_ftoa(float v, int size, char *line) {
+inline unsigned int custom_ftoa(float v, int size, char *line) {
     int new_size = size + (int)ceil(log10(v));
     if (new_size < 1) {
         line[0] = '0'; line[1] = '.';
@@ -32,10 +33,22 @@ unsigned int custom_ftoa(float v, int size, char *line) {
     } else {return fast_ftoa(v, new_size, line);}
 }
 
-unsigned int custom_dtoa(double v, int size, char *line){
+inline unsigned int custom_dtoa(double v, int size, char *line){
     int new_size = size + (int)ceil(log10(v));
     if (new_size < 1){return fast_dtoa(0.0, new_size, line);}
     else {return fast_dtoa(v, new_size, line);}
+}
+
+inline void appendFreq(double freq, float magnitude, int precision, kstring_t* buffer, char* stringBuff) {
+    // Convert frequency to string and append to the buffer
+    custom_dtoa(freq, stringBuff);
+    kputs(stringBuff, buffer);
+    kputc('\t', buffer); // Add a tab character
+
+    // Convert magnitude to string and append to the buffer
+    custom_ftoa(magnitude, precision, stringBuff);
+    kputs(stringBuff, buffer);
+    kputc('\n', buffer); // Add a newline character
 }
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
@@ -103,39 +116,17 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     fftwf_execute_dft(params->plan, buffer->grids[0], buffer->grids[0]);
 
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
-            // Convert the first column value using dtoa
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
-            magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+            magnitude = sabs(buffer->grids[0][i]);
             magnitude = correctPower(magnitude, nEffInv);
-            if (params->spectrum){
-                custom_dtoa(freq, n, stringBuff);
-                // Append the formatted string to the kstring buffer
-                kputs(stringBuff, &buffer->spectrum);
-                kputc('\t', &buffer->spectrum);
-                // Convert the second column value using ftoa
-                custom_ftoa(magnitude, 2, stringBuff);  // 2 decimal places
-                // Append the formatted string to the kstring buffer
-                kputs(stringBuff, &buffer->spectrum);
-                kputc('\n', &buffer->spectrum);
-            }
+            if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, stringBuff);}
         }
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
-            // Convert the first column value using dtoa
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
-            magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+            magnitude = sabs(buffer->grids[0][i]);
             magnitude = correctPower(magnitude, nEffInv);
-            if (params->spectrum){
-                custom_dtoa(freq, n, stringBuff);
-                // Append the formatted string to the kstring buffer
-                kputs(stringBuff, &buffer->spectrum);
-                kputc('\t', &buffer->spectrum);
-                // Convert the second column value using ftoa
-                custom_ftoa(magnitude, 2 , stringBuff);  // 2 decimal places
-                // Append the formatted string to the kstring buffer
-                kputs(stringBuff, &buffer->spectrum);
-                kputc('\n', &buffer->spectrum);
-            }
+            if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, stringBuff);}
         }
         fmin += fjump; fmid += fjump; fmax += fjump;
     } end:
