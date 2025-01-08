@@ -27,6 +27,8 @@ typedef struct {
     bool spectrum;
     bool debug;
 
+    fftwf_plan plan;
+
     //Variables used to estimate optimal hyperparameters from metadata
     //uint32_t blockSize;       //size of the FFT plan applied
     //uint32_t bufferSize;      //size of the FFT buffer
@@ -79,9 +81,10 @@ void print_parameters(parameters *params) {
 
 // Free allocated memory for parameters
 void free_parameters(parameters *params) {
+    fftwf_destroy_plan(params->plan);
     free(params->target[0]); // Free the allocated string
     free(params->target);     // Free the array of pointers
-    free_targets(&params -> targets);
+    free_targets(&params->targets);
 }
 
 
@@ -145,7 +148,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         }
     }
 
-    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen);
+    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.plan);
 
     return params;}
 

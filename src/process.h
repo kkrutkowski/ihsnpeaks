@@ -23,7 +23,6 @@ float correctPower(float K, float nInv) {
 return K - inside_log;}
 
 
-
 unsigned int custom_ftoa(float v, int size, char *line) {
     int new_size = size + (int)ceil(log10(v));
     if (new_size < 1) {
@@ -72,9 +71,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     printf("Grid length: %i\n", params->gridLen);
     printf("Number of target frequencies: %i\n", (int)((params->fmax - params->fmin)/fstep));
 
-    //fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_MEASURE);
-    fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_ESTIMATE);
-
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
     double freq = 0; float magnitude = 0;
@@ -104,7 +100,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
         }
     for(uint32_t j = 0; j < 16; j++){buffer->grids[0][j] += buffer->grids[0][j+gridLen];}
 
-    fftwf_execute(plan);
+    fftwf_execute_dft(params->plan, buffer->grids[0], buffer->grids[0]);
 
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             // Convert the first column value using dtoa
@@ -160,8 +156,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
     }
-
-    fftwf_destroy_plan(plan);
 
     if(buffer->spectrum.s){free(buffer->spectrum.s);}
 }

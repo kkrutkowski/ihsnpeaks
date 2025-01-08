@@ -43,7 +43,7 @@ typedef struct {
     uint32_t gridSize; uint32_t nGrids;
     complex float ** grids; //used to compute the FFT
     uint32_t** gidx; //grid indices for NFFT
-    mufft_plan_1d* plan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
+    //mufft_plan_1d* plan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
 
     kstring_t spectrum;
 } buffer_t;
