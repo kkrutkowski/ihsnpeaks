@@ -14,7 +14,9 @@
 
 #include "../include/klib/kstring.h"
 #include "../include/fast_convert.h"
+
 #include "../include/mufft/mufft.x86.h"
+#include "/usr/local/include/fftw3.h"
 
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
@@ -25,6 +27,7 @@ typedef struct {
     uint32_t   len;
     uint32_t     n;
     uint32_t terms;
+    uint32_t memBlockSize;
 
     char*  readBuf;
     double*      x;
@@ -52,13 +55,14 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> dy)      {free(buffer -> dy); buffer-> dy  = NULL;}
     if (buffer -> pidx)    {free(buffer -> pidx); buffer-> pidx  = NULL;}
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
-    if (buffer -> grids) {for (int i = 0; i < buffer->terms; i++){if (buffer -> grids[i]){mufft_free(buffer -> grids[i]); buffer -> grids[i] = NULL;}}}
+    if (buffer -> grids) {for (int i = 0; i < buffer->terms; i++){if (buffer -> grids[i]){fftwf_free(buffer->grids[i]); buffer->grids[i] = NULL;}}}
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
 }
 
-static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
+static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen) {
+    buffer->memBlockSize = (gridLen + 16) * sizeof(fftwf_complex);
     buffer->len = n; buffer->allocated = true; buffer->terms = terms;
     if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
         if (!buffer->x) goto error;
@@ -71,6 +75,7 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size) {
     if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
         if (!buffer->readBuf) goto error;
     if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float *));}
+        for (int i = 0; i < buffer->terms; i++){buffer->grids[i] = (fftwf_complex*) fftwf_malloc(buffer->memBlockSize);}
         if (!buffer->grids) goto error;
         else buffer->nGrids = terms;
     if (!buffer->gidx) {buffer->gidx = calloc(terms, sizeof(uint32_t **));}//

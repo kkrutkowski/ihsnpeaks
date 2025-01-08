@@ -15,6 +15,15 @@
 #include "../include/klib/kstring.h"
 #include "/usr/local/include/fftw3.h"  // Include FFTW3 header
 
+float correctPower(float K, float nInv) {
+    float term1 = ((2.0 * K) - (K * K)) * (0.25 * nInv);
+    float term2 = ((24.0 * K) - (132.0 * K * K) + (76.0 * K * K * K) - (9.0 * K * K * K * K)) * (nInv * nInv / 288.0);
+    float inside_log = logf(1 + term1 - term2);
+    //printf("%.2f\n", - inside_log); return K;}
+return K - inside_log;}
+
+
+
 unsigned int custom_ftoa(float v, int size, char *line) {
     int new_size = size + (int)ceil(log10(v));
     if (new_size < 1) {
@@ -46,6 +55,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
     for(uint32_t i = 0; i < buffer->n; i++){wsum += abs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
     neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
+    float nEffInv = 1 / neff;
     //printf("%f\n", neff); // ok
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += abs(buffer->dy[i]);} // ok
     wsum = sqrt(neff) / wsum; //sqrt because of square later
@@ -62,10 +72,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     printf("Grid length: %i\n", params->gridLen);
     printf("Number of target frequencies: %i\n", (int)((params->fmax - params->fmin)/fstep));
 
-    uint32_t memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
-
-    buffer->grids[0] = (fftwf_complex*) fftwf_malloc(memBlockSize);
-
     //fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_MEASURE);
     fftwf_plan plan = fftwf_plan_dft_1d(gridLen, buffer->grids[0], buffer->grids[0], FFTW_FORWARD, FFTW_ESTIMATE);
 
@@ -78,7 +84,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
     while(fmin < params->fmax){
 
-        memset(buffer->grids[0], 0, memBlockSize);
+        memset(buffer->grids[0], 0, buffer->memBlockSize);
 
         for(uint32_t i = 0; i < buffer->n; i++){
             double idx_double = buffer->x[i] * fspan; // ok
@@ -104,6 +110,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             // Convert the first column value using dtoa
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
             magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+            magnitude = correctPower(magnitude, nEffInv);
             if (params->spectrum){
                 custom_dtoa(freq, n, stringBuff);
                 // Append the formatted string to the kstring buffer
@@ -121,6 +128,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             // Convert the first column value using dtoa
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
             magnitude = crealf(buffer->grids[0][i]) * crealf(buffer->grids[0][i]) + cimagf(buffer->grids[0][i]) * cimagf(buffer->grids[0][i]);
+            magnitude = correctPower(magnitude, nEffInv);
             if (params->spectrum){
                 custom_dtoa(freq, n, stringBuff);
                 // Append the formatted string to the kstring buffer
@@ -153,7 +161,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
     }
 
-    if(buffer->grids[0]){fftwf_free(buffer->grids[0]); buffer->grids[0] = NULL;}
     fftwf_destroy_plan(plan);
 
     if(buffer->spectrum.s){free(buffer->spectrum.s);}
