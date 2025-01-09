@@ -84,13 +84,12 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
-    double freq = 0; float magnitude = 0;
 
     double invGridLen = 1.0 / (double)(gridLen);
     uint32_t shift = (gridLen * 43 / 64);
 
     while(fmin < params->fmax){
-
+        double freq = 0;
         for(int t = 0; t < buffer->terms; t++){ //compute the NFFTs required for the data
             memset(buffer->grids[t], 0, buffer->memBlockSize);
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
@@ -118,15 +117,15 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
 
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
-            magnitude = sabs(buffer->grids[0][i]);
-            magnitude = correctPower(magnitude, nEffInv);
+             float magnitude = 0;
+            for(int t = 0; t < buffer->terms; t++){magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);}
             if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);}
         }
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
-            magnitude = sabs(buffer->grids[0][i]);
-            magnitude = correctPower(magnitude, nEffInv);
+            float magnitude = 0;
+            for(int t = 0; t < buffer->terms; t++){magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);}
             if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);}
         }
         fmin += fjump; fmid += fjump; fmax += fjump;
