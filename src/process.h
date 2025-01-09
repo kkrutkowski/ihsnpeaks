@@ -16,11 +16,12 @@
 #include "../include/klib/kstring.h"
 #include "/usr/local/include/fftw3.h"  // Include FFTW3 header
 
-float correctPower(float K, float nInv) {
+inline float correctPower(float K, float nInv) {
     float term1 = ((2.0 * K) - (K * K)) * (0.25 * nInv);
     float term2 = ((24.0 * K) - (132.0 * K * K) + (76.0 * K * K * K) - (9.0 * K * K * K * K)) * (nInv * nInv / 288.0);
     float inside_log = logf(1 + term1 - term2);
 return K - inside_log;}
+
 
 inline float sabs(complex float z) {return (creal(z) * creal(z)) + (cimag(z) * cimag(z));}
 
@@ -124,14 +125,20 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
              float magnitude = 0;
-            for(int t = 0; t < buffer->terms; t++){magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);}
+            for(int t = 0; t < buffer->terms; t++){
+                //magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);
+                magnitude += sabs(buffer->grids[t][i]);
+            }
             if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);}
         }
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
             float magnitude = 0;
-            for(int t = 0; t < buffer->terms; t++){magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);}
+            for(int t = 0; t < buffer->terms; t++){
+                //magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);
+                magnitude += sabs(buffer->grids[t][i]);
+            }
             if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);}
         }
         fmin += fjump; fmid += fjump; fmax += fjump;
