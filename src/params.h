@@ -52,7 +52,7 @@ static parameters init_parameters(int argc, char *argv[]) {
 
     params.fmax = atof(argv[2]);
     params.fmin = 0.0;
-    params.treshold = 4.0;
+    params.treshold = 10.0;
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
     params.npeaks = 10;
