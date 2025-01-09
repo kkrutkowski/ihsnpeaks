@@ -48,12 +48,39 @@
             result.data = _mm256_add_ps(_mm256_mul_ps(result.data, x2), c[0].data);
         #endif
         result.data = _mm256_mul_ps(result.data, x.data); // Multiply by x to apply odd powers
-return result;}
+    return result;}
+
+    static inline VEC sin_2pi_ps(const VEC angle) {
+        constexpr VEC c[4] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f)};
+        const __m256 AVX_SIGNMASK_PS =  _mm256_castsi256_ps(_mm256_set1_epi32(0x80000000));
+
+        VEC sinangle;
+        sinangle.data = _mm256_sub_ps(angle.data, _mm256_floor_ps(angle.data));
+        const __m256 angle_orig = sinangle.data;
+
+        sinangle.data = _mm256_xor_ps(sinangle.data, _mm256_and_ps(_mm256_cmp_ps(angle_orig, c[0].data, _CMP_GE_OQ), _mm256_xor_ps(sinangle.data, _mm256_sub_ps(c[1].data, angle_orig))));
+        sinangle.data = _mm256_xor_ps(sinangle.data,_mm256_and_ps(_mm256_cmp_ps(angle_orig, c[1].data, _CMP_GE_OQ), AVX_SIGNMASK_PS));
+        sinangle.data = _mm256_xor_ps(sinangle.data, _mm256_and_ps(_mm256_cmp_ps(angle_orig, c[2].data, _CMP_GE_OQ),_mm256_xor_ps(sinangle.data, _mm256_sub_ps(c[3].data, angle_orig))));
+
+        VEC result;
+        result = sin_2pi_poly_ps(sinangle);
+        result.data = _mm256_xor_ps(result.data, _mm256_and_ps(_mm256_cmp_ps(angle.data, c[1].data, _CMP_GE_OQ), AVX_SIGNMASK_PS));
+
+    return result;
+}
 
     static inline void genWeights(const float dst, VEC *h1, VEC *h2){
-        constexpr VEC c[6] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f), SET_VEC(3.0f), SET_VEC(M_PI)};
+        constexpr VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
         constexpr VEC DST[2] = {(m256_union){0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f}, (m256_union){1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}};
 
+        VEC denom[2]; denom[0].data = _mm256_add_ps(DST[0].data, _mm256_set1_ps(dst)); denom[1].data = _mm256_sub_ps(DST[1].data, _mm256_set1_ps(dst));
+        VEC num[2];
+        num[0].data = c[2].data * sin_2pi_ps((m256_union)(c[0].data * denom[0].data)).data * sin_2pi_ps((m256_union)(c[1].data * denom[0].data)).data;
+        num[1].data = c[2].data * sin_2pi_ps((m256_union)(c[0].data * denom[1].data)).data * sin_2pi_ps((m256_union)(c[1].data * denom[1].data)).data;
+
+        denom[0].data = denom[0].data * denom[0].data * c[3].data; denom[1].data = denom[1].data * denom[1].data * c[3].data;
+
+        h1->data = num[0].data / denom[0].data; h2->data = num[1].data / denom[1].data;
     return;}
 #endif
 
