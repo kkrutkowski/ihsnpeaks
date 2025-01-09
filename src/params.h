@@ -23,6 +23,7 @@ typedef struct {
     float epsilon;
     int npeaks;
     int nterms;
+    int gridRatio;
     bool isFile;
     bool spectrum;
     bool debug;
@@ -57,6 +58,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.epsilon = 0.001;
     params.npeaks = 10;
     params.nterms = 3;
+    params.gridRatio = 32;
     params.spectrum = false;
     params.debug = false;
 
@@ -148,7 +150,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         }
     }
 
-    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.plan);
+    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
 
     return params;}
 

@@ -45,7 +45,7 @@ static int is_directory(const char *path) {
 }
 
 // Function to process the path and populate the target vector
-static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize, uint64_t* avgLen, uint32_t* gridLen, fftwf_plan* plan) {
+static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, uint32_t* maxSize, uint64_t* avgLen, uint32_t* gridLen, uint32_t* gridRatio, fftwf_plan* plan) {
     kv_init(*targets);
     *maxLen = 0;
 
@@ -84,7 +84,7 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
         *avgLen = newline_count;
-        *gridLen = intmax(1<<11, bitCeil(newline_count * 16)); //to be modified (?)
+        *gridLen = intmax(1<<11, bitCeil(newline_count * *gridRatio)); //to be modified (?)
         *plan = fftwf_plan_dft_1d(*gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
         return true;
     } else {
