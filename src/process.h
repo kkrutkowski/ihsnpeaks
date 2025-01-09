@@ -8,7 +8,8 @@
 #include <string.h>
 #include <complex.h> // For C99 complex numbers
 
-#include "readout.h"
+#include "utils/simd.h"
+#include "utils/readout.h"
 #include "params.h"
 
 #include "../include/fast_convert.h"

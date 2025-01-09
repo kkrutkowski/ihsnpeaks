@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 #include "metadata.h"
-#include "readout.h"
+#include "utils/readout.h"
 
 typedef struct {
     char**  target;
