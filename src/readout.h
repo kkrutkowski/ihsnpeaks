@@ -15,7 +15,7 @@
 #include "../include/klib/kstring.h"
 #include "../include/fast_convert.h"
 
-#include "../include/mufft/mufft.x86.h"
+//#include "../include/mufft/mufft.x86.h"
 #include "/usr/local/include/fftw3.h"
 
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
@@ -41,11 +41,13 @@ typedef struct {
 
     float magnitude;
     uint32_t gridSize; uint32_t nGrids;
+
     complex float ** grids; //used to compute the FFT
     uint32_t** gidx; //grid indices for NFFT
-    //mufft_plan_1d* plan; //FFT plan // = mufft_create_plan_1d_c2c(N, MUFFT_FORWARD, flags); // https://github.com/Themaister/muFFT/blob/master/bench.c
+    float** gdist;
 
     kstring_t spectrum;
+    kstring_t outBuf;
 } buffer_t;
 
 static inline void free_buffer (buffer_t* buffer) {
@@ -57,8 +59,12 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
     if (buffer -> grids) {for (int i = 0; i < buffer->terms; i++){if (buffer -> grids[i]){fftwf_free(buffer->grids[i]); buffer->grids[i] = NULL;}}}
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
+
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
+
+    for (int i = 0; i < buffer->terms; i++){if (buffer -> gdist && buffer -> gdist[i]) {free(buffer->gdist[i]); buffer->gdist[i] = NULL;}}
+    if (buffer->gdist){free(buffer->gdist); buffer-> gdist = NULL;}
 }
 
 static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen) {
@@ -78,11 +84,19 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uin
         for (int i = 0; i < buffer->terms; i++){buffer->grids[i] = (fftwf_complex*) fftwf_malloc(buffer->memBlockSize);}
         if (!buffer->grids) goto error;
         else buffer->nGrids = terms;
+
     if (!buffer->gidx) {buffer->gidx = calloc(terms, sizeof(uint32_t **));}//
         if (!buffer->gidx) goto error;
         for (int i = 0; i < buffer->terms; i++){
             buffer->gidx[i] = aligned_alloc(64, round_buffer(n * sizeof(uint32_t)));
             if (!buffer->gidx[i]) goto error;
+        }
+
+    if (!buffer->gdist) {buffer->gdist = calloc(terms, sizeof(float **));}//
+        if (!buffer->gdist) goto error;
+        for (int i = 0; i < buffer->terms; i++){
+            buffer->gdist[i] = aligned_alloc(64, round_buffer(n * sizeof(float)));
+            if (!buffer->gdist[i]) goto error;
         }
     return 0;
 
@@ -128,7 +142,7 @@ void linreg_buffer(buffer_t* buffer){
     lin = ((sumw * sumxy) - (sumx * sumy)) / denum;
     c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
 
-    buffer->magnitude = lin;
+    buffer->magnitude = c;
 
     // Adjust the y values based on the regression line
     for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}

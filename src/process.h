@@ -88,26 +88,31 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     double invGridLen = 1.0 / (double)(gridLen);
     uint32_t shift = (gridLen * 43 / 64);
 
+    for(int t = 0; t < buffer->terms; t++){
+        for(uint32_t i = 0; i < buffer->n; i++){
+            double freqFactor = (double)(t+1);
+            double idx_double = buffer->x[i] * fspan * freqFactor;
+            uint32_t idx_tmp =  (uint32_t)(idx_double);
+            buffer->gdist[t][i] = idx_double - (double)idx_tmp;
+            buffer->gidx[t][i] = idx_tmp % gridLen;
+        }
+    }
+
     while(fmin < params->fmax){
         double freq = 0;
         for(int t = 0; t < buffer->terms; t++){ //compute the NFFTs required for the data
             memset(buffer->grids[t], 0, buffer->memBlockSize);
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
-
             for(uint32_t i = 0; i < buffer->n; i++){
-                double idx_double = buffer->x[i] * fspan * freqFactor; // ok
-                uint32_t idx = (uint32_t)(idx_double); // ok
-                double idx_frac = idx_double - (double)idx; // ok
-                idx = idx % gridLen; // ok
-                fftwf_complex val = cexp(-2.0 * freqFactor * I * M_PI * fmid * buffer->x[i]) * buffer->dy[i]; // ok
-                if (idx_frac > 0.01){
-                    float dst = -7.0 - idx_frac; // ok
+                fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // ok
+                if (buffer->gdist[t][i] > 0.01){
+                    float dst = -7.0 - buffer->gdist[t][i]; // ok
                     for(uint32_t j = 0; j < 16; j++){//replace with vectorized sinc
-                        buffer->grids[t][idx + j] += val * 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI); //sinc(x) * sinc(x/3)
+                        buffer->grids[t][buffer->gidx[t][i] + j] += val * 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI); //sinc(x) * sinc(x/3)
                         dst += 1.0;
                     }
                 } else {
-                    buffer->grids[t][idx] += val;
+                    buffer->grids[t][buffer->gidx[t][i]] += val;
                 }
             }
         for(uint32_t j = 0; j < 16; j++){buffer->grids[t][j] += buffer->grids[t][j+gridLen];}
