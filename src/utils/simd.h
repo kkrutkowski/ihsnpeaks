@@ -69,7 +69,7 @@
     return result;
 }
 
-    static inline void genWeights(const float dst, VEC *h1, VEC *h2){
+    static inline void generateWeights(const float dst, VEC *h1, VEC *h2){
         constexpr VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
         constexpr VEC DST[2] = {(m256_union){7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f}, (m256_union){1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}};
 
