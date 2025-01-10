@@ -147,22 +147,29 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         fftwf_execute_dft(params->plan, buffer->grids[t], buffer->grids[t]);
     }
         float magnitudes[3] = {0};
+        for(int t = 0; t < buffer->terms; t++){magnitudes[0] += sabs(buffer->grids[t][shift]); magnitudes[1] += sabs(buffer->grids[t][shift+1]);}
+
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
-            magnitudes[1] = 0;
-            for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][i]);}
+            magnitudes[2] = 0;
+            for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
+            magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results for next iteration
         }
+
+        for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][0]);}
+        if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
-            magnitudes[1] = 0;
-            for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][i]);}
+            magnitudes[2] = 0;
+            for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
+            magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results for next iteration
         }
-        fmin += fjump; fmid += fjump; fmax += fjump;
+        fmin += fjump; fmid += fjump; fmax += fjump; if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
     } end:
 
 
