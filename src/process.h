@@ -126,7 +126,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
                 if (buffer->gdist[t][i] < 0.01){buffer->grids[t][buffer->gidx[t][i]] += val;}
                 else if (buffer->gdist[t][i] > 0.99){buffer->grids[t][buffer->gidx[t][i+1]] += val;}
                 else {
-                #ifdef __AVX__ // the vectorized sine approximation is bugged? To be determined
+                #ifdef __AVX__
                 VEC weights[2];
                 generateWeights(buffer->gdist[t][i], &weights[0], &weights[1]);
                 for(uint32_t j = 0; j < 8; j++){
