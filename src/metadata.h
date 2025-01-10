@@ -83,7 +83,7 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
 
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
-        *avgLen = newline_count;
+        //*avgLen = newline_count;
         *gridLen = intmax(1<<11, bitCeil(newline_count * *gridRatio)); //to be modified (?)
         *plan = fftwf_plan_dft_1d(*gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
         return true;

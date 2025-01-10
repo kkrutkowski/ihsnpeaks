@@ -51,6 +51,23 @@ static inline void appendFreq(double freq, float magnitude, int precision, kstri
     kputc('\n', buffer); // Add a newline character
 }
 
+static inline void write_tsv(buffer_t *buffer, char* in_file){
+        char out_file[256];
+        strncpy(out_file, in_file, sizeof(out_file) - 1);
+        out_file[sizeof(out_file) - 1] = '\0'; // Ensure null-termination
+        char* dot = strrchr(out_file, '.'); // Find the last dot in the file name
+        if (dot) {*dot = '\0';}  // Remove the existing extension
+        strcat(out_file, ".tsv"); // Append the new extension
+
+        // Write the formatted string to the new .tsv file
+        FILE* fp = fopen(out_file, "w");
+        if (fp == NULL) {perror("Failed to open file for writing"); return;}
+
+        fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
+
+    if(buffer->spectrum.s){free(buffer->spectrum.s);}
+};
+
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
@@ -154,23 +171,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     } end:
 
 
-    if (params->spectrum){
-        // Prepare the output file
-        char out_file[256];
-        strncpy(out_file, in_file, sizeof(out_file) - 1);
-        out_file[sizeof(out_file) - 1] = '\0'; // Ensure null-termination
-        char* dot = strrchr(out_file, '.'); // Find the last dot in the file name
-        if (dot) {*dot = '\0';}  // Remove the existing extension
-        strcat(out_file, ".tsv"); // Append the new extension
-
-        // Write the formatted string to the new .tsv file
-        FILE* fp = fopen(out_file, "w");
-        if (fp == NULL) {perror("Failed to open file for writing"); return;}
-
-        fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
-    }
-
-    if(buffer->spectrum.s){free(buffer->spectrum.s);}
+    if (params->spectrum){write_tsv(buffer, in_file);}
 }
 
 #endif
