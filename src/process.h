@@ -107,7 +107,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
             for(uint32_t i = 0; i < buffer->n; i++){
                 fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // cexp takes ~ 15% of the compute time
-                if (buffer->gdist[t][i] > 0.01){
+                if (buffer->gdist[t][i] < 0.01){buffer->grids[t][buffer->gidx[t][i]] += val;}
+                else if (buffer->gdist[t][i] > 0.99){buffer->grids[t][buffer->gidx[t][i+1]] += val;}
+                else {
                 #ifdef __AVX__ // the vectorized sine approximation is bugged? To be determined
                 VEC weights[2];
                 generateWeights(buffer->gdist[t][i], &weights[0], &weights[1]);
@@ -122,8 +124,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
                         dst += 1.0;
                     }
                 #endif
-                } else {
-                    buffer->grids[t][buffer->gidx[t][i]] += val;
                 }
             }
         for(uint32_t j = 0; j < 16; j++){buffer->grids[t][j] += buffer->grids[t][j+gridLen];}
