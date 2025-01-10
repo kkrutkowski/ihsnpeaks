@@ -146,25 +146,21 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
         fftwf_execute_dft(params->plan, buffer->grids[t], buffer->grids[t]);
     }
-
+        float magnitudes[3] = {0};
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
-             float magnitude = 0;
-            for(int t = 0; t < buffer->terms; t++){
-                //magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);
-                magnitude += sabs(buffer->grids[t][i]);
-            }
-            if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);}
+            magnitudes[1] = 0;
+            for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][i]);}
+            //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
+            if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
         }
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
-            float magnitude = 0;
-            for(int t = 0; t < buffer->terms; t++){
-                //magnitude += correctPower(sabs(buffer->grids[t][i]), nEffInv);
-                magnitude += sabs(buffer->grids[t][i]);
-            }
-            if (params->spectrum){appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);}
+            magnitudes[1] = 0;
+            for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][i]);}
+            //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
+            if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
         }
         fmin += fjump; fmid += fjump; fmax += fjump;
     } end:
