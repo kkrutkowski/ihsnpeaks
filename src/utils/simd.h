@@ -64,7 +64,7 @@
 
         VEC result;
         result = sin_2pi_poly_ps(sinangle);
-        result.data = _mm256_xor_ps(result.data, _mm256_and_ps(_mm256_cmp_ps(angle.data, c[1].data, _CMP_GE_OQ), AVX_SIGNMASK_PS));
+        result.data = _mm256_xor_ps(result.data, _mm256_and_ps(_mm256_cmp_ps(angle_orig, c[1].data, _CMP_GE_OQ), AVX_SIGNMASK_PS));
 
     return result;
 }
