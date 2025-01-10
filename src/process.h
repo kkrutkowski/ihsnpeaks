@@ -106,13 +106,22 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
             memset(buffer->grids[t], 0, buffer->memBlockSize);
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
             for(uint32_t i = 0; i < buffer->n; i++){
-                fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // ok
+                fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // cexp takes ~ 15% of the compute time
                 if (buffer->gdist[t][i] > 0.01){
-                    float dst = -7.0 - buffer->gdist[t][i]; // ok
-                    for(uint32_t j = 0; j < 16; j++){//replace with vectorized sinc
-                        buffer->grids[t][buffer->gidx[t][i] + j] += val * 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI); //sinc(x) * sinc(x/3)
+                #ifdef __AVX__ // the vectorized sine approximation is bugged? To be determined
+                VEC weights[2];
+                generateWeights(buffer->gdist[t][i], &weights[0], &weights[1]);
+                for(uint32_t j = 0; j < 8; j++){
+                    buffer->grids[t][buffer->gidx[t][i] + j] += val * weights[0].data[j];
+                    buffer->grids[t][buffer->gidx[t][i] + 8 + j] += val * weights[1].data[j];
+                }
+                #else
+                    float dst = -7.0 - buffer->gdist[t][i];
+                    for(uint32_t j = 0; j < 16; j++){
+                        buffer->grids[t][buffer->gidx[t][i] + j] += val * 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI);
                         dst += 1.0;
                     }
+                #endif
                 } else {
                     buffer->grids[t][buffer->gidx[t][i]] += val;
                 }
