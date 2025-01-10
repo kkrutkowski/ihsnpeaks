@@ -15,17 +15,17 @@ int main(int argc, char *argv[]) {
     parameters params = read_parameters(argc, argv);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN); void *thread_pool;
 
-    print_parameters(&params);
+    if (params.debug){print_parameters(&params);}
 
     // Output results
     //for (size_t i = 0; i < kv_size(params.targets); i++) {printf("File: %s\n", kv_A(params.targets, i).path);}
     //printf("File: %s\n", kv_A(params.targets, kv_size(params.targets)-1).path);
 
     if(kv_size(params.targets) == 1){
-        printf("Single file mode\n");
+        //printf("Single file mode\n");
         buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
         alloc_buffer(&buffer, params.nterms, params.maxLen, params.maxSize, params.gridLen); //, params.avgLen
-            process_target(kv_A(params.targets, 0).path, &buffer, &params);
+            process_target(kv_A(params.targets, 0).path, &buffer, &params, false);
             //print_buffer(&buffer);
         //process the data here
         free_buffer(&buffer);

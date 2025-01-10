@@ -16,14 +16,12 @@
 typedef struct {
     char**  target;
     float** buffer;
-    float fmin;
-    float fmax;
+    float fmin;    float fmax;
     float treshold;
     float oversamplingFactor;
     float epsilon;
-    int npeaks;
-    int nterms;
-    int gridRatio;
+    int npeaks;    int nterms;
+    int gridRatio; int defaultGridRatio;
     bool isFile;
     bool spectrum;
     bool debug;
@@ -58,6 +56,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.epsilon = 0.001;
     params.npeaks = 10;
     params.nterms = 3;
+    params.defaultGridRatio = 32;
     params.gridRatio = 32;
     params.spectrum = false;
     params.debug = false;
@@ -67,18 +66,19 @@ static parameters init_parameters(int argc, char *argv[]) {
 
 void print_parameters(parameters *params) {
     printf("Parsed parameters:\n");
-    printf("  Target: %s\n", params->target ? *params->target : "(none)");
-    printf("  Maximum frequency: %.2f\n", params->fmax);
-    printf("  Minimum frequency: %.2f\n", params->fmin);
-    printf("  Oversampling Factor: %.2f\n", params->oversamplingFactor);
-    printf("  Detection threshold: %.2f\n", params->treshold);
-    printf("  Expected systemic variation: %.1e\n", params->epsilon);
-    printf("  Npeaks: %d\n", params->npeaks);
-    printf("  Nterms: %d\n", params->nterms);
-    printf("  Spectrum: %s\n", params->spectrum ? "true" : "false");
-    printf("  Is file: %s\n", params->isFile ? "true" : "false");
-    printf("  Largest file's length: %i\n", params->maxLen);
-    printf("  Read buffer size: %i\n", params->maxSize);
+    printf("\tTarget: %s\n", params->target ? *params->target : "(none)");
+    printf("\tMaximum frequency: %.2f\n", params->fmax);
+    printf("\tMinimum frequency: %.2f\n", params->fmin);
+    printf("\tOversampling Factor: %.2f\n", params->oversamplingFactor);
+    printf("\tDetection threshold: %.2f\n", params->treshold);
+    printf("\tExpected systemic variation: %.1e\n", params->epsilon);
+    printf("\tNpeaks: %d\n", params->npeaks);
+    printf("\tNterms: %d\n", params->nterms);
+    printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
+    printf("\tIs file: %s\n", params->isFile ? "true" : "false");
+    printf("\tLargest file's length: %i\n", params->maxLen);
+    printf("\tRead buffer size: %i\n", params->maxSize);
+    printf("\tFFT grid length: %i\n", params->gridLen);
 }
 
 // Free allocated memory for parameters
@@ -101,7 +101,6 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"peaks", ko_required_argument, 'p'},
         {"terms", ko_required_argument, 'n'},
         {"treshold", ko_required_argument, 't'},
-        {"msize", ko_required_argument, 'm'},
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
         {"epsilon", ko_required_argument, 'e'},

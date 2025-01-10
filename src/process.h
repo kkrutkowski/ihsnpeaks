@@ -69,7 +69,7 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
 };
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
-void process_target(char* in_file, buffer_t* buffer, parameters* params){
+void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
     int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
 
@@ -98,8 +98,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params){
     uint32_t nsteps = (uint32_t)(params->gridLen);
     uint32_t gridLen = params->gridLen;
 
-    printf("Grid length: %i\n", params->gridLen);
-    printf("Number of target frequencies: %i\n", (int)((params->fmax - params->fmin)/fstep));
+    if(!batch && params->debug){printf("\tNumber of target frequencies: %i\n", (int)((params->fmax - params->fmin)/fstep));}
 
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
