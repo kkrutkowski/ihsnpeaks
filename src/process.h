@@ -176,7 +176,11 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     } end:
 
     int i = 0;
-    while(i < params->npeaks && buffer->peaks[i].p > 0){printf("\t%.5f\t\t%.2f\t%.2f\t%.2f\n", buffer->peaks[i].freq, buffer->peaks[i].p * M_LOG10E, buffer->peaks[i].amp, buffer->peaks[i].chi2); i++;};
+    if(!batch){
+        printf("File: %s\n", in_file);
+        printf("    f[1/d]\tlog(p)\tAmp\tChi^2\n");
+        while(i < params->npeaks && buffer->peaks[i].p > 0){printf("   %.5f\t%.2f\t%.2f\t%.2f\n", buffer->peaks[i].freq, buffer->peaks[i].p * M_LOG10E, buffer->peaks[i].amp, buffer->peaks[i].chi2); i++;};
+    };
 
     if (params->spectrum){write_tsv(buffer, in_file);}
 }
