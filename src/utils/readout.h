@@ -20,7 +20,12 @@
 
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
-//struct parameters;
+typedef struct {
+    double freq;
+    float  amp;
+    float  p;
+    float  chi2;
+} peak_t;
 
 typedef struct {
     bool allocated;
@@ -28,6 +33,9 @@ typedef struct {
     uint32_t     n;
     uint32_t terms;
     uint32_t memBlockSize;
+
+    peak_t* peaks;
+    uint32_t nPeaks;
 
     char*  readBuf;
     double*      x;
