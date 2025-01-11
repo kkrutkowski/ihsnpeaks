@@ -65,8 +65,9 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> dy)      {free(buffer -> dy); buffer-> dy  = NULL;}
     if (buffer -> pidx)    {free(buffer -> pidx); buffer-> pidx  = NULL;}
     if (buffer -> readBuf) {free(buffer -> readBuf);  buffer -> readBuf = NULL;}
-    if (buffer -> grids) {for (int i = 0; i < buffer->terms; i++){if (buffer -> grids[i]){fftwf_free(buffer->grids[i]); buffer->grids[i] = NULL;}}}
+    if (buffer -> grids)   {for (int i = 0; i < buffer->terms; i++){if (buffer -> grids[i]){fftwf_free(buffer->grids[i]); buffer->grids[i] = NULL;}}}
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
+    if (buffer -> peaks)   {free(buffer -> peaks);  buffer -> peaks = NULL;}
 
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
@@ -75,7 +76,7 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer->gdist){free(buffer->gdist); buffer-> gdist = NULL;}
 }
 
-static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen) {
+static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen, int npeaks) {
     buffer->memBlockSize = (gridLen + 16) * sizeof(fftwf_complex);
     buffer->len = n; buffer->allocated = true; buffer->terms = terms;
     if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
@@ -92,7 +93,8 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uin
         for (int i = 0; i < buffer->terms; i++){buffer->grids[i] = (fftwf_complex*) fftwf_malloc(buffer->memBlockSize);}
         if (!buffer->grids) goto error;
         else buffer->nGrids = terms;
-
+    if (!buffer->peaks){buffer->peaks = calloc(npeaks, sizeof(peak_t));}
+        if (!buffer->peaks) goto error;
     if (!buffer->gidx) {buffer->gidx = calloc(terms, sizeof(uint32_t **));}//
         if (!buffer->gidx) goto error;
         for (int i = 0; i < buffer->terms; i++){
