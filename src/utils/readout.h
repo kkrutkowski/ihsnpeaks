@@ -22,8 +22,8 @@ static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
 typedef struct {
     double freq;
-    float  amp;
     float  p;
+    float  amp;
     float  chi2;
 } peak_t;
 
