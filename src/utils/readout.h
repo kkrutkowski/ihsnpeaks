@@ -210,5 +210,16 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     close(fd); buffer->n = idx;
 }
 
+void append_peak(buffer_t *buff, const int maxPeaks, const double freq, const float magnitude) {
+    peak_t appended = {0}; peak_t tmp;
+    appended.freq = freq; appended.p = magnitude;
+    int idx = buff->nPeaks;
+
+    while (idx > 0 && magnitude > buff->peaks[idx - 1].p) {idx--;}
+    if (buff->nPeaks < maxPeaks) {buff->nPeaks++;}
+    for (int i = buff->nPeaks - 1; i > idx; i--) {buff->peaks[i] = buff->peaks[i - 1];}
+    if (idx < maxPeaks) {buff->peaks[idx] = appended;}
+}
+
 
 #endif
