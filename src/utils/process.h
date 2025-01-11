@@ -72,7 +72,7 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
-    const float treshold = params->treshold * M_LN10;
+    const float treshold = params->treshold * M_LN10; buffer->grids[t], 0, buffer->memBlockSize);
 
     //adjust the weights
     for(uint32_t i = 0; i < buffer->n; i++){
