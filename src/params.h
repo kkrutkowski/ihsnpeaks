@@ -79,6 +79,7 @@ void print_parameters(parameters *params) {
     printf("\tLargest file's length: %i\n", params->maxLen);
     printf("\tRead buffer size: %i\n", params->maxSize);
     printf("\tFFT grid length: %i\n", params->gridLen);
+    if(!params->isFile){printf("\n");}
 }
 
 // Free allocated memory for parameters

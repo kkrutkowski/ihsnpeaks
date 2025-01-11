@@ -71,7 +71,8 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
     read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
-    int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
+    const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
+    const float treshold = params->treshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
     //adjust the weights
     for(uint32_t i = 0; i < buffer->n; i++){
@@ -98,7 +99,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     uint32_t nsteps = (uint32_t)(params->gridLen);
     uint32_t gridLen = params->gridLen;
 
-    if(!batch && params->debug){printf("\tNumber of target frequencies: %i\n", (int)((params->fmax - params->fmin)/fstep));}
+    if(!batch && params->debug){printf("\tNumber of target frequencies: %i\n\n", (int)((params->fmax - params->fmin)/fstep));}
 
     // Single buffer to hold the converted strings
     char stringBuff[32];  // Adjust size as needed
@@ -172,6 +173,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         fmin += fjump; fmid += fjump; fmax += fjump; if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
     } end:
 
+    for(int i = 0; i < params->npeaks; i++){
+        printf("\t%.5f\t\t%.2f\t%.2f\t%.2f\n", buffer->peaks[i].freq, buffer->peaks[i].p, buffer->peaks[i].amp, buffer->peaks[i].chi2);
+    };
 
     if (params->spectrum){write_tsv(buffer, in_file);}
 }
