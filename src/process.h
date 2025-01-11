@@ -156,6 +156,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
+            if (magnitudes[1] > treshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
 
@@ -168,14 +169,14 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
+            if (magnitudes[1] > treshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
         fmin += fjump; fmid += fjump; fmax += fjump; if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
     } end:
 
-    for(int i = 0; i < params->npeaks; i++){
-        printf("\t%.5f\t\t%.2f\t%.2f\t%.2f\n", buffer->peaks[i].freq, buffer->peaks[i].p, buffer->peaks[i].amp, buffer->peaks[i].chi2);
-    };
+    int i = 0;
+    while(i < params->npeaks && buffer->peaks[i].p > 0){printf("\t%.5f\t\t%.2f\t%.2f\t%.2f\n", buffer->peaks[i].freq, buffer->peaks[i].p * M_LOG10E, buffer->peaks[i].amp, buffer->peaks[i].chi2); i++;};
 
     if (params->spectrum){write_tsv(buffer, in_file);}
 }
