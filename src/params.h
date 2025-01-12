@@ -38,7 +38,7 @@ typedef struct {
 
     kvec_target_t targets;
 
-    buffer_t** buffers;
+    buffer_t** buffers; int nbuffers;
 } parameters;
 
 // Function to initialize parameters with default values
@@ -81,11 +81,15 @@ void print_parameters(parameters *params) {
     if(!params->isFile){printf("\n");}
 }
 
+void alloc_buffers(parameters *params){params->buffers = calloc(params->nbuffers, sizeof(buffer_t*));}
+
 // Free allocated memory for parameters
 void free_parameters(parameters *params) {
     fftwf_destroy_plan(params->plan);
     free(params->target); // Free the allocated string
     free_targets(&params->targets);
+    free(params->buffers);
+    if(params->outFile){free(params->outFile);}
 }
 
 

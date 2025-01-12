@@ -53,6 +53,7 @@ int main(int argc, char *argv[]) {
         params.outFile = strdup(outputFilePath);
 
         if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
+        params.nbuffers = nThreads; alloc_buffers(&params);
         kt_forpool_t *fp = kt_forpool_init(nThreads);
 
 
