@@ -14,8 +14,8 @@
 #include "utils/readout.h"
 
 typedef struct {
-    char**  target;
-    float** buffer;
+    char*  target;
+    char* outFile;
     float fmin;    float fmax;
     float treshold;
     float oversamplingFactor;
@@ -45,9 +45,8 @@ typedef struct {
 static parameters init_parameters(int argc, char *argv[]) {
     parameters params = {0};
 
-    params.target = (char **) malloc(sizeof(char*)); // Allocate memory for the target string and copy the value from argv[1]
-    params.target[0] = (char *) malloc((strlen(argv[1]) + 1) * sizeof(char)); // +1 for the null terminator
-    strcpy(params.target[0], argv[1]); // Copy the string
+    params.target = (char *) malloc((strlen(argv[1]) + 1) * sizeof(char)); // +1 for the null terminator
+    strcpy(params.target, argv[1]); // Copy the string
 
     params.fmax = atof(argv[2]);
     params.fmin = 0.0;
@@ -66,7 +65,7 @@ static parameters init_parameters(int argc, char *argv[]) {
 
 void print_parameters(parameters *params) {
     printf("Parsed parameters:\n");
-    printf("\tTarget: %s\n", params->target ? *params->target : "(none)");
+    printf("\tTarget: %s\n", params->target);
     printf("\tMaximum frequency: %.2f\n", params->fmax);
     printf("\tMinimum frequency: %.2f\n", params->fmin);
     printf("\tOversampling Factor: %.2f\n", params->oversamplingFactor);
@@ -85,8 +84,7 @@ void print_parameters(parameters *params) {
 // Free allocated memory for parameters
 void free_parameters(parameters *params) {
     fftwf_destroy_plan(params->plan);
-    free(params->target[0]); // Free the allocated string
-    free(params->target);     // Free the array of pointers
+    free(params->target); // Free the allocated string
     free_targets(&params->targets);
 }
 
@@ -150,7 +148,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         }
     }
 
-    params.isFile = process_path(params.target[0], &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
+    params.isFile = process_path(params.target, &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
 
     return params;}
 

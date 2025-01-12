@@ -2,6 +2,7 @@
 #include "../include/mimalloc/mimalloc.h"
 #include <stdio.h>
 #include <unistd.h>
+#include <libgen.h>
 
 #include "params.h"
 #include "metadata.h"
@@ -32,10 +33,25 @@ int main(int argc, char *argv[]) {
         free_parameters(&params);
     return 0;} //end the program's execution here if only one target is provided'
 
-
-
     //to avoid asigning more, than 1 thread per target
     else {
+                // Extract the parent directory of params.target[0]
+        char targetPath[256];
+        strcpy(targetPath, params.target);  // Copy the target path to a modifiable buffer
+        char *parentDir = dirname(targetPath); // Get the parent directory
+
+        // Construct the full path for output.tsv
+        char outputFilePath[256];
+        snprintf(outputFilePath, sizeof(outputFilePath), "%s/output.tsv", parentDir);
+
+        // Create the output.tsv file
+        FILE *outputFile = fopen(outputFilePath, "w");
+        if (outputFile == NULL) {perror("Failed to create the output file");return 1;}
+        fclose(outputFile);
+
+        // Set the params.outFile pointer to the full path
+        params.outFile = strdup(outputFilePath);
+
         if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
         kt_forpool_t *fp = kt_forpool_init(nThreads);
 
