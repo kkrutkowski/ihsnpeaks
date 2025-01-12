@@ -69,6 +69,9 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
     if (buffer -> peaks)   {free(buffer -> peaks);  buffer -> peaks = NULL;}
 
+    if(buffer->outBuf.s){free(buffer->outBuf.s);}
+    if(buffer->spectrum.s){free(buffer->spectrum.s);}
+
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
 
