@@ -64,8 +64,25 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         if (fp == NULL) {perror("Failed to open file for writing"); return;}
 
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
-        //ks_release(&buffer->spectrum);
+        ks_release(&buffer->spectrum);
 };
+
+void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
+    int i = 0;
+    kputs("File: ", &buffer->outBuf); kputs(in_file, &buffer->outBuf);
+    kputs("    NofData: ", &buffer->outBuf); kputl(buffer->n, &buffer->outBuf);
+    kputs("    Average: ", &buffer->outBuf); custom_ftoa(buffer->magnitude, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
+    kputs("   f[1/d]\tlog(p)\tAmp\tChi^2\n", &buffer->outBuf);
+    while (i < params->npeaks && buffer->peaks[i].p > 0) {
+        custom_ftoa(buffer->peaks[i].freq, n, stringBuff); kputs("   ", &buffer->outBuf); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
+        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
+        custom_ftoa(buffer->peaks[i].amp, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
+        custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
+        i++;
+    }
+    printf("%s", buffer->outBuf.s);
+    //ks_release(&buffer->outBuf);
+}
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
@@ -174,23 +191,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         fmin += fjump; fmid += fjump; fmax += fjump; if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
     } end:
 
-    int i = 0;
-    if(!batch){
-        kputs("File: ", &buffer->outBuf); kputs(in_file, &buffer->outBuf);
-        kputs("    NofData: ", &buffer->outBuf); kputl(buffer->n, &buffer->outBuf);
-        kputs("    Average: ", &buffer->outBuf); custom_ftoa(buffer->magnitude, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
-        kputs("   f[1/d]\tlog(p)\tAmp\tChi^2\n", &buffer->outBuf);
-        while (i < params->npeaks && buffer->peaks[i].p > 0) {
-            custom_ftoa(buffer->peaks[i].freq, n, stringBuff); kputs("   ", &buffer->outBuf); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
-            custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
-            custom_ftoa(buffer->peaks[i].amp, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
-            custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
-            i++;
-        }
-        printf("%s", buffer->outBuf.s);
-        //ks_release(&buffer->outBuf);
-    };
-
+    if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     if (params->spectrum){write_tsv(buffer, in_file);}
 }
 
