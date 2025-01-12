@@ -81,7 +81,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         i++;
     }
     printf("%s", buffer->outBuf.s);
-    //ks_release(&buffer->outBuf);
+    //ks_release(&buffer->outBuf); //for some reason causes a memory leak
 }
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
