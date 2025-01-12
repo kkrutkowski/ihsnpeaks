@@ -64,7 +64,7 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         if (fp == NULL) {perror("Failed to open file for writing"); return;}
 
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
-        ks_release(&buffer->spectrum);
+        //ks_release(&buffer->spectrum);  //for some reason causes a memory leak
 };
 
 void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
