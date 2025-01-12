@@ -64,8 +64,7 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         if (fp == NULL) {perror("Failed to open file for writing"); return;}
 
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
-
-    if(buffer->spectrum.s){free(buffer->spectrum.s);}
+        //ks_release(&buffer->spectrum);
 };
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
@@ -177,9 +176,19 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
     int i = 0;
     if(!batch){
-        printf("File: %s\n", in_file);
-        printf("    f[1/d]\tlog(p)\tAmp\tChi^2\n");
-        while(i < params->npeaks && buffer->peaks[i].p > 0){printf("   %.5f\t%.2f\t%.2f\t%.2f\n", buffer->peaks[i].freq, buffer->peaks[i].p * M_LOG10E, buffer->peaks[i].amp, buffer->peaks[i].chi2); i++;};
+        kputs("File: ", &buffer->outBuf); kputs(in_file, &buffer->outBuf);
+        kputs("    NofData: ", &buffer->outBuf); kputl(buffer->n, &buffer->outBuf);
+        kputs("    Average: ", &buffer->outBuf); custom_ftoa(buffer->magnitude, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
+        kputs("   f[1/d]\tlog(p)\tAmp\tChi^2\n", &buffer->outBuf);
+        while (i < params->npeaks && buffer->peaks[i].p > 0) {
+            custom_ftoa(buffer->peaks[i].freq, n, stringBuff); kputs("   ", &buffer->outBuf); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
+            custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
+            custom_ftoa(buffer->peaks[i].amp, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
+            custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
+            i++;
+        }
+        printf("%s", buffer->outBuf.s);
+        //ks_release(&buffer->outBuf);
     };
 
     if (params->spectrum){write_tsv(buffer, in_file);}
