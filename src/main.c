@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
 
     //to avoid asigning more, than 1 thread per target
     else {
-                // Extract the parent directory of params.target[0]
+        // Extract the parent directory of params.target[0]
         char targetPath[256];
         strcpy(targetPath, params.target);  // Copy the target path to a modifiable buffer
         char *parentDir = dirname(targetPath); // Get the parent directory
@@ -47,10 +47,12 @@ int main(int argc, char *argv[]) {
         // Create the output.tsv file
         FILE *outputFile = fopen(outputFilePath, "w");
         if (outputFile == NULL) {perror("Failed to create the output file");return 1;}
+        fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP)]\n");
         fclose(outputFile);
 
         // Set the params.outFile pointer to the full path
         params.outFile = strdup(outputFilePath);
+        printf("Output file's path: %s\n", outputFilePath); fflush(stdout);
 
         if (kv_size(params.targets) < nThreads) {nThreads = 1;}
         params.nbuffers = nThreads; alloc_buffers(&params);
@@ -58,8 +60,7 @@ int main(int argc, char *argv[]) {
 
         //distribute processing of all of the targets on multiple threads
         kt_forpool(pool, process_targets, &params, kv_size(params.targets));
-
-        // Output parsed parameters for verification
+        for (int i = 0; i < params.nbuffers; i++) {fprint_buffer(params.buffers[i], &params);} //free the buffers before freeing
 
         // Kill the worker threads before exiting
         kt_forpool_destroy(pool);

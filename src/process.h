@@ -114,7 +114,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     sdsclear(buffer->outBuf);
 }
 
-void fprint_peaks(buffer_t *buffer, parameters *params) {
+void fprint_buffer(buffer_t *buffer, parameters *params) {
     pthread_mutex_lock(&params->mutex);
     FILE *file = fopen(params->outFile, "a");  // Open the file in append mode
     if (file == NULL) {pthread_mutex_unlock(&params->mutex); perror("Failed to open file for appending"); return;}
@@ -134,7 +134,8 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
         custom_ftoa(buffer->peaks[0].p * M_LOG10E, 2, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-        buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+        //buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
         // Append each peak's information to the output buffer
         while (i < params->npeaks && buffer->peaks[i].p > 0) {
@@ -153,7 +154,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
         buffer->loc_iter += 1;
         if(buffer->loc_iter == 0){ //append to the file only if the local counter oveflows
             // Append the buffer content to the file
-            fprint_peaks(buffer, params);
+            fprint_buffer(buffer, params); fflush(stdout);
         }
     }
 }
@@ -273,10 +274,16 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
 
 
-
-
 void process_targets(void *data, long i, int thread_id) {
     parameters *params = (parameters *)data;
+
+    int permile; permile = kv_size(params->targets) / 1000; if(permile == 1){permile += 1;}
+    pthread_mutex_lock(&params->mutex); params->iter_count += 1; pthread_mutex_unlock(&params->mutex);
+    if (params->iter_count % permile == 0 || params->iter_count == kv_size(params->targets) - 1) {
+        float progress = (float)(params->iter_count + 1) * 100.0 / (float)(kv_size(params->targets) - 1);
+        printf("Computation in progress: %.1f%% complete\r", progress);
+        fflush(stdout);
+    }
     if (!params->buffers[thread_id]->allocated) {alloc_buffer(params->buffers[thread_id], params->nterms, params->maxLen, params->maxSize, params->gridLen, params->npeaks);
         //printf("Allocating buffer for thread %i\n", thread_id); //ok
     }

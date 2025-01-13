@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "metadata.h"
 #include "utils/readout.h"
@@ -22,9 +23,11 @@ typedef struct {
     float epsilon;
     int npeaks;    int nterms;
     int gridRatio; int defaultGridRatio;
+    int iter_count;
     bool isFile;
     bool spectrum;
     bool debug;
+    pthread_mutex_t mutex;
 
     fftwf_plan plan;
 
@@ -159,5 +162,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     params.isFile = process_path(params.target, &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
 
     return params;}
+
+void print_help(){};
 
 #endif // PARAMS_H
