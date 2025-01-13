@@ -65,8 +65,6 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         if (fp == NULL) {perror("Failed to open file for writing"); return;}
 
         fprintf(fp, "%s\n", buffer->spectrum); fclose(fp); // Write the spectrum string to the file
-        //free(&buffer->spectrum.s);    //fully breaks the batch mode
-        //ks_release(&buffer->spectrum);  //for some reason causes a memory leak
         sdsclear(buffer->spectrum);
 };
 
@@ -89,7 +87,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     // Append each peak's information to the output buffer
     while (i < params->npeaks && buffer->peaks[i].p > 0) {
         // Convert frequency to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].freq, n, stringBuff);
+        custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, "   ");
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
@@ -112,9 +110,47 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         i++;
     }
     printf("%s", buffer->outBuf);
-    //ks_release(&buffer->outBuf); //for some reason causes a memory leak  //fully breaks the batch mode
     sdsclear(buffer->outBuf);
-    //free(&buffer->outBuf.s);
+}
+
+void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
+    int i = 0;
+    // Append file information to the output buffer
+    buffer->outBuf = sdscat(buffer->outBuf, in_file);
+    custom_ftoa(buffer->peaks[1].freq, n, stringBuff);
+    buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+    buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);  // Append a newline
+
+    // Append the header for the peaks table
+    buffer->outBuf = sdscat(buffer->outBuf, "   f[1/d]\tlog(p)\tAmp\tChi^2\n");
+
+    // Append each peak's information to the output buffer
+    while (i < params->npeaks && buffer->peaks[i].p > 0) {
+        // Convert frequency to string using custom_ftoa
+        custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, "   ");
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
+        // Convert log(p) to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
+        // Convert amplitude to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].amp, 2, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
+        // Convert chi^2 to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
+
+        i++;
+    }
+    printf("%s", buffer->outBuf);
+    sdsclear(buffer->outBuf);
 }
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
