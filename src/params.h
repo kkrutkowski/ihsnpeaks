@@ -28,6 +28,7 @@ typedef struct {
     bool spectrum;
     bool debug;
     pthread_mutex_t mutex;
+    pthread_mutex_t counter_mutex;
 
     fftwf_plan plan;
 

@@ -278,7 +278,7 @@ void process_targets(void *data, long i, int thread_id) {
     parameters *params = (parameters *)data;
 
     int permile; permile = kv_size(params->targets) / 1000; if(permile == 1){permile += 1;}
-    pthread_mutex_lock(&params->mutex); params->iter_count += 1; pthread_mutex_unlock(&params->mutex);
+    pthread_mutex_lock(&params->counter_mutex); params->iter_count += 1; pthread_mutex_unlock(&params->counter_mutex);
     if (params->iter_count % permile == 0 || params->iter_count == kv_size(params->targets) - 1) {
         float progress = (float)(params->iter_count + 1) * 100.0 / (float)(kv_size(params->targets) - 1);
         printf("Computation in progress: %.1f%% complete\r", progress);
