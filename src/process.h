@@ -12,8 +12,8 @@
 #include "utils/readout.h"
 #include "params.h"
 
+#include "../include/sds.h"
 #include "../include/fast_convert.h"
-#include "../include/klib/kstring.h"
 #include "/usr/local/include/fftw3.h"  // Include FFTW3 header
 
 inline float correctPower(float K, float nInv) {
@@ -40,15 +40,16 @@ inline unsigned int custom_dtoa(double v, int size, char *line){
     else {return fast_dtoa(v, new_size, line);}
 }
 
-static inline void appendFreq(double freq, float magnitude, int precision, kstring_t* buffer, char* stringBuff) {
+static inline void appendFreq(double freq, float magnitude, int precision, sds* buffer, char* stringBuff) {
     // Convert frequency to string and append to the buffer
     custom_dtoa(freq, precision, stringBuff);
-    kputs(stringBuff, buffer);
-    kputc('\t', buffer); // Add the separator
+    *buffer = sdscat(*buffer, stringBuff);
+    *buffer = sdscatlen(*buffer, "\t", 1);  // Add the separator
+
     // Convert magnitude to string and append to the buffer
     custom_ftoa(magnitude, 2, stringBuff);
-    kputs(stringBuff, buffer);
-    kputc('\n', buffer); // Add a newline character
+    *buffer = sdscat(*buffer, stringBuff);
+    *buffer = sdscatlen(*buffer, "\n", 1);  // Add a newline character
 }
 
 static inline void write_tsv(buffer_t *buffer, char* in_file){
@@ -63,26 +64,56 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         FILE* fp = fopen(out_file, "w");
         if (fp == NULL) {perror("Failed to open file for writing"); return;}
 
-        fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
+        fprintf(fp, "%s\n", buffer->spectrum); fclose(fp); // Write the spectrum string to the file
         //free(&buffer->spectrum.s);    //fully breaks the batch mode
-        ks_release(&buffer->spectrum);  //for some reason causes a memory leak
+        //ks_release(&buffer->spectrum);  //for some reason causes a memory leak
+        sdsclear(buffer->spectrum);
 };
 
 void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
     int i = 0;
-    kputs("File: ", &buffer->outBuf); kputs(in_file, &buffer->outBuf);
-    kputs("    NofData: ", &buffer->outBuf); kputl(buffer->n, &buffer->outBuf);
-    kputs("    Average: ", &buffer->outBuf); custom_ftoa(buffer->magnitude, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
-    kputs("   f[1/d]\tlog(p)\tAmp\tChi^2\n", &buffer->outBuf);
+    // Append file information to the output buffer
+    buffer->outBuf = sdscat(buffer->outBuf, "File: ");
+    buffer->outBuf = sdscat(buffer->outBuf, in_file);
+    buffer->outBuf = sdscat(buffer->outBuf, "    NofData: ");
+    custom_ftoa(buffer->n, 0, stringBuff);  // Convert integer to string using custom_ftoa
+    buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+    buffer->outBuf = sdscat(buffer->outBuf, "    Average: ");
+    custom_ftoa(buffer->magnitude, 2, stringBuff);  // Convert float to string using custom_ftoa
+    buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+    buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);  // Append a newline
+
+    // Append the header for the peaks table
+    buffer->outBuf = sdscat(buffer->outBuf, "   f[1/d]\tlog(p)\tAmp\tChi^2\n");
+
+    // Append each peak's information to the output buffer
     while (i < params->npeaks && buffer->peaks[i].p > 0) {
-        custom_ftoa(buffer->peaks[i].freq, n, stringBuff); kputs("   ", &buffer->outBuf); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
-        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
-        custom_ftoa(buffer->peaks[i].amp, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\t', &buffer->outBuf);
-        custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff); kputs(stringBuff, &buffer->outBuf); kputc('\n', &buffer->outBuf);
+        // Convert frequency to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].freq, n, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, "   ");
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
+        // Convert log(p) to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
+        // Convert amplitude to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].amp, 2, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
+        // Convert chi^2 to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff);
+        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
+
         i++;
     }
-    printf("%s", buffer->outBuf.s);
-    ks_release(&buffer->outBuf); //for some reason causes a memory leak  //fully breaks the batch mode
+    printf("%s", buffer->outBuf);
+    //ks_release(&buffer->outBuf); //for some reason causes a memory leak  //fully breaks the batch mode
+    sdsclear(buffer->outBuf);
     //free(&buffer->outBuf.s);
 }
 
@@ -179,7 +210,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         }
 
         for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][0]);}
-        if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
+        if (params->debug && params->spectrum) {buffer->spectrum = sdscat(buffer->spectrum, "break\n");}
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
@@ -190,7 +221,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             if (magnitudes[1] > treshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
-        fmin += fjump; fmid += fjump; fmax += fjump; if(params->debug && params->spectrum){kputs("break\n", &buffer->spectrum);}
+        fmin += fjump; fmid += fjump; fmax += fjump; if (params->debug && params->spectrum) {buffer->spectrum = sdscat(buffer->spectrum, "break\n");}
     } end:
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
