@@ -118,7 +118,7 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
     pthread_mutex_lock(&params->mutex);
     FILE *file = fopen(params->outFile, "a");  // Open the file in append mode
     if (file == NULL) {pthread_mutex_unlock(&params->mutex); perror("Failed to open file for appending"); return;}
-    fprintf(file, "%s", buffer->outBuf); fclose(file);
+    fprintf(file, "%s", buffer->outBuf); fflush(stdout); fclose(file);
     sdsclear(buffer->outBuf);
     pthread_mutex_unlock(&params->mutex);
 }
