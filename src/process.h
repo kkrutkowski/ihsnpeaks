@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <complex.h> // For C99 complex numbers
 
 #include "utils/simd.h"
@@ -113,44 +114,48 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     sdsclear(buffer->outBuf);
 }
 
+void fprint_peaks(buffer_t *buffer, parameters *params) {
+    pthread_mutex_lock(&params->mutex);
+    FILE *file = fopen(params->outFile, "a");  // Open the file in append mode
+    if (file == NULL) {pthread_mutex_unlock(&params->mutex); perror("Failed to open file for appending"); return;}
+    fprintf(file, "%s", buffer->outBuf); fclose(file);
+    sdsclear(buffer->outBuf);
+    pthread_mutex_unlock(&params->mutex);
+}
+
 void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
     int i = 0;
-    // Append file information to the output buffer
-    buffer->outBuf = sdscat(buffer->outBuf, in_file);
-    custom_ftoa(buffer->peaks[1].freq, n, stringBuff);
-    buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-    buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);  // Append a newline
-
-    // Append the header for the peaks table
-    buffer->outBuf = sdscat(buffer->outBuf, "   f[1/d]\tlog(p)\tAmp\tChi^2\n");
-
-    // Append each peak's information to the output buffer
-    while (i < params->npeaks && buffer->peaks[i].p > 0) {
-        // Convert frequency to string using custom_ftoa
-        custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
-        buffer->outBuf = sdscat(buffer->outBuf, "   ");
-        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        if (buffer->nPeaks > 0){
+        // Append file information to the output buffer
+        buffer->outBuf = sdscat(buffer->outBuf, in_file);
+        custom_dtoa(buffer->peaks[0].freq, n, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
-
-        // Convert log(p) to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+        custom_ftoa(buffer->peaks[0].p * M_LOG10E, 2, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
-
-        // Convert amplitude to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].amp, 2, stringBuff);
-        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
-
-        // Convert chi^2 to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
-        i++;
+        // Append each peak's information to the output buffer
+        while (i < params->npeaks && buffer->peaks[i].p > 0) {
+            // Convert frequency to string using custom_ftoa
+            buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
+            custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
+            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+            // Convert log(p) to string using custom_ftoa
+            custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
+            i++;
+        }
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
+        buffer->loc_iter += 1;
+        if(buffer->loc_iter == 0){ //append to the file only if the local counter oveflows
+            // Append the buffer content to the file
+            fprint_peaks(buffer, params);
+        }
     }
-    printf("%s", buffer->outBuf);
-    sdsclear(buffer->outBuf);
 }
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
@@ -261,6 +266,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     } end:
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
+    else {append_peaks(buffer, params, n, stringBuff, in_file);}
     if (params->spectrum){write_tsv(buffer, in_file);}
     buffer->nPeaks = 0; //reset the data for buffer reuse
 }
@@ -276,7 +282,7 @@ void process_targets(void *data, long i, int thread_id) {
     }
     //printf("Processing iteration %ld on thread %d\t%s\n", i, thread_id, kv_A(params->targets, i).path); //ok
     // Process the data for this iteration
-    process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, false);
+    process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true);
 }
 
 
