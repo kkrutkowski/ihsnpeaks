@@ -30,6 +30,7 @@ typedef struct {
 
 typedef struct {
     bool allocated;
+    uint8_t loc_iter;
     uint32_t   len;
     uint32_t     n;
     uint32_t terms;
