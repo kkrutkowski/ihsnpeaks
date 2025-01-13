@@ -52,15 +52,17 @@ int main(int argc, char *argv[]) {
         // Set the params.outFile pointer to the full path
         params.outFile = strdup(outputFilePath);
 
-        if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
+        if (kv_size(params.targets) < nThreads) {nThreads = 1;}
         params.nbuffers = nThreads; alloc_buffers(&params);
-        kt_forpool_t *fp = kt_forpool_init(nThreads);
+        kt_forpool_t *pool = kt_forpool_init(nThreads);
 
+        //distribute processing of all of the targets on multiple threads
+        kt_forpool(pool, process_targets, &params, kv_size(params.targets));
 
         // Output parsed parameters for verification
 
         // Kill the worker threads before exiting
-        kt_forpool_destroy(fp);
+        kt_forpool_destroy(pool);
         // Free the allocated memory
         free_parameters(&params);
 

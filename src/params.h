@@ -81,13 +81,17 @@ void print_parameters(parameters *params) {
     if(!params->isFile){printf("\n");}
 }
 
-void alloc_buffers(parameters *params){params->buffers = calloc(params->nbuffers, sizeof(buffer_t*));}
+void alloc_buffers(parameters *params){
+    params->buffers = calloc(params->nbuffers, sizeof(buffer_t*));
+    for (int i = 0; i < params->nbuffers; i++) {params->buffers[i] = calloc(1, sizeof(buffer_t));}
+}
 
 // Free allocated memory for parameters
 void free_parameters(parameters *params) {
     fftwf_destroy_plan(params->plan);
     free(params->target); // Free the allocated string
     free_targets(&params->targets);
+    for (int i = 0; i < params->nbuffers; i++) {free_buffer(params->buffers[i]); free(params->buffers[i]);}
     free(params->buffers);
     if(params->outFile){free(params->outFile);}
 }

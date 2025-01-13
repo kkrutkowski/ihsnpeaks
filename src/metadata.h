@@ -83,7 +83,6 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
 
         *maxSize = file_stat.st_size + 1;
         *maxLen = newline_count;
-        //*avgLen = newline_count;
         *gridLen = intmax(1<<11, bitCeil(newline_count * *gridRatio)); //to be modified (?)
         *plan = fftwf_plan_dft_1d(*gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
         return true;
@@ -109,6 +108,8 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
                     perror("stat");
                     exit(EXIT_FAILURE);
                 }
+
+                *avgLen += file_stat.st_size;
 
                 // Check if it's the largest file so far
                 if (file_stat.st_size > largest_size) {
@@ -141,6 +142,10 @@ static bool process_path(char* path, kvec_target_t *targets, uint32_t* maxLen, u
             }
         }
         closedir(dir);
+        //approximate an near-optimal transform size
+        *avgLen /= DEFAULT_MEASUREMENT_SIZE * kv_size(*targets);
+        *gridLen = intmax(1<<11, bitCeil((*avgLen) * (uint64_t)(*gridRatio)));
+        *plan = fftwf_plan_dft_1d(*gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
     }
 
 return false;}

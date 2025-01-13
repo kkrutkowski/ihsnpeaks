@@ -64,7 +64,8 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         if (fp == NULL) {perror("Failed to open file for writing"); return;}
 
         fprintf(fp, "%s\n", buffer->spectrum.s); fclose(fp); // Write the spectrum string to the file
-        //ks_release(&buffer->spectrum);  //for some reason causes a memory leak
+        //free(&buffer->spectrum.s);    //fully breaks the batch mode
+        ks_release(&buffer->spectrum);  //for some reason causes a memory leak
 };
 
 void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
@@ -81,12 +82,13 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         i++;
     }
     printf("%s", buffer->outBuf.s);
-    //ks_release(&buffer->outBuf); //for some reason causes a memory leak
+    ks_release(&buffer->outBuf); //for some reason causes a memory leak  //fully breaks the batch mode
+    //free(&buffer->outBuf.s);
 }
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
-    read_dat(kv_A(params->targets, 0).path, buffer); linreg_buffer(buffer); //read the data from .dat file
+    read_dat(in_file, buffer); linreg_buffer(buffer); //read the data from .dat file
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
     const float treshold = params->treshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
@@ -193,6 +195,22 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     if (params->spectrum){write_tsv(buffer, in_file);}
+    buffer->nPeaks = 0; //reset the data for buffer reuse
 }
+
+
+
+
+
+void process_targets(void *data, long i, int thread_id) {
+    parameters *params = (parameters *)data;
+    if (!params->buffers[thread_id]->allocated) {alloc_buffer(params->buffers[thread_id], params->nterms, params->maxLen, params->maxSize, params->gridLen, params->npeaks);
+        //printf("Allocating buffer for thread %i\n", thread_id); //ok
+    }
+    //printf("Processing iteration %ld on thread %d\t%s\n", i, thread_id, kv_A(params->targets, i).path); //ok
+    // Process the data for this iteration
+    process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, false);
+}
+
 
 #endif
