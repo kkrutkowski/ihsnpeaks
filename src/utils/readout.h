@@ -12,7 +12,8 @@
 #include <stdbool.h>
 #include <complex.h>
 
-#include "../../include/klib/kstring.h"
+
+#include "../../include/sds.h"
 #include "../../include/fast_convert.h"
 
 //#include "../include/mufft/mufft.x86.h"
@@ -54,8 +55,8 @@ typedef struct {
     uint32_t** gidx; //grid indices for NFFT
     float** gdist;
 
-    kstring_t spectrum;
-    kstring_t outBuf;
+    sds spectrum;
+    sds outBuf;
 } buffer_t;
 
 static inline void free_buffer (buffer_t* buffer) {
@@ -69,8 +70,7 @@ static inline void free_buffer (buffer_t* buffer) {
     if (buffer -> grids)   {free(buffer -> grids);  buffer -> grids = NULL;}
     if (buffer -> peaks)   {free(buffer -> peaks);  buffer -> peaks = NULL;}
 
-    if(buffer->outBuf.s){free(buffer->outBuf.s);}
-    if(buffer->spectrum.s){free(buffer->spectrum.s);}
+    sdsfree(buffer->outBuf); sdsfree(buffer->spectrum);
 
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gidx && buffer -> gidx[i]) {free(buffer->gidx[i]); buffer->gidx[i] = NULL;}}
     if (buffer->gidx){free(buffer->gidx); buffer-> gidx = NULL;}
@@ -82,6 +82,7 @@ static inline void free_buffer (buffer_t* buffer) {
 static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen, int npeaks) {
     buffer->memBlockSize = (gridLen + 16) * sizeof(fftwf_complex);
     buffer->len = n; buffer->allocated = true; buffer->terms = terms;
+    buffer->spectrum = sdsempty(); buffer->outBuf = sdsempty();
     if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
         if (!buffer->x) goto error;
     if (!buffer->y) {buffer->y = aligned_alloc(64, round_buffer(n * sizeof(float)));}
