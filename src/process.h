@@ -199,12 +199,26 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     uint32_t shift = (gridLen * 43 / 64);
 
     for(int t = 0; t < buffer->terms; t++){
+        #ifndef __AVX__
+        memset(buffer->weights[t], 0, params->maxLen * 16 * sizeof(float));
+        #endif
         for(uint32_t i = 0; i < buffer->n; i++){
             double freqFactor = (double)(t+1);
             double idx_double = buffer->x[i] * fspan * freqFactor;
             uint32_t idx_tmp =  (uint32_t)(idx_double);
             buffer->gdist[t][i] = idx_double - (double)idx_tmp;
             buffer->gidx[t][i] = idx_tmp % gridLen;
+            #ifndef __AVX__
+            if (buffer->gdist[t][i] < 0.01){buffer->weights[t][16*i] = 1;}
+            else if (buffer->gdist[t][i] > 0.99){buffer->weights[t][(16 * i)+1] = 1;}
+            else {
+                float dst = -7.0 - buffer->gdist[t][i];
+                for(uint32_t j = 0; j < 16; j++){
+                        buffer->weights[t][(16*i)+j] = 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI);
+                        dst += 1.0;
+                    }
+                }
+            #endif
         }
     }
 
@@ -215,24 +229,22 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
             for(uint32_t i = 0; i < buffer->n; i++){
                 fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // cexp takes ~ 15% of the compute time
+                #ifndef __AVX__
+                for(uint32_t j = 0; j < 16; j++){
+                    buffer->grids[t][buffer->gidx[t][i] + j] += val * buffer->weights[t][(i*16)+j];
+                }
+                #else
                 if (buffer->gdist[t][i] < 0.01){buffer->grids[t][buffer->gidx[t][i]] += val;}
                 else if (buffer->gdist[t][i] > 0.99){buffer->grids[t][buffer->gidx[t][i+1]] += val;}
                 else {
-                #ifdef __AVX__
                 VEC weights[2];
                 generateWeights(buffer->gdist[t][i], &weights[0], &weights[1]);
                 for(uint32_t j = 0; j < 8; j++){
                     buffer->grids[t][buffer->gidx[t][i] + j] += val * weights[0].data[j];
                     buffer->grids[t][buffer->gidx[t][i] + 8 + j] += val * weights[1].data[j];
-                }
-                #else
-                    float dst = -7.0 - buffer->gdist[t][i];
-                    for(uint32_t j = 0; j < 16; j++){
-                        buffer->grids[t][buffer->gidx[t][i] + j] += val * 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI);
-                        dst += 1.0;
                     }
-                #endif
                 }
+                #endif
             }
         for(uint32_t j = 0; j < 16; j++){buffer->grids[t][j] += buffer->grids[t][j+gridLen];}
 
@@ -277,7 +289,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 void process_targets(void *data, long i, int thread_id) {
     parameters *params = (parameters *)data;
 
-    int permile; permile = kv_size(params->targets) / 1000; if(permile == 1){permile += 1;}
+    int permile; permile = kv_size(params->targets) / 1000; if(permile == 0){permile += 1;}
     pthread_mutex_lock(&params->counter_mutex); params->iter_count += 1; pthread_mutex_unlock(&params->counter_mutex);
     if (params->iter_count % permile == 0 || params->iter_count == kv_size(params->targets) - 1) {
         float progress = (float)(params->iter_count + 1) * 100.0 / (float)(kv_size(params->targets) - 1);

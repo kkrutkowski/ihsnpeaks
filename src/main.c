@@ -12,7 +12,9 @@
 #include "../include/klib/kthread.h"
 
 int main(int argc, char *argv[]) {
-    if (argc < 3){return 1;}
+    if (argc > 1) {if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "h") == 0) {print_help(argv); return 0;}}
+    if (argc < 3){print_help(argv); return 1;}
+
     parameters params = read_parameters(argc, argv);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN); void *thread_pool;
 

@@ -100,6 +100,26 @@ void free_parameters(parameters *params) {
     if(params->outFile){free(params->outFile);}
 }
 
+void print_help(char** argv) {
+    printf("Usage: %s target fmax [options]\n", argv[1]);
+    printf("\n");
+    printf("Positional arguments:\n");
+    printf("  target                   Path containing .dat file(s) (file or directory)\n");
+    printf("  fmax                     Upper bound of the frequency grid \n");
+    printf("\n");
+    printf("Options:\n");
+    printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
+    printf("  -t, --treshold            Set the peak detection treshold (default: 10.0)\n");
+    printf("  -p, --peaks               Set the maximum number of peaks (default: 10)\n");
+    printf("  -n, --terms               Set the number of harmonics used for computation (default: 3)\n");
+    printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
+    printf("\n");
+    printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
+    printf("  -d, --debug               Print parameters before the computation (default: false)\n");
+    printf("  -h, --help                Display this help message and exit\n");
+    printf("Example:\n");
+    printf("  program_name /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 -d --spectrum \n");
+}
 
 // Function to parse command-line arguments into a parameters struct
 static parameters read_parameters(int argc, char *argv[]) {
@@ -117,6 +137,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"epsilon", ko_required_argument, 'e'},
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
+        {"help", ko_no_argument, 'h'},
         {NULL, 0, 0}
     };
 
@@ -125,7 +146,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 3; // Start parsing options from argv[3]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:m:f:e:sd", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:m:f:e:sdh", longopts)) >= 0) {
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -151,6 +172,9 @@ static parameters read_parameters(int argc, char *argv[]) {
             case 'd':
                 params.debug = true;
                 break;
+            case 'h':
+                print_help(argv);
+                break;
             case '?':
                 fprintf(stderr, "Unknown option: -%c\n", opt.opt ? opt.opt : '?');
                 break;
@@ -163,7 +187,5 @@ static parameters read_parameters(int argc, char *argv[]) {
     params.isFile = process_path(params.target, &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
 
     return params;}
-
-void print_help(){};
 
 #endif // PARAMS_H
