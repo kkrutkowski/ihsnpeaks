@@ -55,6 +55,7 @@ typedef struct {
     complex float ** grids; //used to compute the FFT
     uint32_t** gidx; //grid indices for NFFT
     float** gdist;
+    float** weights;
 
     sds spectrum;
     sds outBuf;
@@ -78,6 +79,10 @@ static inline void free_buffer (buffer_t* buffer) {
 
     for (int i = 0; i < buffer->terms; i++){if (buffer -> gdist && buffer -> gdist[i]) {free(buffer->gdist[i]); buffer->gdist[i] = NULL;}}
     if (buffer->gdist){free(buffer->gdist); buffer-> gdist = NULL;}
+    #ifndef __AVX__
+    for (int i = 0; i < buffer->terms; i++){if (buffer -> weights && buffer -> weights[i]) {free(buffer->weights[i]); buffer->weights[i] = NULL;}}
+    if (buffer->weights){free(buffer->weights); buffer-> weights = NULL;}
+    #endif
 }
 
 static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen, int npeaks) {
@@ -107,12 +112,20 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uin
             if (!buffer->gidx[i]) goto error;
         }
 
-    if (!buffer->gdist) {buffer->gdist = calloc(terms, sizeof(float **));}//
+    if (!buffer->gdist) {buffer->gdist = calloc(terms, sizeof(float *));}//
         if (!buffer->gdist) goto error;
         for (int i = 0; i < buffer->terms; i++){
             buffer->gdist[i] = aligned_alloc(64, round_buffer(n * sizeof(float)));
             if (!buffer->gdist[i]) goto error;
         }
+    #ifndef __AVX__
+    if (!buffer->weights) {buffer->weights = calloc(terms, sizeof(float *));}//
+        if (!buffer->weights) goto error;
+        for (int i = 0; i < buffer->terms; i++){
+            buffer->weights[i] = aligned_alloc(64, round_buffer(16 * n * sizeof(float)));
+            if (!buffer->weights[i]) goto error;
+        }
+    #endif
     return 0;
 
 error:
