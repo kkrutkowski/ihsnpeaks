@@ -22,13 +22,13 @@ typedef struct {
     float oversamplingFactor;
     float epsilon;
     int npeaks;    int nterms;
+    int mode;
     int gridRatio; int defaultGridRatio;
-    int iter_count;
     bool isFile;
     bool spectrum;
     bool debug;
-    pthread_mutex_t mutex;
-    pthread_mutex_t counter_mutex;
+    bool corrected;
+    pthread_mutex_t mutex; pthread_mutex_t counter_mutex; int iter_count;
 
     fftwf_plan plan;
 
@@ -135,8 +135,10 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
         {"epsilon", ko_required_argument, 'e'},
+        {"mode", ko_required_argument, 'm'},
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
+        {"corrected", ko_no_argument, 'c'},
         {"help", ko_no_argument, 'h'},
         {NULL, 0, 0}
     };
@@ -146,7 +148,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 3; // Start parsing options from argv[3]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:m:f:e:sdh", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:m:f:e:m:sdch", longopts)) >= 0) {
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -166,11 +168,17 @@ static parameters read_parameters(int argc, char *argv[]) {
             case 'e':
                 params.epsilon = atof(opt.arg);
                 break;
+            case 'm':
+                params.mode = atoi(opt.arg);
+                break;
             case 's':
                 params.spectrum = true;
                 break;
             case 'd':
                 params.debug = true;
+                break;
+            case 'c':
+                params.corrected = true;
                 break;
             case 'h':
                 print_help(argv);
