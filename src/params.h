@@ -53,7 +53,6 @@ static parameters init_parameters(int argc, char *argv[]) {
     strcpy(params.target, argv[1]); // Copy the string
 
     params.fmax = atof(argv[2]);
-    params.fmin = 0.0;
     params.treshold = 10.0;
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
@@ -61,6 +60,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.nterms = 3;
     params.defaultGridRatio = 32;
     params.gridRatio = 32;
+    params.mode = 1;
     params.spectrum = false;
     params.debug = false;
 

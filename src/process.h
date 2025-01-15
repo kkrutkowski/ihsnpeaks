@@ -9,9 +9,11 @@
 #include <pthread.h>
 #include <complex.h> // For C99 complex numbers
 
+#include "params.h"
+
 #include "utils/simd.h"
 #include "utils/readout.h"
-#include "params.h"
+#include "utils/smoother.h"
 
 #include "../include/sds.h"
 #include "../include/fast_convert.h"
