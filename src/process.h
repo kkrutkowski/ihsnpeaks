@@ -280,6 +280,16 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         fmin += fjump; fmid += fjump; fmax += fjump; if (params->debug && params->spectrum) {buffer->spectrum = sdscat(buffer->spectrum, "break\n");}
     } end:
 
+    //*
+    switch (params->mode){
+        case 0:
+            break;
+        case 1:
+            sortPeaks(buffer->peaks, buffer->nPeaks);
+            break;
+    }
+    //*/
+
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     else {append_peaks(buffer, params, n, stringBuff, in_file);}
     if (params->spectrum){write_tsv(buffer, in_file);}
