@@ -165,7 +165,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
     read_dat(in_file, buffer); linreg_buffer(buffer); //read the data from .dat file
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
-    const float treshold = params->treshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
+    const float threshold = params->threshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
     //adjust the weights
     for(uint32_t i = 0; i < buffer->n; i++){
@@ -232,9 +232,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             for(uint32_t i = 0; i < buffer->n; i++){
                 fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // cexp takes ~ 15% of the compute time
                 #ifndef __AVX__
-                for(uint32_t j = 0; j < 16; j++){
-                    buffer->grids[t][buffer->gidx[t][i] + j] += val * buffer->weights[t][(i*16)+j];
-                }
+                for(uint32_t j = 0; j < 16; j++){buffer->grids[t][buffer->gidx[t][i] + j] += val * buffer->weights[t][(i*16)+j];}
                 #else
                 if (buffer->gdist[t][i] < 0.01){buffer->grids[t][buffer->gidx[t][i]] += val;}
                 else if (buffer->gdist[t][i] > 0.99){buffer->grids[t][buffer->gidx[t][i+1]] += val;}
@@ -261,7 +259,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
-            if (magnitudes[1] > treshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
+            if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
 
@@ -274,7 +272,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
-            if (magnitudes[1] > treshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
+            if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, freq, magnitudes[1]);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
         fmin += fjump; fmid += fjump; fmax += fjump; if (params->debug && params->spectrum) {buffer->spectrum = sdscat(buffer->spectrum, "break\n");}

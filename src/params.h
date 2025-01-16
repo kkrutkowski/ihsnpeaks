@@ -18,7 +18,7 @@ typedef struct {
     char*  target;
     char* outFile;
     float fmin;    float fmax;
-    float treshold;
+    float threshold;
     float oversamplingFactor;
     float epsilon;
     int npeaks;    int nterms;
@@ -53,7 +53,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     strcpy(params.target, argv[1]); // Copy the string
 
     params.fmax = atof(argv[2]);
-    params.treshold = 10.0;
+    params.threshold = 10.0;
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
     params.npeaks = 10;
@@ -73,7 +73,7 @@ void print_parameters(parameters *params) {
     printf("\tMaximum frequency: %.2f\n", params->fmax);
     printf("\tMinimum frequency: %.2f\n", params->fmin);
     printf("\tOversampling Factor: %.2f\n", params->oversamplingFactor);
-    printf("\tDetection threshold: %.2f\n", params->treshold);
+    printf("\tDetection threshold: %.2f\n", params->threshold);
     printf("\tExpected systemic variation: %.1e\n", params->epsilon);
     printf("\tNpeaks: %d\n", params->npeaks);
     printf("\tNterms: %d\n", params->nterms);
@@ -109,7 +109,7 @@ void print_help(char** argv) {
     printf("\n");
     printf("Options:\n");
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
-    printf("  -t, --treshold            Set the peak detection treshold (default: 10.0)\n");
+    printf("  -t, --threshold            Set the peak detection threshold (default: 10.0)\n");
     printf("  -p, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -n, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
@@ -129,16 +129,19 @@ static parameters read_parameters(int argc, char *argv[]) {
 
     // Define long options
     static ko_longopt_t longopts[] = {
+        //impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
         {"peaks", ko_required_argument, 'p'},
         {"terms", ko_required_argument, 'n'},
-        {"treshold", ko_required_argument, 't'},
+        {"threshold", ko_required_argument, 't'},
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
         {"epsilon", ko_required_argument, 'e'},
-        {"mode", ko_required_argument, 'm'},
+        {"mode", ko_required_argument, 'm'}, //partially implemented, 0-4, decides amount of work done by smoothers
+        {"jobs", ko_required_argument, 'j'}, //limits number of threads available, not implemented
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
-        {"corrected", ko_no_argument, 'c'},
+        {"corrected", ko_no_argument, 'c'}, //apply the logarithmic correction, not implemented
+        {"idle", ko_no_argument, '\x90'},   // use the IDLE type threads instead of default batch/other. Not implemented
         {"help", ko_no_argument, 'h'},
         {NULL, 0, 0}
     };
@@ -160,7 +163,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.nterms = atoi(opt.arg);
                 break;
             case 't':
-                params.treshold = atof(opt.arg);
+                params.threshold = atof(opt.arg);
                 break;
             case 'f':
                 params.fmin = atof(opt.arg);
