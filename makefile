@@ -44,19 +44,36 @@ $(info Compiler type: $(CC_TYPE))
 $(info Compiler version: $(CC_VERSION_NUMBER))
 #$(info CC_MAJOR_VERSION is: $(CC_MAJOR_VERSION))
 
-# Check if the compiler version meets the minimum requirement
-ifeq ($(shell [ $(CC_MAJOR_VERSION) -ge $(MIN_VERSION) ] && echo 1 || echo 0),0)
-    $(info )
-    $(info Error: Unsupported compiler. Please use one of the following supported compilers and versions:)
-    $(info _        - GCC (minimum version $(GCC_MIN_VERSION).0.0))
-    $(info _        - Clang (minimum version $(CLANG_MIN_VERSION).0.0))
-    $(info _        - ICX (minimum version $(ICX_MIN_VERSION).0.0))
-    $(info Detected $(CC_TYPE)-$(CC_VERSION_NUMBER) is not supported.)
-    $(error Unsupported compiler)
-endif
+# Target to check the compiler version
+check_compiler:
+	@echo "Checking compiler version..."
+	@if [ -z "$(CC)" ]; then \
+	    echo "Error: CC is not set."; \
+	    exit 1; \
+	fi
+	@if [ "$(CC_TYPE)" = "gcc" ]; then \
+	    echo "Detected GCC $(CC_VERSION_NUMBER)"; \
+	elif [ "$(CC_TYPE)" = "clang" ]; then \
+	    echo "Detected Clang $(CC_VERSION_NUMBER)"; \
+	elif [ "$(CC_TYPE)" = "icx" ]; then \
+	    echo "Detected ICX $(CC_VERSION_NUMBER)"; \
+	else \
+	    echo "Error: Unsupported compiler: $(CC)"; \
+	    exit 1; \
+	fi
+	@if [ $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) ]; then \
+	    echo ""; \
+	    echo "Error: Unsupported compiler. Please use one of the following supported compilers and versions:"; \
+	    echo "_        - GCC (minimum version $(GCC_MIN_VERSION).0.0)"; \
+	    echo "_        - Clang (minimum version $(CLANG_MIN_VERSION).0.0)"; \
+	    echo "_        - ICX (minimum version $(ICX_MIN_VERSION).0.0)"; \
+	    echo "Detected $(CC_TYPE)-$(CC_VERSION_NUMBER) is not supported."; \
+	    exit 1; \
+	fi
+	@echo "Compiler check passed: $(CC_TYPE)-$(CC_VERSION_NUMBER)"
 
 # Default target
-all:
+all: check_compiler
 	@echo ""
 	@echo "Building with $(CC_TYPE)-$(CC_VERSION_NUMBER)"
 
