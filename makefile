@@ -58,7 +58,10 @@ check_compiler:
 	elif [ "$(CC_TYPE)" = "icx" ]; then \
 	    echo "Detected ICX $(CC_VERSION_NUMBER)"; \
 	else \
-	    echo "Error: Unsupported compiler: $(CC)"; \
+	    echo "Error: Unsupported compiler: $(CC). Please use one of the following supported compilers and versions:"; \
+	    echo "\t- GCC (minimum version $(GCC_MIN_VERSION).0.0)"; \
+	    echo "\t- Clang (minimum version $(CLANG_MIN_VERSION).0.0)"; \
+	    echo "\t- ICX (minimum version $(ICX_MIN_VERSION).0.0)"; \
 	    exit 1; \
 	fi
 	@if [ $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) ]; then \
