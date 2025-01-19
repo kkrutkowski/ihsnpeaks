@@ -28,6 +28,7 @@ typedef struct {
     bool spectrum;
     bool debug;
     bool corrected;
+    bool idle;
     pthread_mutex_t mutex; pthread_mutex_t counter_mutex; int iter_count;
 
     fftwf_plan plan;
@@ -62,7 +63,6 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.gridRatio = 32;
     params.mode = 2;
     params.spectrum = false;
-    params.debug = false;
 
     return params;
 }
@@ -79,6 +79,7 @@ void print_parameters(parameters *params) {
     printf("\tNterms: %d\n", params->nterms);
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
     printf("\tIs file: %s\n", params->isFile ? "true" : "false");
+    printf("\tIDLE: %s\n", params->idle ? "true" : "false");
     printf("\tLargest file's length: %i\n", params->maxLen);
     printf("\tRead buffer size: %i\n", params->maxSize);
     printf("\tFFT grid length: %i\n", params->gridLen);
@@ -118,9 +119,10 @@ void print_help(char** argv) {
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
     printf("  -d, --debug               Print parameters before the computation (default: false)\n");
+    printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
     printf("  -h, --help                Display this help message and exit\n");
     printf("Example:\n");
-    printf("  program_name /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 -d --spectrum \n");
+    printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 -d --spectrum \n", argv[0]);
 }
 
 // Function to parse command-line arguments into a parameters struct
@@ -140,7 +142,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
         {"corrected", ko_no_argument, 'c'},
-        {"idle", ko_no_argument, '\x90'},
+        {"idle", ko_no_argument, 'i'},
         {"help", ko_no_argument, 'h'},
         {NULL, 0, 0}
     };
@@ -150,7 +152,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2; // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:j:m:sdch", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:j:m:sdich", longopts)) >= 0) {
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -181,6 +183,9 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'd':
                 params.debug = true;
+                break;
+            case 'i':
+                params.idle = true;
                 break;
             case 'c':
                 params.corrected = true;
