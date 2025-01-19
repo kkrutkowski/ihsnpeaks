@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <sched.h>
+#include <stdint.h>
+
+#include "../../src/params.h"
 
 /***************************
  * kt_for with thread pool *
@@ -62,7 +65,7 @@ static void *kt_fp_worker(void *data)
     pthread_exit(0);
 }
 
-void *kt_forpool_init(int n_threads)
+void *kt_forpool_init(int n_threads, bool idle)
 {
     kt_forpool_t *fp;
     int i;
@@ -75,20 +78,52 @@ void *kt_forpool_init(int n_threads)
     pthread_cond_init(&fp->cv_m, 0);
     pthread_cond_init(&fp->cv_s, 0);
 
-    // Create threads with SCHED_BATCH scheduling if SCHED_BATCH is defined
+    // Create threads with the appropriate scheduling policy
     for (i = 0; i < fp->n_threads; ++i) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
 
-        // If SCHED_BATCH is defined, set the thread's scheduling policy to SCHED_BATCH
-        #ifdef SCHED_BATCH
+        // Set the scheduling policy based on the `idle` flag
+        if (idle) {
+            // Use SCHED_IDLE if the `idle` flag is true
             struct sched_param param;
-            //param.sched_priority = 0; // If has no specific priority, set it to 0
-            pthread_attr_setschedpolicy(&attr, SCHED_BATCH);
-            pthread_attr_setschedparam(&attr, &param);
+            param.sched_priority = 0; // Priority must be 0 for SCHED_IDLE
+            if (pthread_attr_setschedpolicy(&attr, SCHED_IDLE) != 0) {
+                perror("pthread_attr_setschedpolicy (SCHED_IDLE)");
+                exit(EXIT_FAILURE);
+            }
+            if (pthread_attr_setschedparam(&attr, &param) != 0) {
+                perror("pthread_attr_setschedparam (SCHED_IDLE)");
+                exit(EXIT_FAILURE);
+            }
+        }
+        #ifdef SCHED_BATCH
+        else {
+            // Use SCHED_BATCH if the `idle` flag is false and SCHED_BATCH is defined
+            struct sched_param param;
+            param.sched_priority = 0; // Priority for SCHED_BATCH
+            if (pthread_attr_setschedpolicy(&attr, SCHED_BATCH) != 0) {
+                perror("pthread_attr_setschedpolicy (SCHED_BATCH)");
+                exit(EXIT_FAILURE);
+            }
+            if (pthread_attr_setschedparam(&attr, &param) != 0) {
+                perror("pthread_attr_setschedparam (SCHED_BATCH)");
+                exit(EXIT_FAILURE);
+            }
+        }
         #endif
 
-        pthread_create(&fp->tid[i], &attr, kt_fp_worker, &fp->w[i]);
+        // Ensure the thread inherits the scheduling attributes explicitly
+        if (pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED) != 0) {
+            perror("pthread_attr_setinheritsched");
+            exit(EXIT_FAILURE);
+        }
+
+        // Create the thread
+        if (pthread_create(&fp->tid[i], &attr, kt_fp_worker, &fp->w[i]) != 0) {
+            perror("pthread_create");
+            exit(EXIT_FAILURE);
+        }
         pthread_attr_destroy(&attr);
     }
 
@@ -120,7 +155,7 @@ void kt_forpool(void *_fp, void (*func)(void*,long,int), void *data, long n)
         for (i = 0; i < fp->n_threads; ++i) fp->w[i].i = i, fp->w[i].action = 1;
         pthread_mutex_lock(&fp->mutex);
         pthread_cond_broadcast(&fp->cv_s);
-        while (fp->n_pending) pthread_cond_wait(&fp->cv_m, &fp->mutex);
+        while (fp->n_pending){pthread_cond_wait(&fp->cv_m, &fp->mutex); };
         pthread_mutex_unlock(&fp->mutex);
     } else for (i = 0; i < n; ++i) func(data, i, 0);
 }
