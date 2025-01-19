@@ -13,11 +13,11 @@
 #include <complex.h>
 
 
-#include "../../include/sds.h"
-#include "../../include/fast_convert.h"
+#include <sds.h>
+#include <fast_convert.h>
+#include <fftw3.h>
 
 //#include "../include/mufft/mufft.x86.h"
-#include "/usr/local/include/fftw3.h"
 
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
