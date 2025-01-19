@@ -15,9 +15,9 @@
 #include "utils/readout.h"
 #include "utils/smoother.h"
 
-#include "../include/sds.h"
-#include "../include/fast_convert.h"
-#include "/usr/local/include/fftw3.h"  // Include FFTW3 header
+#include <sds.h>
+#include <fast_convert.h>
+#include <fftw3.h>  // Include FFTW3 header
 
 inline float correctPower(float K, float nInv) {
     float term1 = ((2.0 * K) - (K * K)) * (0.25 * nInv);

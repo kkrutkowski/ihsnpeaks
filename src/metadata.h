@@ -11,9 +11,9 @@
 #include <complex.h>
 
 #include "params.h"
-//struct parameters;
-#include "/usr/local/include/fftw3.h"
-#include "../include/klib/kvec.h"
+
+#include <fftw3.h>
+#include <klib/kvec.h>
 
 static inline uint32_t intmax(int32_t a, int32_t b) {return (a > b) ? a : b;}
 uint32_t bitCeil(uint32_t n) {

@@ -1,9 +1,6 @@
 #ifndef PARAMS_H
 #define PARAMS_H
 
-//#include "../include/fast_convert.h"
-#include "../include/klib/ketopt.h"
-
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -13,6 +10,8 @@
 
 #include "metadata.h"
 #include "utils/readout.h"
+
+#include <klib/ketopt.h>
 
 typedef struct {
     char*  target;

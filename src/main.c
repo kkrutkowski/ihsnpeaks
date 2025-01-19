@@ -1,5 +1,4 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
-#include "../include/mimalloc/mimalloc.h"
 #include <stdio.h>
 #include <unistd.h>
 #include <libgen.h>
@@ -9,7 +8,8 @@
 #include "utils/readout.h"
 #include "process.h"
 
-#include "../include/klib/kthread.h"
+#include <mimalloc/mimalloc.h>
+#include <klib/kthread.h>
 
 int main(int argc, char *argv[]) {
     if (argc > 1) {if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "h") == 0) {print_help(argv); return 0;}}
