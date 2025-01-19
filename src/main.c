@@ -59,7 +59,7 @@ int main(int argc, char *argv[]) {
         if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
         if (params.jobs < nThreads && params.jobs > 0) {nThreads = params.jobs;}
         params.nbuffers = nThreads; alloc_buffers(&params);
-        kt_forpool_t *pool = kt_forpool_init(nThreads);
+        kt_forpool_t *pool = kt_forpool_init(nThreads, params.idle);
 
         //distribute processing of all of the targets on multiple threads
         kt_forpool(pool, process_targets, &params, kv_size(params.targets));
