@@ -56,7 +56,8 @@ int main(int argc, char *argv[]) {
         params.outFile = strdup(outputFilePath);
         printf("Output file's path: %s\n", outputFilePath); fflush(stdout);
 
-        if (kv_size(params.targets) < nThreads) {nThreads = 1;}
+        if (kv_size(params.targets) < nThreads) {nThreads = kv_size(params.targets);}
+        if (params.jobs < nThreads && params.jobs > 0) {nThreads = params.jobs;}
         params.nbuffers = nThreads; alloc_buffers(&params);
         kt_forpool_t *pool = kt_forpool_init(nThreads);
 

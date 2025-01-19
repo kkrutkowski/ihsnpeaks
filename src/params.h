@@ -22,8 +22,8 @@ typedef struct {
     float oversamplingFactor;
     float epsilon;
     int npeaks;    int nterms;
-    int mode;
     int gridRatio; int defaultGridRatio;
+    int mode; int jobs;
     bool isFile;
     bool spectrum;
     bool debug;
@@ -60,7 +60,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.nterms = 3;
     params.defaultGridRatio = 32;
     params.gridRatio = 32;
-    params.mode = 1;
+    params.mode = 2;
     params.spectrum = false;
     params.debug = false;
 
@@ -82,6 +82,7 @@ void print_parameters(parameters *params) {
     printf("\tLargest file's length: %i\n", params->maxLen);
     printf("\tRead buffer size: %i\n", params->maxSize);
     printf("\tFFT grid length: %i\n", params->gridLen);
+    printf("\tNumber of worker threads available: %i\n", params->jobs);
     if(!params->isFile){printf("\n");}
 }
 
@@ -110,9 +111,10 @@ void print_help(char** argv) {
     printf("Options:\n");
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
     printf("  -t, --threshold            Set the peak detection threshold (default: 10.0)\n");
+    printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
     printf("  -p, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -n, --terms               Set the number of harmonics used for computation (default: 3)\n");
-    printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
+    printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
     printf("  -d, --debug               Print parameters before the computation (default: false)\n");
@@ -124,34 +126,31 @@ void print_help(char** argv) {
 // Function to parse command-line arguments into a parameters struct
 static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
-    //params.target = &argv[1];
-
 
     // Define long options
     static ko_longopt_t longopts[] = {
-        //impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
         {"peaks", ko_required_argument, 'p'},
         {"terms", ko_required_argument, 'n'},
         {"threshold", ko_required_argument, 't'},
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
         {"epsilon", ko_required_argument, 'e'},
-        {"mode", ko_required_argument, 'm'}, //partially implemented, 0-4, decides amount of work done by smoothers
-        {"jobs", ko_required_argument, 'j'}, //limits number of threads available, not implemented
+        {"mode", ko_required_argument, 'm'},
+        {"jobs", ko_required_argument, 'j'},
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
-        {"corrected", ko_no_argument, 'c'}, //apply the logarithmic correction, not implemented
-        {"idle", ko_no_argument, '\x90'},   // use the IDLE type threads instead of default batch/other. Not implemented
+        {"corrected", ko_no_argument, 'c'},
+        {"idle", ko_no_argument, '\x90'},
         {"help", ko_no_argument, 'h'},
         {NULL, 0, 0}
     };
 
     // Initialize ketopt, skipping the first two positional arguments
     ketopt_t opt = KETOPT_INIT;
-    opt.ind = 3; // Start parsing options from argv[3]
+    opt.ind = 2; // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:m:f:e:m:sdch", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:j:m:sdch", longopts)) >= 0) {
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -171,6 +170,9 @@ static parameters read_parameters(int argc, char *argv[]) {
             case 'e':
                 params.epsilon = atof(opt.arg);
                 break;
+            case 'j':
+                params.jobs = atoi(opt.arg);
+                break;
             case 'm':
                 params.mode = atoi(opt.arg);
                 break;
@@ -184,7 +186,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.corrected = true;
                 break;
             case 'h':
-                print_help(argv);
+                print_help(argv); exit(0);
                 break;
             case '?':
                 fprintf(stderr, "Unknown option: -%c\n", opt.opt ? opt.opt : '?');
@@ -197,6 +199,7 @@ static parameters read_parameters(int argc, char *argv[]) {
 
     params.isFile = process_path(params.target, &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
 
-    return params;}
+    return params;
+}
 
 #endif // PARAMS_H
