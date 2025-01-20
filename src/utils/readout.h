@@ -12,7 +12,6 @@
 #include <stdbool.h>
 #include <complex.h>
 
-
 #include <sds.h>
 #include <fast_convert.h>
 #include <fftw3.h>
@@ -140,7 +139,41 @@ void print_buffer(buffer_t* buffer) {
     }
 }
 
-void linreg_buffer(buffer_t* buffer){
+void linreg_buffer(buffer_t* buffer) {
+    double tmp = 0;
+
+    // Center the measurement times - increases precision of future computation
+    for (unsigned int i = 1; i < buffer->n; i++) {
+        buffer->x[i] -= buffer->x[0];
+    }
+    buffer->x[0] = 0;
+
+    // Initialize sums for regression
+    double sumx = 0, sumxsq = 0, sumy = 0, sumxy = 0;
+    double lin = 0, c = 0;
+
+    for (unsigned int i = 0; i < buffer->n; i++) {
+        sumx += buffer->x[i];               // sum of x
+        sumxsq += buffer->x[i] * buffer->x[i]; // sum of x^2
+        sumy += buffer->y[i];               // sum of y
+        sumxy += buffer->x[i] * buffer->y[i]; // sum of x*y
+    }
+
+    // Calculate the denominator for the slope and intercept
+    double denum = (buffer->n * sumxsq) - (sumx * sumx);
+
+    // Compute the slope (lin) and intercept (c)
+    lin = ((buffer->n * sumxy) - (sumx * sumy)) / denum;
+    c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
+    buffer->magnitude = c;
+
+    // Adjust the y values based on the regression line
+    for (unsigned int i = 0; i < buffer->n; i++) {
+        buffer->y[i] -= (lin * buffer->x[i]) + c;
+    }
+}
+
+void linregw_buffer(buffer_t* buffer){
     double tmp = 0;
 
     // Center the measurement times - increases precision of future computation
@@ -169,7 +202,6 @@ void linreg_buffer(buffer_t* buffer){
     // Compute the slope (lin) and intercept (c)
     lin = ((sumw * sumxy) - (sumx * sumy)) / denum;
     c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
-
     buffer->magnitude = c;
 
     // Adjust the y values based on the regression line
