@@ -845,61 +845,24 @@ double sf_hyperg_2F1(double a, double b, double c, double x) {
 }
 
 
-// betaln_hyp function implementation
-long double betaln_hyp(long double x, long double a, long double b) {
-    if (x <= 0) {return -INFINITY;}  // ln(0) = -inf
-    if (x >= 1) {return 0.0;}        // ln(1) = 0
-
-    // Compute the hypergeometric function 1F1(a + b, a + 1, x)
-    long double hyp2f1 = sf_hyperg_2F1(a + b, 1.0, a + 1, x);
-    // Compute the logarithm of the beta function
-    long double ln_beta = betaln(a, b);
-
-    // Combine terms
-    long double result = logl(hyp2f1) + a * logl(x) + b * logl(1 - x) - logl(a) - ln_beta;
-    return result;
-}
-
-// logfdtrc function implementation
-long double logfdtrc(long double x, int ia, int ib) {
+double logfdtrc(long double x, int ia, int ib) {
     // Check for domain errors
-    if (ia < 1 || ib < 1 || x < 0.0) {
-        fprintf(stderr, "fdtrc domain error: ia < 1, ib < 1, or x < 0\n");
-        exit(1);
-    }
+    if (ia < 1 || ib < 1 || x < 0.0) {fprintf(stderr, "fdtrc domain error: ia < 1, ib < 1, or x < 0\n"); return(0.0/0.0);}
 
     long double a = ia;
     long double b = ib;
-    long double w = b / (b + a * x);
+    double w = b / (b + a * x);
 
-    // Call betaln with corrected argument order
-    return betaln_hyp(w, 0.5 * b, 0.5 * a);
-}
+    // Handle edge cases
+    if (w <= 0) {return -INFINITY}; // log(0) = -inf
+    if (w >= 1) {return 0.0}; // log(1) = 0
 
+    // Compute the hypergeometric function 1F1(0.5 * b + 0.5 * a, 0.5 * b + 1, w)
+    double hyp2f1 = sf_hyperg_2F1(0.5 * b + 0.5 * a, 1.0, 0.5 * b + 1, w);
+    double ln_beta = (double)betaln(0.5 * b, 0.5 * a);
 
-// Main function
-int main(int argc, char* argv[]) {
-    // Check for command-line arguments
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <N> <R>\n", argv[0]);
-        fprintf(stderr, "N - number of measurements\n");
-        fprintf(stderr, "R = chi^2_0 / chi^2_{ref} \n");
-        return 1;
-    }
+    // Combine terms for the final result
+    double result = log(hyp2f1) + 0.5 * b * log(w) + 0.5 * a * log(1 - w) - log(0.5 * b) - ln_beta;
+return result;}
 
-    // Parse command-line arguments
-    int N = atoi(argv[1]);  // Number of measurements
-    long double R = atof(argv[2]);  // Ratio of chi-squared values
-
-    // Degrees of freedom
-    int N1 = N - 2;  // Degrees of freedom for numerator
-    int N2 = (2 * N) - 4;  // Degrees of freedom for denominator
-
-    // Compute log-SF using logfdtrc implementation
-    long double log_sf = logfdtrc(R, N1, N2);
-
-    // Output the result
-    printf("ln(p): %Lf\n", log_sf);
-
-    return 0;
-}
+double get_z(double R, int N){return(logfdtrc(R, N-2, (2*N)-2);}
