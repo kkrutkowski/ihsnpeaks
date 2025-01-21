@@ -2,9 +2,118 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include <gsl/gsl_sf_hyperg.h>
+#include "hyperg_2F1.c"
 
 // hyp2f1 to be implemented
+
+long double psi(long double xx)
+{
+    //                    Evaluation of the digamma function
+    //
+    //                          -----------
+    //
+    //    Psi(xx) is assigned the value 0 when the digamma function cannot
+    //    be computed.
+    //
+    //    The main computation involves evaluation of rational chebyshev
+    //    approximations published in math. Comp. 27, 123-127(1973) By
+    //    cody, strecok and thacher.
+    //
+    //    ----------------------------------------------------------------
+    //    Psi was written at Argonne National Laboratory for the FUNPACK
+    //    package of special function subroutines. Psi was modified by
+    //    A.H. Morris (nswc).
+
+    long double aug, den, dx0, sgn, upper, w, x, xmax1, xmx0, xsmall, z;
+    long double p1[7] = {0.895385022981970e-02, 0.477762828042627e+01,
+                    0.142441585084029e+03, 0.118645200713425e+04,
+                    0.363351846806499e+04, 0.413810161269013e+04,
+                    0.130560269827897e+04};
+    long double q1[6] = {0.448452573429826e+02, 0.520752771467162e+03,
+                    0.221000799247830e+04, 0.364127349079381e+04,
+                    0.190831076596300e+04, 0.691091682714533e-05};
+    long double p2[4] = {-0.212940445131011e+01, -0.701677227766759e+01,
+                    -0.448616543918019e+01, -0.648157123766197e+00};
+    long double q2[4] = {0.322703493791143e+02, 0.892920700481861e+02,
+                    0.546117738103215e+02, 0.777788548522962e+01};
+    int nq, i;
+    dx0 = 1.461632144968362341262659542325721325;
+    xmax1 = 4503599627370496.0;
+    xsmall = 1e-9;
+    x = xx;
+    aug = 0.0;
+
+    if (x < 0.5) {
+        if (fabs(x) <= xsmall) {
+            if (x == 0.) {
+                return 0.0;
+            }
+            aug = -1./x;
+        } else {
+            // 10
+            w = -x;
+            sgn = M_PI / 4;
+            if (w <= 0.) {
+                w = -w;
+                sgn = -sgn;
+            }
+            // 20
+            if (w >= xmax1) {
+                return 0.0;
+            }
+            w -= (int)w;
+            nq = (int)(w*4.0);
+            w = 4.*(w - 0.25*nq);
+
+            if (nq % 2 == 1) {
+                w = 1. - w;
+            }
+            z = (M_PI / 4.)*w;
+
+            if ((nq / 2) % 2 == 1) {
+                sgn = -sgn;
+            }
+            if ((((nq + 1) / 2) % 2) == 1) {
+                aug = sgn * (tan(z)*4.);
+            } else {
+                if (z == 0.) {
+                    return 0.0;
+                }
+                aug = sgn * (4./tan(z));
+            }
+        }
+        x = 1 - x;
+    }
+
+    if (x <= 3.0) {
+        // 50
+        den = x;
+        upper = p1[0]*x;
+        for (i = 0; i < 5; i++)
+        {
+            den = (den + q1[i])*x;
+            upper = (upper + p1[i+1])*x;
+        }
+        den = (upper + p1[6]) / (den + q1[5]);
+        xmx0 = x - dx0;
+        return (den * xmx0) + aug;
+    } else {
+        // 70
+        if (x < xmax1) {
+            w = 1. / (x*x);
+            den = w;
+            upper = p2[0]*w;
+
+            for (i = 0; i < 3; i++) {
+                den = (den + q2[i])*w;
+                upper = (upper + p2[i+1])*w;
+            }
+            aug += upper / (den + q2[3]) - 0.5/x;
+        }
+        return aug + log(x);
+    }
+}
+
 long double alnrel(long double a)
 {
     //    Evaluation of the function ln(1 + a)
@@ -302,8 +411,7 @@ long double betaln_hyp(long double x, long double a, long double b) {
     if (x >= 1) {return 0.0;}        // ln(1) = 0
 
     // Compute the hypergeometric function 1F1(a + b, a + 1, x)
-    long double hyp2f1 = gsl_sf_hyperg_2F1(a + b, 1.0, a + 1, x);
-    //long double hyp2f1 = (long double) hyperg_2F1((double)(a + b), 1.0, (double)(a + 1), (double)(x));
+    long double hyp2f1 = sf_hyperg_2F1(a + b, 1.0, a + 1, x);
     // Compute the logarithm of the beta function
     long double ln_beta = betaln(a, b);
 
@@ -312,7 +420,7 @@ long double betaln_hyp(long double x, long double a, long double b) {
     return result;
 }
 
-// logfdtrc function implementation, works for large values of Z
+// logfdtrc function implementation
 long double logfdtrc(long double x, int ia, int ib) {
     // Check for domain errors
     if (ia < 1 || ib < 1 || x < 0.0) {
