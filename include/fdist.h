@@ -844,7 +844,6 @@ double sf_hyperg_2F1(double a, double b, double c, double x) {
     }
 }
 
-
 double logfdtrc(long double x, int ia, int ib) {
     // Check for domain errors
     if (ia < 1 || ib < 1 || x < 0.0) {fprintf(stderr, "fdtrc domain error: ia < 1, ib < 1, or x < 0\n"); return(0.0/0.0);}
@@ -854,8 +853,8 @@ double logfdtrc(long double x, int ia, int ib) {
     double w = b / (b + a * x);
 
     // Handle edge cases
-    if (w <= 0) {return -INFINITY}; // log(0) = -inf
-    if (w >= 1) {return 0.0}; // log(1) = 0
+    if (w <= 0) {return -INFINITY;} // log(0) = -inf
+    if (w >= 1) {return 0.0;} // log(1) = 0
 
     // Compute the hypergeometric function 1F1(0.5 * b + 0.5 * a, 0.5 * b + 1, w)
     double hyp2f1 = sf_hyperg_2F1(0.5 * b + 0.5 * a, 1.0, 0.5 * b + 1, w);
@@ -865,4 +864,4 @@ double logfdtrc(long double x, int ia, int ib) {
     double result = log(hyp2f1) + 0.5 * b * log(w) + 0.5 * a * log(1 - w) - log(0.5 * b) - ln_beta;
 return result;}
 
-double get_z(double R, int N){return(logfdtrc(R, N-2, (2*N)-2);}
+double get_z(double R, int N){return(-1.0 * logfdtrc(R, N-2, (2*N)-2));}
