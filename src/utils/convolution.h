@@ -23,7 +23,7 @@ typedef union {
 } kvpair;
 #endif
 
-constexpr double corr[256] =
+static constexpr double corr[256] =
 {0.2345679012345679, 0.136, 0.09620991253644315, 0.0745313214449017,
 0.06085649887302779, 0.051433773327264454, 0.04454320987654321, 0.039283533482597194,
 0.03513631724741216, 0.03178202497930389, 0.029012903756061477, 0.026688,
@@ -87,7 +87,7 @@ constexpr double corr[256] =
 0.001380265208094359, 0.0013745733685558792, 0.001368928279536379, 0.0013633293674050306,
 0.0013577760678774324, 0.0013522678258260214, 0.0013468040950950857, 0.0013413843383202429,
 0.0013360080267522567, 0.001330674640085078, 0.0013253836662879851, 0.0013201346014417145,
-0.0013149269495784691, 0.0013097602225256993, 0.0013046339397535529, 0.0012995476282258913}
+0.0013149269495784691, 0.0013097602225256993, 0.0013046339397535529, 0.0012995476282258913};
 
 static inline void sortPeaks(peak_t *peaks, int length) {
     int i, j;
@@ -110,7 +110,7 @@ static inline int32_t wrapidx(int32_t idx, int32_t n){
 return idx;}
 
 // Extract key from the 64-bit value (16-bit key at the lower 16 bits)
-static inline uint16_t extract_key(uint64_t value) { return (uint16_t) value; } // Assuming lowest 16 bits only on little endian
+static inline uint16_t extract_key(uint64_t value) { return (uint16_t) value;} // Assuming lowest 16 bits only on little endian
 
 static inline void bsort64_10(uint64_t** array, size_t n, uint64_t* aux_buffer, size_t* indices) {
     // Clear the indices array (initialized to 0)
