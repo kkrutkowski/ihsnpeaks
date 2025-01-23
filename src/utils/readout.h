@@ -213,7 +213,7 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     int fd = open(in_file, O_RDONLY);
     if (fd == -1) {
         perror("Error opening file");
-        return;
+        //return;
     }
 
     // Get the size of the file
@@ -221,22 +221,32 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     if (fstat(fd, &file_stat) == -1) {
         perror("Failed to get file size");
         close(fd);
-        return;
+        //return;
     }
     size_t file_size = file_stat.st_size;
+
+    // Advise the kernel about sequential access
+    posix_fadvise(fd, 0, file_size, POSIX_FADV_SEQUENTIAL);
 
     // Use existing buffer to avoid reallocation
     char* dataBuffer = buffer->readBuf;
 
-    // Read the file
+    // Read the file in one go
     ssize_t bytes_read = read(fd, dataBuffer, file_size);
-    if (bytes_read == -1) {perror("Failed to read file"); close(fd); return;
+    if (bytes_read == -1) {
+        perror("Failed to read file");
+        close(fd);
+        return;
     } else if (bytes_read == 0) {
-        fprintf(stderr, "No data read from file\n"); close(fd); return;
+        fprintf(stderr, "No data read from file\n");
+        close(fd);
+        return;
     }
 
-    dataBuffer[bytes_read] = '\0'; // Null-terminate the buffer
+    // Null-terminate the buffer and close the file
+    close(fd); dataBuffer[bytes_read] = '\0';
 
+    // Parse the data
     char* it = dataBuffer;
     char* end = dataBuffer + bytes_read;
     double tempX;
@@ -256,8 +266,7 @@ void read_dat(const char* in_file, buffer_t* buffer) {
         idx++;
     }
 
-    // Close the file
-    close(fd); buffer->n = idx;
+    buffer->n = idx;
 }
 
 void append_peak(buffer_t *buff, const int maxPeaks, const double freq, const float magnitude) {
