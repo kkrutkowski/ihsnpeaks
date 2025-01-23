@@ -13,7 +13,7 @@
 
 #include "utils/simd.h"
 #include "utils/readout.h"
-#include "utils/smoother.h"
+#include "utils/convolution.h"
 
 #include <sds.h>
 #include <fast_convert.h>
