@@ -1,4 +1,5 @@
 #ifndef FTEST_H
+#define FTEST_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -146,6 +147,4 @@ static inline void bsort64_10(uint64_t** array, size_t n, uint64_t* aux_buffer, 
 
 
 
-
-#define FTEST_H
 #endif
