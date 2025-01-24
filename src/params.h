@@ -21,7 +21,6 @@ typedef struct {
     float oversamplingFactor;
     float epsilon;
     int npeaks;    int nterms;
-    int gridRatio; int defaultGridRatio;
     int mode; int jobs;
     bool isFile;
     bool spectrum;
@@ -33,6 +32,7 @@ typedef struct {
     fftwf_plan plan;
 
     //Variables used to estimate optimal hyperparameters from metadata
+    uint32_t gridRatio; uint32_t defaultGridRatio;
     //uint32_t blockSize;       //size of the FFT plan applied
     //uint32_t bufferSize;      //size of the FFT buffer
     uint32_t maxSize;         //number of bytes in the longest time series of the processed batch
