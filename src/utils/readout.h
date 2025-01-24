@@ -133,13 +133,13 @@ error:
     return -1;
 }
 
-void print_buffer(buffer_t* buffer) {
+static inline void print_buffer(buffer_t* buffer) {
     for (int i = 0; i < buffer->n; i++) {
         printf("%.2f\t%.2f\t%.2f\n", buffer->x[i], buffer->y[i], buffer->dy[i]);
     }
 }
 
-void linreg_buffer(buffer_t* buffer) {
+static inline void linreg_buffer(buffer_t* buffer) {
     double tmp = 0;
 
     // Center the measurement times - increases precision of future computation
@@ -229,7 +229,7 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon){
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 }
 
-void read_dat(const char* in_file, buffer_t* buffer) {
+static inline void read_dat(const char* in_file, buffer_t* buffer) {
     // Open the file
     int fd = open(in_file, O_RDONLY);
     if (fd == -1) {
@@ -290,7 +290,7 @@ void read_dat(const char* in_file, buffer_t* buffer) {
     buffer->n = idx;
 }
 
-void append_peak(buffer_t *buff, const int maxPeaks, const double freq, const float magnitude) {
+static inline void append_peak(buffer_t *buff, const int maxPeaks, const double freq, const float magnitude) {
     peak_t appended = {0}; peak_t tmp;
     appended.freq = freq; appended.p = magnitude;
     int idx = buff->nPeaks;
