@@ -14,6 +14,12 @@ v2:
 avx:
 	musl-gcc -std=gnu23 -DMI_OVERRIDE=1 -D_GNU_SOURCE -static -mavx -march=x86-64-v2  -Ofast -flto -fno-sanitize=all main.c -o ihsnpeaks-x86-64-avx -Wl,--gc-sections -lm -L../lib -lfftw3f-avx -lmimalloc  -I../include
 	strip -s ihsnpeaks-x86-64-avx
+clang:
+	clang-19 -std=gnu23 -DMI_OVERRIDE=1 -static -mavx -march=x86-64-v2 -O3 -flto -fno-sanitize=all main.c -o ihsnpeaks-x86-64-avx -Wl,--gc-sections -I../include -lm -L../lib -lfftw3f-avx #-lmimalloc
+	strip -s ihsnpeaks-x86-64-avx
+icx:
+	icx -std=gnu23 -DMI_OVERRIDE=1 -static -mavx -march=x86-64-v2  -Ofast -flto -fno-sanitize=all main.c -o ihsnpeaks-x86-64-avx -Wl,--gc-sections -lm -L../lib -lfftw3f-avx -lmimalloc  -I../include
+	strip -s ihsnpeaks-x86-64-avx
 v3:
 	musl-gcc -std=gnu23 -DMI_OVERRIDE=1 -D_GNU_SOURCE -static -march=x86-64-v3 -Ofast -flto -fno-sanitize=all main.c -o ihsnpeaks-x86-64-v3 -Wl,--gc-sections -lm -L../lib -lfftw3f-v3 -lmimalloc  -I../include
 	strip -s ihsnpeaks-x86-64-v3
