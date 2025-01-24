@@ -83,6 +83,7 @@ void *kt_forpool_init(int n_threads, bool idle)
         pthread_attr_t attr;
         pthread_attr_init(&attr);
 
+        #ifdef SCHED_IDLE
         // Set the scheduling policy based on the `idle` flag
         if (idle) {
             // Use SCHED_IDLE if the `idle` flag is true
@@ -97,6 +98,7 @@ void *kt_forpool_init(int n_threads, bool idle)
                 exit(EXIT_FAILURE);
             }
         }
+        #endif
         #ifdef SCHED_BATCH
         else {
             // Use SCHED_BATCH if the `idle` flag is false and SCHED_BATCH is defined
