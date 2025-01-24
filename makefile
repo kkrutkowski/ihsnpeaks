@@ -75,9 +75,11 @@ check_compiler:
 	@echo "Compiler check passed: $(CC_TYPE)-$(CC_VERSION_NUMBER)"
 
 # Default target
-all: check_compiler
+all:
+	$(MAKE) check_compiler
 	@echo ""
 	@echo "Building with $(CC_TYPE)-$(CC_VERSION_NUMBER)"
+	$(MAKE) clean
 
 # Clean target
 clean:
