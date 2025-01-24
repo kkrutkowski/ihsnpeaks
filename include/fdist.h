@@ -46,7 +46,7 @@ long double psi(long double xx)
     aug = 0.0;
 
     if (x < 0.5) {
-        if (fabs(x) <= xsmall) {
+        if (fabsl(x) <= xsmall) {
             if (x == 0.) {
                 return 0.0;
             }
@@ -124,7 +124,7 @@ long double alnrel(long double a)
     long double q[3] = {-0.162752256355323e+01, 0.747811014037616e+00, -0.845104217945565e-01};
     long double t, t2, w;
 
-    if (fabs(a) > 0.375) {
+    if (fabsl(a) > 0.375) {
         return logl(1. + a);
     } else {
         t = a / (a + 2.);
@@ -864,4 +864,4 @@ double logfdtrc(long double x, int ia, int ib) {
     double result = log(hyp2f1) + 0.5 * b * log(w) + 0.5 * a * log(1 - w) - log(0.5 * b) - ln_beta;
 return result;}
 
-double get_z(double R, int N){return(-1.0 * logfdtrc(R, N-2, (2*N)-3));}
+double get_z(double R, int N){return(-1.0 * logfdtrc(R, N-2, (2*N)-2));}
