@@ -179,11 +179,11 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
     double wsum = 0; double wsqsum = 0; double neff = 0;
 
-    for(uint32_t i = 0; i < buffer->n; i++){wsum += abs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
+    for(uint32_t i = 0; i < buffer->n; i++){wsum += fabs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
     neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
     float nEffInv = 1 / neff;
     //printf("%f\n", neff); // ok
-    for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += abs(buffer->dy[i]);} // ok
+    for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += fabs(buffer->dy[i]);} // ok
     wsum = sqrt(neff) / wsum; //sqrt because of square later
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 
