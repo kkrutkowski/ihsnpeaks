@@ -1,6 +1,6 @@
 # Define the minimum required versions
 GCC_MIN_VERSION := 14
-CLANG_MIN_VERSION := 18
+CLANG_MIN_VERSION := 19
 ICX_MIN_VERSION := 2025
 
 # Determine the compiler and its version
