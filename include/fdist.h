@@ -866,3 +866,40 @@ return result;}
 
 //Include the expected uncertainty of the expected value
 double get_z(double R, int N){return(-1.0 * logfdtrc(R, (2*N)-3, (2*N)-3));}
+
+// Approximation of z(R, N) using Stirling's formula for the Beta function
+double get_approx_z(double R, int N) {
+    // Input validation
+    if (R <= 0 || N <= 1) {
+        fprintf(stderr, "get_approx_z domain error: R <= 0 or N <= 1\n");
+        return NAN;
+    }
+
+    // Constants
+    const double ln_2pi = 1.8378770664093453; // ln(2*pi)
+
+    // Stirling's approximation for ln(n!) = n*ln(n) - n + 0.5*ln(2*pi)
+    double ln_factorial_N_minus_2 = (N - 2) * log(N - 2) - (N - 2) + 0.5 * ln_2pi;
+    double ln_factorial_2N_minus_3 = (2 * N - 3) * log(2 * N - 3) - (2 * N - 3) + 0.5 * ln_2pi;
+
+    // Beta function log approximation: ln(B(N-1, N-1))
+    double ln_beta = 2 * ln_factorial_N_minus_2 - ln_factorial_2N_minus_3;
+
+    // Logarithms of R and 1 + R
+    double ln_1_plus_R = log(1 + R);
+    double ln_R = log(R);
+
+    // Compute hypergeometric function 2F1(2N - 3, 1, N - 1, 1 / (1 + R))
+    double w = 1.0 / (1.0 + R); // w = 1 / (1 + R)
+    double hyp2f1 = sf_hyperg_2F1(2 * N - 3, 1.0, N - 1, w);
+    if (hyp2f1 <= 0) {
+        fprintf(stderr, "sf_hyperg_2F1 returned a non-positive value\n");
+        return NAN;
+    }
+    double ln_hyp2f1 = log(hyp2f1);
+
+    // Final z-value approximation
+    double z = -ln_hyp2f1 - (N - 1) * (ln_1_plus_R + ln_R) + log(N - 1) + ln_beta;
+
+    return z;
+}
