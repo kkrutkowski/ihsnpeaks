@@ -4,6 +4,9 @@
 #include <float.h>
 #include <math.h>
 
+#ifndef FDIST_H
+#define FDIST_H
+
 #define locEPS (1000.0 * DBL_EPSILON)
 
 // hyp2f1 to be implemented
@@ -865,9 +868,14 @@ double logfdtrc(long double x, int ia, int ib) {
 return result;}
 
 //Include the expected uncertainty of the expected value
-double get_z(double R, int N){return(-1.0 * logfdtrc(R, (2*N)-3, (2*N)-3));}
+double get_z(double R, int N){
+    double result = -1.0 * logfdtrc(R, (2*N)-3, (2*N)-3);
+    if (result < 0.0){result = 0.0;}
+return result;}
 
-// Approximation of z(R, N) using Stirling's formula for the Beta function
+// A broken approximation of z(R, N) using Stirling's formula for the Beta function
+// To be fixed (?)
+/*
 double get_approx_z(double R, int N) {
     // Input validation
     if (R <= 0 || N <= 1) {
@@ -898,5 +906,6 @@ double get_approx_z(double R, int N) {
     // Final z-value approximation
     double z = -ln_hyp2f1 - (N - 1) * (ln_1_plus_R + ln_R) + log(N - 1) + ln_beta;
 
-    return z;
-}
+return z;}
+*/
+#endif
