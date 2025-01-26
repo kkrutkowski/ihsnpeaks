@@ -892,10 +892,7 @@ double get_approx_z(double R, int N) {
     // Compute hypergeometric function 2F1(2N - 3, 1, N - 1, 1 / (1 + R))
     double w = 1.0 / (1.0 + R); // w = 1 / (1 + R)
     double hyp2f1 = sf_hyperg_2F1(2 * N - 3, 1.0, N - 1, w);
-    if (hyp2f1 <= 0) {
-        fprintf(stderr, "sf_hyperg_2F1 returned a non-positive value\n");
-        return NAN;
-    }
+    if (hyp2f1 <= 0) {return NAN;}
     double ln_hyp2f1 = log(hyp2f1);
 
     // Final z-value approximation
