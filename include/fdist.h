@@ -864,4 +864,5 @@ double logfdtrc(long double x, int ia, int ib) {
     double result = log(hyp2f1) + 0.5 * b * log(w) + 0.5 * a * log(1 - w) - log(0.5 * b) - ln_beta;
 return result;}
 
-double get_z(double R, int N){return(-1.0 * logfdtrc(R, N-2, (2*N)-2));}
+//Include the expected uncertainty of the expected value
+double get_z(double R, int N){return(-1.0 * logfdtrc(R, (2*N)-3, (2*N)-3));}
