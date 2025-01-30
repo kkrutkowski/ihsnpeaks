@@ -163,36 +163,18 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
-    read_dat(in_file, buffer); linregw_buffer(buffer); //read the data from .dat file
+    read_dat(in_file, buffer); preprocess_buffer(buffer, params->epsilon); //read the data from .dat file
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
     const float threshold = params->threshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
-
-//to be moved into utils/readout.h - current implementation is incompatible with the F-test
-    //adjust the weights
-    for(uint32_t i = 0; i < buffer->n; i++){
-        buffer->dy[i] *= buffer->dy[i];
-        buffer->dy[i] += params->epsilon;
-        buffer->dy[i] = 1.0 / buffer->dy[i];
-    }
-
-    double wsum = 0; double wsqsum = 0; double neff = 0;
-
-    for(uint32_t i = 0; i < buffer->n; i++){wsum += fabs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
-    neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
-    float nEffInv = 1 / neff;
-    //printf("%f\n", neff); // ok
-    for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += fabs(buffer->dy[i]);} // ok
-    wsum = sqrt(neff) / wsum; //sqrt because of square later
-    for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 
     double fmin = params->fmin; double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
     double fspan = (double)(params->gridLen) * fstep; // used to compute the scale of FFT grid
     double fjump = fspan * (21.0/32.0); //used to switch to next transform
     double fmax = fmin + fjump;
     double fmid = (fmax + fmin) * 0.5; // used to compute the beginning of FFT grid
-    uint32_t nsteps = (uint32_t)(params->gridLen);
+    //uint32_t nsteps = (uint32_t)(params->gridLen);
     uint32_t gridLen = params->gridLen;
 
     if(!batch && params->debug){printf("\tNumber of target frequencies: %i\n\n", (int)((params->fmax - params->fmin)/fstep));}
