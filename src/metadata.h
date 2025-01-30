@@ -10,6 +10,7 @@
 #include <math.h>
 #include <complex.h>
 #include <unistd.h>
+#include <errno.h>     // For errno
 
 #include "params.h"
 
@@ -48,12 +49,30 @@ static int is_directory(const char *path) {
 void generate_plans(char *argv[]) {
     // Check if the program is run with root privileges
     if (geteuid() != 0) {
-        fprintf(stderr, "Error: %s %s must be run as root.\n", argv[0], argv[1]);
+        fprintf(stderr, "Error: %s must be run as root.\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    // Your logic for generating plans goes here
-    printf("Generating plans...\n");
+    struct stat st;
+    if (stat("/opt/ihsnpeaks", &st) == -1) {
+        // Directory does not exist, attempt to create it
+        if (mkdir("/opt/ihsnpeaks", 0755) == -1) {
+            fprintf(stderr, "Error: Failed to create directory '%s': %s\n", "/opt/ihsnpeaks", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
+    printf("Generating FFTW plans - it may take a few minuts.\n");
+    fftwf_complex* buffer = fftwf_alloc_complex(1 << 22);
+    fftwf_plan plan;
+    for (int i = 11; i <= 22; i++){
+        printf("\rGenerating plan %i out of 12", i - 10); fflush(stdout);
+        if (i < FFTW_MEASURE_THRESHOLD) {plan = fftwf_plan_dft_1d(1<<i, buffer, buffer, FFTW_FORWARD, FFTW_PATIENT);}
+        else {plan = fftwf_plan_dft_1d(1<<i, buffer, buffer, FFTW_FORWARD, FFTW_MEASURE);}
+    }
+    fftwf_export_wisdom_to_filename("/opt/ihsnpeaks/plans");
+    fftwf_free(buffer);
+    fftwf_destroy_plan(plan);
+    printf("\n");
 }
 
 // Function to process the path and populate the target vector
