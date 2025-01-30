@@ -18,6 +18,8 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[1], "generate") == 0 || strcmp(argv[1], "-h") == 0) {generate_plans(argv); return 0;}
     }
     if (argc < 3){print_help(argv); return 1;}
+    if (access("/opt/ihsnpeaks/plans", F_OK) == 0) {fftwf_import_wisdom_from_filename("/opt/ihsnpeaks/plans");}
+    else {printf("Warning: precomputed plans not found.\n Consider running 'sudo %s generate' for optimal performance.\n", argv[0]);}
 
     parameters params = read_parameters(argc, argv);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN); void *thread_pool;
