@@ -22,7 +22,7 @@ int main(int argc, char *argv[]) {
     else {printf("Warning: precomputed plans not found.\n Consider running 'sudo %s generate' for optimal performance.\n", argv[0]);}
 
     parameters params = read_parameters(argc, argv);
-    int nThreads = sysconf(_SC_NPROCESSORS_ONLN); void *thread_pool;
+    int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
 
     if (params.debug){print_parameters(&params);}
 
