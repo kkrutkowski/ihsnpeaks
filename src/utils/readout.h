@@ -140,8 +140,6 @@ static inline void print_buffer(buffer_t* buffer) {
 }
 
 static inline void linreg_buffer(buffer_t* buffer) {
-    double tmp = 0;
-
     // Center the measurement times - increases precision of future computation
     for (unsigned int i = 1; i < buffer->n; i++) {
         buffer->x[i] -= buffer->x[0];
@@ -174,8 +172,6 @@ static inline void linreg_buffer(buffer_t* buffer) {
 }
 
 static inline void linregw_buffer(buffer_t* buffer){
-    double tmp = 0;
-
     // Center the measurement times - increases precision of future computation
     for (unsigned int i = 1; i < buffer->n; i++) {buffer->x[i] -= buffer->x[0];}
     buffer->x[0] = 0;
@@ -222,7 +218,7 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon){
 
     for(uint32_t i = 0; i < buffer->n; i++){wsum += fabs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
     neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
-    float nEffInv = 1 / neff;
+    //float nEffInv = 1 / neff;
     //printf("%f\n", neff); // ok
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += fabs(buffer->dy[i]);} // ok
     wsum = sqrt(neff) / wsum; //sqrt because of square later
@@ -291,7 +287,7 @@ static inline void read_dat(const char* in_file, buffer_t* buffer) {
 }
 
 static inline void append_peak(buffer_t *buff, const int maxPeaks, const double freq, const float magnitude) {
-    peak_t appended = {0}; peak_t tmp;
+    peak_t appended = {0}; // peak_t tmp;
     appended.freq = freq; appended.p = magnitude;
     int idx = buff->nPeaks;
 
