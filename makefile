@@ -9,6 +9,11 @@ FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-double --disable-fortr
 # --enable-neon --enable-sse --enable-sse2 --enable-avx --enable-avx2 --enable-avx512 --enable-fma
 # gcc-only: --enable-generic-simd128 --enable-generic-simd256
 
+# Check if CC is set and points to a valid executable
+ifeq ($(shell which $(CC) >/dev/null 2>&1 && echo 1 || echo 0), 0)
+    $(error Invalid compiler: '$(CC)' is not a valid executable)
+endif
+
 # Determine the compiler and its version
 CC := $(CC)
 CC_VERSION := $(shell $(CC) --version | head -n 1)
