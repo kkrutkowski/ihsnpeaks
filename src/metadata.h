@@ -45,16 +45,10 @@ static int is_directory(const char *path) {
     return S_ISDIR(path_stat.st_mode);
 }
 
-void generate_plans(int argc, char *argv[]) {
+void generate_plans(char *argv[]) {
     // Check if the program is run with root privileges
     if (geteuid() != 0) {
-        fprintf(stderr, "Error: %s must be run as root.\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
-    // Check if the first argument is "generate"
-    if (argc < 2 || strcmp(argv[1], "generate") != 0) {
-        fprintf(stderr, "Usage: %s generate\n", argv[0]);
+        fprintf(stderr, "Error: %s %s must be run as root.\n", argv[0], argv[1]);
         exit(EXIT_FAILURE);
     }
 
