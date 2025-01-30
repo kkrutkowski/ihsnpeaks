@@ -4,8 +4,8 @@ CLANG_MIN_VERSION := 19
 ICX_MIN_VERSION := 2025
 
 #Default CFLAGS
-CFLAGS := -std=gnu23 -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
-FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-fortran
+CFLAGS := -std=gnu23 -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
+FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-double --disable-fortran
 # --enable-neon --enable-sse --enable-sse2 --enable-avx --enable-avx2 --enable-avx512 --enable-fma
 # gcc-only: --enable-generic-simd128 --enable-generic-simd256
 
@@ -30,7 +30,7 @@ ifneq ($(findstring gcc, $(CC_RESOLVED)),)
     CC_TYPE := gcc
     CC_VERSION_NUMBER := $(shell $(CC) -dumpversion)
     MIN_VERSION := $(GCC_MIN_VERSION)
-    CFLAGS += -D_GNU_SOURCE -Ofast
+    CFLAGS += -Ofast
 else ifneq ($(findstring clang, $(CC_RESOLVED)),)
     CC_TYPE := clang
     CC_VERSION_NUMBER := $(shell $(CC) --version | grep -oP '(?<=clang version )\d+\.\d+\.\d+' | head -n 1)
