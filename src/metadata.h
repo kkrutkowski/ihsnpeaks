@@ -64,12 +64,14 @@ void generate_plans(char *argv[]) {
     printf("Generating FFTW plans - it may take a few minuts.\n");
     fftwf_complex* buffer = fftwf_alloc_complex(1 << 22);
     fftwf_plan plan;
-    for (int i = 11; i <= 22; i++){
+    for (int i = 11; i < 23; i++){
         printf("\rGenerating plan %i out of 12", i - 10); fflush(stdout);
         if (i < FFTW_MEASURE_THRESHOLD) {plan = fftwf_plan_dft_1d(1<<i, buffer, buffer, FFTW_FORWARD, FFTW_PATIENT);}
         else {plan = fftwf_plan_dft_1d(1<<i, buffer, buffer, FFTW_FORWARD, FFTW_MEASURE);}
     }
-    fftwf_export_wisdom_to_filename("/opt/ihsnpeaks/plans");
+    int status = fftwf_export_wisdom_to_filename("/opt/ihsnpeaks/plans");
+    if (status == 1){printf("Plans successfully saved to /opt/ihsnpeaks/plans");}
+    else {printf("Error: Failed to save generated plans");}
     fftwf_free(buffer);
     fftwf_destroy_plan(plan);
     printf("\n");
