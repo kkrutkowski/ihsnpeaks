@@ -1,4 +1,5 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
+#define FFTW_MEASURE_THRESHOLD 19
 #include <stdio.h>
 #include <unistd.h>
 #include <libgen.h>
