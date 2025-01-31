@@ -216,20 +216,25 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
             for(uint32_t i = 0; i < buffer->n; i++){
                 fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i]; // cexp takes ~ 15% of the compute time
-                #ifndef __AVX__
-                for(uint32_t j = 0; j < 16; j++){buffer->grids[t][buffer->gidx[t][i] + j] += val * buffer->weights[t][(i*16)+j];}
-                #else
                 if (buffer->gdist[t][i] < 0.01){buffer->grids[t][buffer->gidx[t][i]] += val;}
                 else if (buffer->gdist[t][i] > 0.99){buffer->grids[t][buffer->gidx[t][i+1]] += val;}
                 else {
+                #ifdef __AVX512F__
+                    VEC weights = generateWeights(buffer->gdist[t][i]);
+                    for(uint32_t j = 0; j < 16; j++){buffer->grids[t][buffer->gidx[t][i] + j] += val * weights.data[j];}
+                #else
+                #ifdef __AVX__
                 VEC weights[2];
                 generateWeights(buffer->gdist[t][i], &weights[0], &weights[1]);
                 for(uint32_t j = 0; j < 8; j++){
                     buffer->grids[t][buffer->gidx[t][i] + j] += val * weights[0].data[j];
                     buffer->grids[t][buffer->gidx[t][i] + 8 + j] += val * weights[1].data[j];
                     }
+                #else
+                for(uint32_t j = 0; j < 16; j++){buffer->grids[t][buffer->gidx[t][i] + j] += val * buffer->weights[t][(i*16)+j];}
+                    #endif // __AVX__
+                #endif // __AVX512F__
                 }
-                #endif
             }
         for(uint32_t j = 0; j < 16; j++){buffer->grids[t][j] += buffer->grids[t][j+gridLen];}
 
