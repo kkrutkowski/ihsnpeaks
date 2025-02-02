@@ -32,6 +32,7 @@ typedef struct {
     uint8_t loc_iter;
     uint32_t   len;
     uint32_t     n;
+    uint32_t     r;
     uint32_t terms;
     uint32_t memBlockSize;
 
