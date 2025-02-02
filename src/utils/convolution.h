@@ -1,5 +1,4 @@
 #ifndef FTEST_H
-#define FTEST_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -81,70 +80,62 @@ return idx;}
 // Extract key from the 64-bit value (16-bit key at the lower 16 bits)
 static inline uint16_t extract_key(uint64_t value) { return (uint16_t) value;} // Assuming lowest 16 bits only on little endian
 
-static inline void bsort64_10(uint64_t** array, size_t n, uint64_t* aux_buffer, size_t* indices) {
+static inline void bsort64_10(uint64_t* array, size_t n, uint64_t* aux_buffer, size_t* indices) {
     // Clear the indices array (initialized to 0)
     memset(indices, 0, 1024 * sizeof(size_t));
 
     // Compute the bin sizes (counting phase)
-    for (size_t i = 0; i < n; i++) {size_t index_tmp = extract_key((*array)[i]); indices[index_tmp] += 1;}
+    for (size_t i = 0; i < n; i++) {size_t index_tmp = extract_key((array)[i]); indices[index_tmp] += 1;}
 
     // Compute the first index of each bin (prefix sum phase)
-    //to be vectorized - https://stackoverflow.com/questions/69694914/accumulating-a-running-total-prefix-sum-horizontally-across-an-m256i-vector
     for (size_t i = 1; i < 1024; i++) {indices[i] += indices[i - 1];}
 
     // Rearrange elements into the aux_buffer based on indices (placement phase)
     for (size_t i = 0; i < n; i++) {
-        uint16_t index_tmp = extract_key((*array)[i]);
+        uint16_t index_tmp = extract_key((array)[i]);
         size_t pos = --indices[index_tmp];  // Decrease the position before placing the element
-        (aux_buffer)[pos] = (*array)[i];
+        (aux_buffer)[pos] = (array)[i];
     }
 
     // Swap the pointers
     uint64_t* tmp = aux_buffer;
-    aux_buffer = *array;
-    *array = tmp;
+    aux_buffer = array;
+    array = tmp;
+}
+
+void convolve(kvpair* in, double* temp, double* out, int half_r, int n) {
+    for (int j = 0; j < n; j++) {out[j] = in[j].parts.value;}
+    double norm = (half_r + 1) * (half_r + 1) * (half_r + 1) * (half_r + 1);
+
+    for (int i = 0; i <= 3; i++) {
+        float val = 0.0f;
+        int idx_hi = half_r;
+        int idx_lo = n - half_r;
+        if (i % 2 == 0) {
+            for (int j = n - (half_r); j < n + (half_r); j++) {val += out[wrapidx(j, n)];}
+            for (int j = 0; j < n; j++) {
+                if (idx_hi >= n) {idx_hi = wrapidx(idx_hi, n);}
+                if (idx_lo >= n) {idx_lo = wrapidx(idx_lo, n);}
+                val += out[idx_hi];
+                temp[j] = val;
+                val -= out[idx_lo];
+                idx_hi += 1; idx_lo += 1;
+            }
+        } else {
+            for (int j = n - (half_r); j <= n + (half_r); j++) {val += temp[wrapidx(j, n)];}
+            for (int j = 0; j < n; j++) {
+                if (idx_hi >= n) {idx_hi = wrapidx(idx_hi, n);}
+                if (idx_lo >= n) {idx_lo = wrapidx(idx_lo, n);}
+                val += temp[idx_hi];
+                out[j] = val;
+                val -= temp[idx_lo];
+                idx_hi += 1; idx_lo += 1;
+            }
+        }
+    }
+    for (int j = 0; j < n; j++) {out[j] *= norm;} // Normalize
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#define FTEST_H
 #endif
