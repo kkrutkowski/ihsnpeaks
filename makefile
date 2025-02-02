@@ -3,6 +3,9 @@ GCC_MIN_VERSION := 14
 CLANG_MIN_VERSION := 19
 ICX_MIN_VERSION := 2025
 
+# Get the directory where the Makefile is located
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
 # Default CFLAGS.
 CFLAGS := -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
 FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-double --disable-fortran
@@ -108,16 +111,10 @@ download:
 	#@wget …
 
 fftw:
+	@mkdir -p $(MAKEFILE_DIR)/lib
 	@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
 	@tar -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
 	# Unpacked to: /tmp/fftw-3.3.10/
-
-all: check_compiler
-	@echo ""
-	@echo "Building with $(CC_TYPE)-$(CC_VERSION_NUMBER)"
-	$(MAKE) clean
-	# ... add further build commands here ...
-
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10/
