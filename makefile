@@ -6,6 +6,7 @@ ICX_MIN_VERSION := 2025
 #Default CFLAGS
 CFLAGS := -std=gnu23 -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
 FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-double --disable-fortran
+FFTW_COMPILER_FLAGS := -march=native -fno-sanitize=all
 # --enable-neon --enable-sse --enable-sse2 --enable-avx --enable-avx2 --enable-avx512 --enable-fma
 # gcc-only: --enable-generic-simd128 --enable-generic-simd256
 
@@ -90,11 +91,17 @@ check_compiler:
 	@echo "Compiler check passed: $(CC_TYPE)-$(CC_VERSION_NUMBER)"
 
 # Default target
+fftw:
+	@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
+	@tar -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
+	#unpacked to
+	#/tmp/fftw-3.3.10/
 all:
 	@echo ""
 	@echo "Building with $(CC_TYPE)-$(CC_VERSION_NUMBER)"
 	$(MAKE) clean
 
-# Clean target
 clean:
 	@echo "Cleaning up..."
+	@rm -r /tmp/fftw-3.3.10/
+	@rm /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
