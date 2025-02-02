@@ -4,9 +4,9 @@
 
 // Type definitions
 #ifdef __AVX512F__
-    #define SET_VEC(val) _mm512_set1_ps(val)
-    #define SET_IVEC(val) _mm512_set1_epi32(val)
-    #define SET_DVEC(val) _mm512_set1_pd(val)
+        #define SET_VEC(val) ((m512_union){{val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
+        #define SET_IVEC(val) ((m512i_union){{val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((m512_union){{val, val, val, val, val, val, val, val}})
 
     #include <immintrin.h>
     typedef union {__m512 data; float values[16];} m512_union;
@@ -18,9 +18,9 @@
     typedef m512i_union IVEC;
 #else
     #ifdef __AVX__
-        #define SET_VEC(val) _mm256_set1_ps(val)
-        #define SET_IVEC(val) _mm256_set1_epi32(val)
-        #define SET_DVEC(val) _mm256_set1_pd(val)
+        #define SET_VEC(val) ((m256_union){{val, val, val, val, val, val, val, val}})
+        #define SET_IVEC(val) ((m256i_union){{val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((m256_union){{val, val, val, val}})
 
         #include <immintrin.h>
         typedef union {__m256 data; float values[8];} m256_union;
@@ -48,7 +48,7 @@
 // Definitions of functions
 #ifdef __AVX512F__
     static inline VEC sin_2pi_poly_ps(const VEC x) {
-        const VEC c[4] = {SET_VEC(6.2831676e+0f), SET_VEC(-4.1337518e+1f), SET_VEC(8.1351678e+1f), SET_VEC(-7.1087358e+1f)};
+        constexpr VEC c[4] = {SET_VEC(6.2831676e+0f), SET_VEC(-4.1337518e+1f), SET_VEC(8.1351678e+1f), SET_VEC(-7.1087358e+1f)};
         const __m512 x2 = _mm512_mul_ps(x.data, x.data);
         VEC result;
         result.data = _mm512_fmadd_ps(c[3].data, x2, c[2].data);
@@ -59,7 +59,7 @@
     }
 
     static inline VEC sin_2pi_ps(const VEC angle) {
-        const VEC c[4] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f)};
+        constexpr VEC c[4] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f)};
         const __m512 AVX512_SIGNMASK_PS = _mm512_castsi512_ps(_mm512_set1_epi32(0x80000000));
         VEC sinangle;
         sinangle.data = _mm512_sub_ps(angle.data, _mm512_floor_ps(angle.data));
@@ -80,8 +80,8 @@
     }
 
     static inline VEC generateWeights(const float dst) {
-        const VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
-        const VEC DST = { .data = _mm512_setr_ps(7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f, -1.0f, -2.0f, -3.0f, -4.0f, -5.0f, -6.0f, -7.0f, -8.0f) };
+        constexpr VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
+        constexpr VEC DST = { .data = _mm512_setr_ps(7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f, -1.0f, -2.0f, -3.0f, -4.0f, -5.0f, -6.0f, -7.0f, -8.0f) };
 
         VEC denom = { .data = _mm512_add_ps(DST.data, _mm512_set1_ps(dst)) };
         VEC temp1 = { .data = _mm512_mul_ps(c[0].data, denom.data) };
@@ -94,7 +94,7 @@
 #else
     #ifdef __AVX__
         static inline VEC sin_2pi_poly_ps(const VEC x) {
-            const VEC c[4] = {SET_VEC(6.2831676e+0f), SET_VEC(-4.1337518e+1f), SET_VEC(8.1351678e+1f), SET_VEC(-7.1087358e+1f)};
+            constexpr VEC c[4] = {SET_VEC(6.2831676e+0f), SET_VEC(-4.1337518e+1f), SET_VEC(8.1351678e+1f), SET_VEC(-7.1087358e+1f)};
             const __m256 x2 = _mm256_mul_ps(x.data, x.data);
 
             VEC result;
@@ -112,7 +112,7 @@
         }
 
         static inline VEC sin_2pi_ps(const VEC angle) {
-            const VEC c[4] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f)};
+            constexpr VEC c[4] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f)};
             const __m256 AVX_SIGNMASK_PS = _mm256_castsi256_ps(_mm256_set1_epi32(0x80000000));
 
             VEC sinangle;
@@ -129,7 +129,7 @@
         }
 
         static inline void generateWeights(const float dst, VEC *h1, VEC *h2) {
-            const VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
+            constexpr VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
             const VEC DST[2] = { { .data = _mm256_setr_ps(7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f) }, { .data = _mm256_setr_ps(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f) } };
 
             VEC denom[2];
