@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
     if(kv_size(params.targets) == 1){
         //printf("Single file mode\n");
         buffer_t buffer = {0}; //initalize the pointers to NULL to avoid segfaults
-        alloc_buffer(&buffer, params.nterms, params.maxLen, params.maxSize, params.gridLen, params.npeaks); //, params.avgLen
+        alloc_buffer(&buffer, params.nterms, params.maxLen, params.maxSize, params.gridLen, params.npeaks, params.mode); //, params.avgLen
             process_target(kv_A(params.targets, 0).path, &buffer, &params, false);
             //print_buffer(&buffer);
         //process the data here
