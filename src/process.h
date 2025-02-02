@@ -296,7 +296,7 @@ void process_targets(void *data, long i, int thread_id) {
         printf("Computation in progress: %.1f%% complete\r", progress);
         fflush(stdout);
     }
-    if (!params->buffers[thread_id]->allocated) {alloc_buffer(params->buffers[thread_id], params->nterms, params->maxLen, params->maxSize, params->gridLen, params->npeaks);
+    if (!params->buffers[thread_id]->allocated) {alloc_buffer(params->buffers[thread_id], params->nterms, params->maxLen, params->maxSize, params->gridLen, params->npeaks, params->mode);
         //printf("Allocating buffer for thread %i\n", thread_id); //ok
     }
     //printf("Processing iteration %ld on thread %d\t%s\n", i, thread_id, kv_A(params->targets, i).path); //ok

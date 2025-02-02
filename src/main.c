@@ -1,6 +1,6 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
 #define FFTW_MEASURE_THRESHOLD 19
-#ifdef LEGACY
+#if __STDC_VERSION__ < 202311L  // If C23 is not available
     #define constexpr const
 #endif
 #include <stdio.h>
