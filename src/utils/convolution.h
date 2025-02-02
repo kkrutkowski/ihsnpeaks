@@ -103,16 +103,16 @@ static inline void bsort64_10(uint64_t* array, size_t n, uint64_t* aux_buffer, s
     array = tmp;
 }
 
-void convolve(kvpair* in, double* temp, double* out, int half_r, int n) {
+void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     for (int j = 0; j < n; j++) {out[j] = in[j].parts.value;}
-    double norm = (half_r + 1) * (half_r + 1) * (half_r + 1) * (half_r + 1);
+    double norm = (r + 1) * (r + 1) * (r + 1) * (r + 1);
 
     for (int i = 0; i <= 3; i++) {
         float val = 0.0f;
-        int idx_hi = half_r;
-        int idx_lo = n - half_r;
+        int idx_hi = r;
+        int idx_lo = n - r;
         if (i % 2 == 0) {
-            for (int j = n - (half_r); j < n + (half_r); j++) {val += out[wrapidx(j, n)];}
+            for (int j = n - (r); j < n + (r); j++) {val += out[wrapidx(j, n)];}
             for (int j = 0; j < n; j++) {
                 if (idx_hi >= n) {idx_hi = wrapidx(idx_hi, n);}
                 if (idx_lo >= n) {idx_lo = wrapidx(idx_lo, n);}
@@ -122,7 +122,7 @@ void convolve(kvpair* in, double* temp, double* out, int half_r, int n) {
                 idx_hi += 1; idx_lo += 1;
             }
         } else {
-            for (int j = n - (half_r); j <= n + (half_r); j++) {val += temp[wrapidx(j, n)];}
+            for (int j = n - (r); j <= n + (r); j++) {val += temp[wrapidx(j, n)];}
             for (int j = 0; j < n; j++) {
                 if (idx_hi >= n) {idx_hi = wrapidx(idx_hi, n);}
                 if (idx_lo >= n) {idx_lo = wrapidx(idx_lo, n);}
