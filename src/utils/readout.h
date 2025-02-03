@@ -295,7 +295,7 @@ static inline void read_dat(const char* in_file, buffer_t* buffer) {
     buffer->n = idx;
 }
 
-static inline void append_peak(buffer_t *buff, const int maxPeaks, const double freq, const float magnitude) {
+static inline void append_peak(buffer_t *buff, const int maxPeaks, const int mode, const double freq, const float magnitude) {
     peak_t appended = {0}; // peak_t tmp;
     appended.freq = freq; appended.p = magnitude;
     int idx = buff->nPeaks;
