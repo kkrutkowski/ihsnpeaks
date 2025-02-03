@@ -85,7 +85,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);  // Append a newline
 
     // Append the header for the peaks table
-    buffer->outBuf = sdscat(buffer->outBuf, "   f[1/d]\tlog(p)\tAmp\tChi^2\n");
+    buffer->outBuf = sdscat(buffer->outBuf, "   f[1/d]\tlog(p)\tAmp\tR\n");
 
     // Append each peak's information to the output buffer
     while (i < params->npeaks && buffer->peaks[i].p > 0) {
@@ -105,8 +105,8 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
 
-        // Convert chi^2 to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].chi2, 2, stringBuff);
+        // Convert R to string using custom_ftoa
+        custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
