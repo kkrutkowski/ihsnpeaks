@@ -213,7 +213,7 @@ static inline void linregw_buffer(buffer_t* buffer){
     for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
 }
 
-static inline void preprocess_buffer(buffer_t* buffer, double epsilon){
+static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode){
     linregw_buffer(buffer);
 
     //adjust the weights
@@ -232,6 +232,8 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon){
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += fabs(buffer->dy[i]);} // ok
     wsum = sqrt(neff) / wsum; //sqrt because of square later
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
+
+    if (mode > 0){linreg_buffer(buffer);}
 }
 
 static inline void read_dat(const char* in_file, buffer_t* buffer) {
