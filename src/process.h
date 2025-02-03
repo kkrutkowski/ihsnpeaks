@@ -164,7 +164,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
 
 //wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
-    read_dat(in_file, buffer); preprocess_buffer(buffer, params->epsilon); //read the data from .dat file
+    read_dat(in_file, buffer); preprocess_buffer(buffer, params->epsilon, params->mode); //read the data from .dat file
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
     const float threshold = params->threshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
