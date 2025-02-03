@@ -166,6 +166,13 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
     read_dat(in_file, buffer); preprocess_buffer(buffer, params->epsilon, params->mode); //read the data from .dat file
 
+    if(params->mode > 0){ //prepare the values array for the F-test
+        kvpair* tmp = (kvpair*)(buffer->buf[0]);
+        for(int i = 0; i < buffer->n; i++){
+            tmp[i].parts.val = buffer->y[i];
+        }
+    }
+
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
     const float threshold = params->threshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
