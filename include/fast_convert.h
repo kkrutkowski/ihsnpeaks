@@ -258,7 +258,7 @@ main (void)
 }
 #endif
 
-static const struct
+static constexpr struct
 {
   uint64_t mul1;
   uint32_t mul2;
@@ -2368,7 +2368,7 @@ static const struct
   { /*  1025 */ UINT64_C (0x31E560C35D40E307), 0x75677D6E, 290},
 };
 
-static const struct
+static constexpr struct
 {
   uint64_t mul;
   int32_t exp;
@@ -2877,7 +2877,7 @@ main (void)
 }
 #endif
 
-static const struct
+static constexpr struct
 {
   uint64_t mul1;
   uint32_t mul2;
@@ -3557,7 +3557,7 @@ static const struct
   { /*   309 */ UINT64_C (0xB201833B35D63F73), 0x2CD2CC65, 963},
 };
 
-static const struct
+static constexpr struct
 {
   uint64_t mul;
   int32_t exp;
@@ -3668,7 +3668,7 @@ static const struct
   { /*    39 */ UINT64_C (0xBC143FA4E250EB31), 98},
 };
 
-static const uint64_t ipowers64[] = {
+static constexpr uint64_t ipowers64[] = {
   UINT64_C (1),
   UINT64_C (10),
   UINT64_C (100),
@@ -3691,7 +3691,7 @@ static const uint64_t ipowers64[] = {
   UINT64_C (10000000000000000000),
 };
 
-static const uint32_t ipowers32[] = {
+static constexpr uint32_t ipowers32[] = {
   1,
   10,
   100,
@@ -3734,7 +3734,7 @@ main (void)
 }
 #endif
 
-static const char num3[3000] = {
+static constexpr char num3[3000] = {
   '0', '0', '0', '0', '0', '1', '0', '0', '2', '0', '0', '3', '0', '0', '4',
   '0', '0', '5', '0', '0', '6', '0', '0', '7', '0', '0', '8', '0', '0', '9',
   '0', '1', '0', '0', '1', '1', '0', '1', '2', '0', '1', '3', '0', '1', '4',
@@ -3976,7 +3976,7 @@ static void __attribute__((constructor))
 
 #ifndef __GNUC__
 
-static const unsigned char fast_clz[256] = {
+static constexpr unsigned char fast_clz[256] = {
   0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
   5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
   6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
