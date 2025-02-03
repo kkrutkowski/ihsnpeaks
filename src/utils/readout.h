@@ -24,7 +24,7 @@ typedef struct {
     double freq;
     float  p;
     float  amp;
-    float  chi2;
+    float  r;
 } peak_t;
 
 typedef struct {

@@ -64,7 +64,7 @@ static inline void sortPeaks(peak_t *peaks, int length) {
     for (i = 1; i < length; i++) {
         key = peaks[i];
         j = i - 1;
-        while (j >= 0 && peaks[j].chi2 > key.chi2) {
+        while (j >= 0 && peaks[j].r > key.r) {
             peaks[j + 1] = peaks[j];
             j = j - 1;
         }
@@ -104,7 +104,7 @@ static inline void bsort64_10(uint64_t* array, size_t n, uint64_t* aux_buffer, s
 }
 
 void convolve(kvpair* in, double* temp, double* out, int r, int n) {
-    for (int j = 0; j < n; j++) {out[j] = in[j].parts.value;}
+    for (int j = 0; j < n; j++) {out[j] = in[j].parts.val;}
     double norm = (r + 1) * (r + 1) * (r + 1) * (r + 1);
 
     for (int i = 0; i <= 3; i++) {
