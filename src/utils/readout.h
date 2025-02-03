@@ -307,8 +307,8 @@ static inline void append_peak(buffer_t *buff, const int maxPeaks, const int mod
     }
     else {
         //evaluate the R here
-        double R;
-        while (idx > 0 && magnitude > buff->peaks[idx - 1].r) {idx--;}
+        double R; appended.r = R;
+        while (idx > 0 && R > buff->peaks[idx - 1].r) {idx--;}
         if (buff->nPeaks < maxPeaks) {buff->nPeaks++;}
         for (int i = buff->nPeaks - 1; i > idx; i--) {buff->peaks[i] = buff->peaks[i - 1];}
         if (idx < maxPeaks) {buff->peaks[idx] = appended;}
