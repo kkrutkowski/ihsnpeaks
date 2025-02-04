@@ -208,4 +208,22 @@ static parameters read_parameters(int argc, char *argv[]) {
     return params;
 }
 
+// Invert correct_ihs_res using the false position (regula falsi) method.
+double correct_threshold(const double threshold, const int n) {
+    const double tol = 1e-5;
+    const int max_iter = 10;
+    double low = 0, high = (threshold > 1.0 ? threshold : 1.0), x;
+    while (correct_ihs_res(high, n) - threshold < 0) high *= 2;
+    for (int i = 0; i < max_iter; i++) {
+        double f_low = correct_ihs_res(low, n) - threshold;
+        double f_high = correct_ihs_res(high, n) - threshold;
+        x = low - f_low * (high - low) / (f_high - f_low);
+        double f_x = correct_ihs_res(x, n) - threshold;
+        if (fabs(f_x) < tol) break;
+        if (f_x * f_low < 0) high = x; else low = x;
+    }
+    return x;
+}
+
+
 #endif // PARAMS_H

@@ -28,6 +28,7 @@ int main(int argc, char *argv[]) {
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
 
     if (params.debug){print_parameters(&params);}
+    if (params.mode < 5 && params.nterms > 1){params.threshold = correct_threshold(params.threshold, params.nterms);}
 
     // Output results
     //for (size_t i = 0; i < kv_size(params.targets); i++) {printf("File: %s\n", kv_A(params.targets, i).path);}

@@ -277,7 +277,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     } end:
 
 
-    if(params->mode > 0 && params->mode < 5){sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df);}
+    sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df, params->nterms);
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     else {append_peaks(buffer, params, n, stringBuff, in_file);}
