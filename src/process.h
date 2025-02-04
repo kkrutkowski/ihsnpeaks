@@ -107,7 +107,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
 
         // Convert R to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].r, 3, stringBuff);
+        custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
