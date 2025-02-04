@@ -124,8 +124,8 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uin
             if (!buffer->gdist[i]) goto error;
         }
     if (mode > 0 && !buffer->buf){
-        buffer -> buf = calloc(4, sizeof(void*));
-        for (int i = 0; i < 4; i++){buffer->buf[i] = aligned_alloc(64, round_buffer(n * sizeof(uint64_t)));}
+        buffer -> buf = calloc(3, sizeof(void*));
+        for (int i = 0; i < 3; i++){buffer->buf[i] = aligned_alloc(64, round_buffer(n * sizeof(uint64_t)));}
     }
     #ifndef __AVX__
     if (!buffer->weights) {buffer->weights = calloc(terms, sizeof(float *));}//

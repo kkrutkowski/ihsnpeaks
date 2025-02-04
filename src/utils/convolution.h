@@ -90,11 +90,6 @@ static inline void csort64_10(uint64_t** array, size_t n, uint64_t** aux_buffer,
         size_t pos = --indices[index_tmp];  // Decrease the position before placing the element
         (*aux_buffer)[pos] = (*array)[i];
     }
-
-    // Swap the pointers
-    //uint64_t* tmp = *aux_buffer;
-    //*aux_buffer = *array;
-    //*array = tmp;
 }
 
 void convolve(kvpair* in, double* temp, double* out, int r, int n) {
@@ -135,27 +130,23 @@ static inline double get_r(buffer_t *buffer, double freq, float* amp){
     double min = 0; double max = 0;
     double ref = 0; double res = 0;
 
-    memcpy(buffer->buf[0], buffer->buf[1], buffer->n * sizeof(kvpair));
-    kvpair* input = (kvpair*)(buffer->buf[1]);
-    kvpair* input_2 = (kvpair*)(buffer->buf[2]);
-    //double* tmp = (double*)(buffer->buf[2]);
-    double* output = (double*)(buffer->buf[3]);
+    kvpair* input = (kvpair*)(buffer->buf[0]);
+    kvpair* sorted = (kvpair*)(buffer->buf[1]);
+    double* tmp = (double*)(buffer->buf[0]);
+    double* output = (double*)(buffer->buf[2]);
+    uint64_t** sort_in = (uint64_t**)(&buffer->buf[0]);
+    uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
 
     for (int i = 0; i < buffer->n; i++){
         input[i].parts.key = ((uint16_t)(buffer->x[i] * freq_tmp)) & 0b0000001111111111; // get rid of the 6 most significant bits
-        input[i].parts.val = buffer->y[i]; //temporary "fix"
+        input[i].parts.val = buffer->y[i];
     }
 
-    //printf("%.3f\n", *amp);
+    csort64_10(sort_in, buffer->n, sort_out, buffer->pidx); //sort the pairs by phase
+    int r = (int)(ceil(0.5 * sqrt((2.0 * (double)(buffer->n)) + 1.0))); r = r >> 1; if (r==0){r=1;} //for 4 convolutions
 
-    csort64_10((uint64_t**)(&buffer->buf[1]), buffer->n, (uint64_t**)(&buffer->buf[2]), buffer->pidx); //sort the pairs by phase
-    //for (int i = 0; i < buffer->n; i++){printf("%i\n", input_2[i].parts.key);}
-    int r = (int)(ceil(0.5 * sqrt((2.0 * (double)(buffer->n)) + 1.0))); //for 4 convolutions
-    r = r >> 1; if (r==0){r=1;}
+    convolve(sorted, tmp, output, r, buffer->n);
 
-    convolve(input_2, (double*)(buffer->buf[1]), output, r, buffer->n);
-
-    //for (int i = 0; i < buffer->n; i++){printf("%.3f\t%.3f\n", input_2[i].parts.val, output[i]);}
     double multiplier = 1.0 / (1.0 - corr[r-1]);
 
     for (int i = 0; i < buffer->n; i++){
@@ -163,9 +154,9 @@ static inline double get_r(buffer_t *buffer, double freq, float* amp){
             if (output[i] < min){min = output[i];}
             if (output[i] > max){max = output[i];}
         }
-        output[i] = (output[i] - (corr[r-1] * (double)(input_2[i].parts.val))) * multiplier;
-        res += ((double)(input_2[i].parts.val) - output[i]) * ((double)(input_2[i].parts.val) - output[i]);
-        ref += ((double)(input_2[i].parts.val) + output[i]) * ((double)(input_2[i].parts.val) + output[i]);
+        output[i] = (output[i] - (corr[r-1] * (double)(sorted[i].parts.val))) * multiplier;
+        res += ((double)(sorted[i].parts.val) - output[i]) * ((double)(sorted[i].parts.val) - output[i]);
+        ref += ((double)(sorted[i].parts.val) + output[i]) * ((double)(sorted[i].parts.val) + output[i]);
     }
 
     if (amp){*amp = max - min;}
