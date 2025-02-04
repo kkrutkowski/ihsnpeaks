@@ -72,47 +72,116 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
         sdsclear(buffer->spectrum);
 };
 
-void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
-    int i = 0;
-    // Append file information to the output buffer
+static int column_width(double val, int precision) {
+    int intPartWidth = (val > 0) ? (int)ceil(log10(val)) : 1;
+    return 2 + precision + intPartWidth;
+}
+
+void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode) {
+    if (mode > 1){n += 1;}
+    // Column indices: 0: f[1/d] (frequency), 1: log(p), 2: Amp, 3: R.
+    const char *hdr[4] = { "f[1/d]", "log(p)", "Amp", "R" };
+    int hdrWidth[4]; int colWidth[4]; int i;
+
+    // Set header widths (without any extra padding)
+    for(i = 0; i < 4; i++){hdrWidth[i] = (int)strlen(hdr[i]); colWidth[i] = hdrWidth[i];}
+
+    /* First pass: scan through peaks and compute the maximum printed width for each column.
+       Note: For log(p) we compute log10(p) by first converting the natural log to log10 using M_LOG10E. */
+    for(i = 0; i < params->npeaks && buffer->peaks[i].p > 0; i++){
+        double freq = buffer->peaks[i].freq;
+        double logp = buffer->peaks[i].p * M_LOG10E; // equivalent to log10(p)
+        double amp  = buffer->peaks[i].amp;
+        double r    = buffer->peaks[i].r;
+        int w;
+        w = column_width(freq, n); if (w > colWidth[0]) colWidth[0] = w;
+        w = column_width(logp, 2); if (w > colWidth[1]) colWidth[1] = w;
+        w = column_width(amp, 3); if (w > colWidth[2]) colWidth[2] = w;
+        w = column_width(r, 2); if (w > colWidth[3]) colWidth[3] = w;
+    }
+
+    // Append file information (unchanged)
     buffer->outBuf = sdscat(buffer->outBuf, "File: ");
     buffer->outBuf = sdscat(buffer->outBuf, in_file);
     buffer->outBuf = sdscat(buffer->outBuf, "    NofData: ");
-    custom_ftoa(buffer->n, 0, stringBuff);  // Convert integer to string using custom_ftoa
+    custom_ftoa(buffer->n, 0, stringBuff);  // using custom_ftoa to print integer
     buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
     buffer->outBuf = sdscat(buffer->outBuf, "    Average: ");
-    custom_ftoa(buffer->magnitude, 2, stringBuff);  // Convert float to string using custom_ftoa
+    custom_ftoa(buffer->magnitude, 2, stringBuff);
     buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-    buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);  // Append a newline
+    buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
-    // Append the header for the peaks table
-    buffer->outBuf = sdscat(buffer->outBuf, "   f[1/d]\tlog(p)\tAmp\tR\n");
-
-    // Append each peak's information to the output buffer
-    while (i < params->npeaks && buffer->peaks[i].p > 0) {
-        // Convert frequency to string using custom_ftoa
-        custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
-        buffer->outBuf = sdscat(buffer->outBuf, "   ");
-        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
-
-        // Convert log(p) to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
-        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
-
-        // Convert amplitude to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
-        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
-
-        // Convert R to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
-        buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-        buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
-
-        i++;
+    // Print table header with each header padded on the left to the column width.
+    {
+        char temp[64]; // temporary buffer for spaces
+        int pad;
+        for (i = 0; i < 4; i++) {
+            pad = colWidth[i] - (int)strlen(hdr[i]);
+            if (pad > 0) {
+                memset(temp, ' ', pad);
+                temp[pad] = '\0';
+                buffer->outBuf = sdscat(buffer->outBuf, temp);
+            }
+            buffer->outBuf = sdscat(buffer->outBuf, hdr[i]);
+            if (i < 3) buffer->outBuf = sdscat(buffer->outBuf, "\t");
+            else buffer->outBuf = sdscat(buffer->outBuf, "\n");
+        }
     }
+    // Second pass: print each peak row with proper padding.
+    {
+        char temp[64];
+        int pad, len;
+        for (i = 0; i < params->npeaks && buffer->peaks[i].p > 0; i++){
+            // Frequency column (precision n)
+            custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
+            len = (int)strlen(stringBuff);
+            pad = colWidth[0] - len;
+            if (pad > 0) {
+                memset(temp, ' ', pad);
+                temp[pad] = '\0';
+                buffer->outBuf = sdscat(buffer->outBuf, temp);
+            }
+            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            buffer->outBuf = sdscat(buffer->outBuf, "\t");
+
+            // log(p) (precision 2)
+            custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+            len = (int)strlen(stringBuff);
+            pad = colWidth[1] - len;
+            if (pad > 0) {
+                memset(temp, ' ', pad);
+                temp[pad] = '\0';
+                buffer->outBuf = sdscat(buffer->outBuf, temp);
+            }
+            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            buffer->outBuf = sdscat(buffer->outBuf, "\t");
+
+            // Amplitude (precision 3)
+            custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
+            len = (int)strlen(stringBuff);
+            pad = colWidth[2] - len;
+            if (pad > 0) {
+                memset(temp, ' ', pad);
+                temp[pad] = '\0';
+                buffer->outBuf = sdscat(buffer->outBuf, temp);
+            }
+            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            buffer->outBuf = sdscat(buffer->outBuf, "\t");
+
+            // Test statistics (precision 2)
+            custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
+            len = (int)strlen(stringBuff);
+            pad = colWidth[3] - len;
+            if (pad > 0) {
+                memset(temp, ' ', pad);
+                temp[pad] = '\0';
+                buffer->outBuf = sdscat(buffer->outBuf, temp);
+            }
+            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            buffer->outBuf = sdscat(buffer->outBuf, "\n");
+        }
+    }
+
     printf("%s", buffer->outBuf);
     sdsclear(buffer->outBuf);
 }
@@ -279,7 +348,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
     sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df, params->nterms);
 
-    if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
+    if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
     else {append_peaks(buffer, params, n, stringBuff, in_file);}
     if (params->spectrum){write_tsv(buffer, in_file);}
     buffer->nPeaks = 0; //reset the data for buffer reuse
