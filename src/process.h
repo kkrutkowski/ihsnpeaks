@@ -325,7 +325,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             magnitudes[2] = 0;
             for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
-            if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
+            if (params->spectrum){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, params->mode, freq, magnitudes[1], df);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
@@ -338,7 +338,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             magnitudes[2] = 0;
             for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
-            if (params->spectrum){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
+            if (params->spectrum){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, params-> mode, freq, magnitudes[1], df);}
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
