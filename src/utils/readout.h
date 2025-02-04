@@ -16,6 +16,8 @@
 #include <fast_convert.h>
 #include <fftw3.h>
 
+static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
+
 #ifndef PEAK_T
 #define PEAK_T
 typedef struct {
@@ -26,8 +28,8 @@ typedef struct {
 } peak_t;
 #endif
 
-static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
-
+#ifndef BUFFER_T
+#define BUFFER_T
 typedef struct {
     bool allocated;
     uint8_t loc_iter;
@@ -60,6 +62,9 @@ typedef struct {
     sds spectrum;
     sds outBuf;
 } buffer_t;
+#endif
+
+#include "convolution.h"
 
 static inline void free_buffer (buffer_t* buffer) {
     buffer -> allocated = false;
@@ -298,24 +303,23 @@ static inline void read_dat(const char* in_file, buffer_t* buffer) {
     buffer->n = idx;
 }
 
-static inline void append_peak(buffer_t *buff, const int maxPeaks, const int mode, const double freq, const float magnitude) {
+static inline void append_peak(buffer_t *buff, const int maxPeaks, const int mode, const double freq, const float magnitude, double df) {
     peak_t appended = {0}; // peak_t tmp;
     appended.freq = freq; appended.p = magnitude;
     int idx = buff->nPeaks;
-    //if (mode < 4){
+    if (mode < 3){
         while (idx > 0 && magnitude > buff->peaks[idx - 1].p) {idx--;}
         if (buff->nPeaks < maxPeaks) {buff->nPeaks++;}
         for (int i = buff->nPeaks - 1; i > idx; i--) {buff->peaks[i] = buff->peaks[i - 1];}
         if (idx < maxPeaks) {buff->peaks[idx] = appended;}
-    /*}else {
-        //evaluate the R here
-        double R; appended.r = R;
+    }else {
+        float R = get_r(buff, freq, NULL); // reevaluate peaks using F-test
+        appended.r = R;
         while (idx > 0 && R > buff->peaks[idx - 1].r) {idx--;}
         if (buff->nPeaks < maxPeaks) {buff->nPeaks++;}
         for (int i = buff->nPeaks - 1; i > idx; i--) {buff->peaks[i] = buff->peaks[i - 1];}
         if (idx < maxPeaks) {buff->peaks[idx] = appended;}
     }
-    */
 }
 
 

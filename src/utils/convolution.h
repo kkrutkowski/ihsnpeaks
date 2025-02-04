@@ -10,6 +10,42 @@
 
 #include "simd.h"
 
+#ifndef BUFFER_T
+#define BUFFER_T
+typedef struct {
+    bool allocated;
+    uint8_t loc_iter;
+    uint32_t   len;
+    uint32_t     n;
+    uint32_t     r;
+    uint32_t terms;
+    uint32_t memBlockSize;
+
+    peak_t* peaks;
+    uint32_t nPeaks;
+
+    char*  readBuf;
+    double*      x;
+    float*       y;
+    float*      dy;
+
+    size_t* pidx; //phase indices for counting sort
+
+    void** buf;
+
+    float magnitude;
+    uint32_t gridSize; uint32_t nGrids;
+
+    complex float ** grids; //used to compute the FFT
+    uint32_t** gidx; //grid indices for NFFT
+    float** gdist;
+    float** weights;
+
+    sds spectrum;
+    sds outBuf;
+} buffer_t;
+#endif
+
 #ifndef PEAK_T
 #define PEAK_T
 typedef struct {
@@ -185,7 +221,7 @@ static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode,
     peak_t key;
 
     for (i = 0; i < length; i++){
-        if(mode == 2){binsearch_peak(&peaks[i], buf, df);}
+        if(mode > 1 && mode < 4){binsearch_peak(&peaks[i], buf, df);}
         peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp);
         peaks[i].p = get_z(peaks[i].r, buf->n);
     };
