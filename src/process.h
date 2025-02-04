@@ -74,7 +74,7 @@ static inline void write_tsv(buffer_t *buffer, char* in_file){
 
 static int column_width(double val, int precision) {
     int intPartWidth = (val > 0) ? (int)ceil(log10(val)) : 1;
-    return 2 + precision + intPartWidth;
+    return 3 + precision + intPartWidth;
 }
 
 void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode) {
