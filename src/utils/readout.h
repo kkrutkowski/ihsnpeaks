@@ -178,7 +178,6 @@ static inline void linreg_buffer(buffer_t* buffer) {
     // Compute the slope (lin) and intercept (c)
     lin = ((buffer->n * sumxy) - (sumx * sumy)) / denum;
     c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
-    buffer->magnitude = c;
 
     // Adjust the y values based on the regression line
     for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
