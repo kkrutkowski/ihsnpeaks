@@ -181,9 +181,11 @@ static inline void linreg_buffer(buffer_t* buffer) {
     buffer->magnitude = c;
 
     // Adjust the y values based on the regression line
-    for (unsigned int i = 0; i < buffer->n; i++) {
-        buffer->y[i] -= (lin * buffer->x[i]) + c;
-    }
+    for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
+    //sumy = 0;
+    //for (unsigned int i = 0; i < buffer->n; i++) {sumy += buffer->y[i]};
+    //sumy /= buffer->n;
+    //for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
 }
 
 static inline void linregw_buffer(buffer_t* buffer){
