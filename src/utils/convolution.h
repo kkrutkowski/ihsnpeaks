@@ -9,7 +9,16 @@
 #include <fdist.h>
 
 #include "simd.h"
-#include "readout.h" //for the "peak_t" struct
+
+#ifndef PEAK_T
+#define PEAK_T
+typedef struct {
+    double freq;
+    float  p;
+    float  amp;
+    float  r;
+} peak_t;
+#endif
 
 #ifndef KVPAIR
 #define KVPAIR

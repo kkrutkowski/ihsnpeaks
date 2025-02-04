@@ -16,16 +16,17 @@
 #include <fast_convert.h>
 #include <fftw3.h>
 
-//#include "../include/mufft/mufft.x86.h"
-
-static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
-
+#ifndef PEAK_T
+#define PEAK_T
 typedef struct {
     double freq;
     float  p;
     float  amp;
     float  r;
 } peak_t;
+#endif
+
+static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
 
 typedef struct {
     bool allocated;
