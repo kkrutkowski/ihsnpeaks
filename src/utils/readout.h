@@ -44,7 +44,7 @@ typedef struct {
     float*       y;
     float*      dy;
 
-    uint16_t* pidx; //phase indices for counting sort
+    size_t* pidx; //phase indices for counting sort
 
     void** buf;
 
@@ -99,7 +99,7 @@ static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uin
         if (!buffer->y) goto error;
     if (!buffer->dy) {buffer->dy = aligned_alloc(64, round_buffer(n * sizeof(float)));}
         if (!buffer->dy) goto error;
-    if (!buffer->pidx) {buffer->pidx = (uint16_t*) malloc(1024 * sizeof(uint16_t));}
+    if (!buffer->pidx) {buffer->pidx = (size_t*) malloc(1024 * sizeof(size_t));}
         if (!buffer->pidx) goto error;
     if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
         if (!buffer->readBuf) goto error;
