@@ -314,7 +314,7 @@ static inline void append_peak(buffer_t *buff, const int maxPeaks, const int mod
         for (int i = buff->nPeaks - 1; i > idx; i--) {buff->peaks[i] = buff->peaks[i - 1];}
         if (idx < maxPeaks) {buff->peaks[idx] = appended;}
     }else {
-        if (mode == 4){binsearch_peak(&appended, buff, df);}
+        binsearch_peak(&appended, buff, df);
         float R = get_r(buff, appended.freq, &appended.amp); // reevaluate peaks using F-test
         appended.r = R;
         while (idx > 0 && R > buff->peaks[idx - 1].r) {idx--;}
