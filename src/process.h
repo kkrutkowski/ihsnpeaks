@@ -102,12 +102,12 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
 
         // Convert amplitude to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].amp, 2, stringBuff);
+        custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
 
         // Convert R to string using custom_ftoa
-        custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
+        custom_ftoa(buffer->peaks[i].r, 3, stringBuff);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
@@ -276,15 +276,8 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         fmin += fjump; fmid += fjump; fmax += fjump; if (params->debug && params->spectrum) {buffer->spectrum = sdscat(buffer->spectrum, "break\n");}
     } end:
 
-    //*
-    switch (params->mode){
-        case 0:
-            break;
-        case 1:
-            sortPeaks(buffer->peaks, buffer->nPeaks);
-            break;
-    }
-    //*/
+
+    if(params->mode > 0 && params->mode < 3){sortPeaks(buffer->peaks, buffer->nPeaks, buffer);}
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     else {append_peaks(buffer, params, n, stringBuff, in_file);}
