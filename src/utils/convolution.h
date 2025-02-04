@@ -202,7 +202,7 @@ return (ref / res);}
 
 static inline void binsearch_peak(peak_t *peak, buffer_t *buffer, double df){
     double step = df; float R; double freq_tmp;
-    for(int i = 0; i < 10; i++){
+    for(int i = 0; i < 12; i++){
         step *= 0.5;
 
         freq_tmp = peak->freq - step;
