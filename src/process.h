@@ -320,10 +320,12 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         float magnitudes[3] = {0};
         for(int t = 0; t < buffer->terms; t++){magnitudes[0] += sabs(buffer->grids[t][shift]); magnitudes[1] += sabs(buffer->grids[t][shift+1]);}
 
+
         for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
             magnitudes[2] = 0;
-            for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
+            if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}}
+            else {magnitudes[2] = get_z(get_r(buffer, freq + (invGridLen * fspan), NULL), buffer->n);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum && params->mode < 5){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (params->spectrum && params->mode > 4){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
@@ -337,7 +339,8 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
             magnitudes[2] = 0;
-            for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}
+            if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}}
+            else {magnitudes[2] = get_z(get_r(buffer, freq + (invGridLen * fspan), NULL), buffer->n);}
             //magnitudes[1] += correctPower(sabs(buffer->grids[t][i]), nEffInv);
             if (params->spectrum && params->mode < 5){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (params->spectrum && params->mode > 4){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
