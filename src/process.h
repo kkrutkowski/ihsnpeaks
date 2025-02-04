@@ -190,6 +190,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     char stringBuff[32];  // Adjust size as needed
 
     double invGridLen = 1.0 / (double)(gridLen);
+    double df = invGridLen * fspan;
     uint32_t shift = (gridLen * 43 / 64);
 
     for(int t = 0; t < buffer->terms; t++){
@@ -276,7 +277,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     } end:
 
 
-    if(params->mode > 0 && params->mode < 3){sortPeaks(buffer->peaks, buffer->nPeaks, buffer);}
+    if(params->mode > 0 && params->mode < 3){sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df);}
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     else {append_peaks(buffer, params, n, stringBuff, in_file);}
