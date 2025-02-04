@@ -222,7 +222,7 @@ static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode,
 
     for (i = 0; i < length; i++){
         if(mode > 1 && mode < 4){binsearch_peak(&peaks[i], buf, df);}
-        peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp);
+        if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp);}
         peaks[i].p = get_z(peaks[i].r, buf->n);
     };
 

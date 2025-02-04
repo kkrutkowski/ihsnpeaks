@@ -173,7 +173,7 @@ static inline void linreg_buffer(buffer_t* buffer) {
     }
 
     // Calculate the denominator for the slope and intercept
-    double denum = (buffer->n * sumxsq) - (sumx * sumx);
+    double denum = ((double)(buffer->n) * sumxsq) - (sumx * sumx);
 
     // Compute the slope (lin) and intercept (c)
     lin = ((buffer->n * sumxy) - (sumx * sumy)) / denum;
@@ -313,7 +313,8 @@ static inline void append_peak(buffer_t *buff, const int maxPeaks, const int mod
         for (int i = buff->nPeaks - 1; i > idx; i--) {buff->peaks[i] = buff->peaks[i - 1];}
         if (idx < maxPeaks) {buff->peaks[idx] = appended;}
     }else {
-        float R = get_r(buff, freq, NULL); // reevaluate peaks using F-test
+        if (mode == 4){binsearch_peak(&appended, buff, df);}
+        float R = get_r(buff, appended.freq, &appended.amp); // reevaluate peaks using F-test
         appended.r = R;
         while (idx > 0 && R > buff->peaks[idx - 1].r) {idx--;}
         if (buff->nPeaks < maxPeaks) {buff->nPeaks++;}
