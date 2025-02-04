@@ -53,7 +53,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     strcpy(params.target, argv[1]); // Copy the string
 
     params.fmax = atof(argv[2]);
-    params.threshold = 10.0;
+    params.threshold = 10.0 * M_LN10;
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
     params.npeaks = 10;
@@ -72,7 +72,7 @@ void print_parameters(parameters *params) {
     printf("\tMaximum frequency: %.2f\n", params->fmax);
     printf("\tMinimum frequency: %.2f\n", params->fmin);
     printf("\tOversampling Factor: %.2f\n", params->oversamplingFactor);
-    printf("\tDetection threshold: %.2f\n", params->threshold);
+    printf("\tDetection threshold: %.2f\n", params->threshold * M_LOG10E);
     printf("\tExpected systemic variation: %.1e\n", params->epsilon);
     printf("\tNpeaks: %d\n", params->npeaks);
     printf("\tNterms: %d\n", params->nterms);
@@ -165,7 +165,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.nterms = atoi(opt.arg);
                 break;
             case 't':
-                params.threshold = atof(opt.arg);
+                params.threshold = atof(opt.arg) * M_LN10;
                 break;
             case 'f':
                 params.fmin = atof(opt.arg);

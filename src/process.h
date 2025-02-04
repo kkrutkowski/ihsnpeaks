@@ -173,7 +173,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     }*/
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
-    const float threshold = params->threshold * M_LN10; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
+    const float threshold = params->threshold; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
 
     double fmin = params->fmin; double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
@@ -190,7 +190,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     char stringBuff[32];  // Adjust size as needed
 
     double invGridLen = 1.0 / (double)(gridLen);
-    double df = invGridLen * fspan;
+    double df = 1.0 / buffer->x[buffer->n - 1];
     uint32_t shift = (gridLen * 43 / 64);
 
     for(int t = 0; t < buffer->terms; t++){
@@ -277,7 +277,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     } end:
 
 
-    if(params->mode > 0 && params->mode < 4){sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df);}
+    if(params->mode > 0 && params->mode < 5){sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df);}
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file);}
     else {append_peaks(buffer, params, n, stringBuff, in_file);}
