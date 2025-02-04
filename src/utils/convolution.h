@@ -215,27 +215,41 @@ static inline void binsearch_peak(peak_t *peak, buffer_t *buffer, double df){
     }
 }
 
+static inline double correct_ihs_res(const double sum, const int n){
+    long double logSum = 1.0;
+    long double tmp = 1.0; long double denum = 1.0;
+    for(int i = 1; i < n; i++){
+        denum *= (long double)(i);
+        tmp *= sum;
+        logSum += tmp / denum;
+    }
+    return sum - logl(logSum); //asymptotic formula for possible overflow cases may be useful
+}
 
-static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode, double df) {
+static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode, double df, int n) {
     int i, j;
     peak_t key;
 
-    for (i = 0; i < length; i++){
-        if(mode > 1 && mode < 4){binsearch_peak(&peaks[i], buf, df);}
-        if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp);}
-        peaks[i].p = get_z(peaks[i].r, buf->n);
-    };
+    if (mode == 0){
+        for (i = 0; i < length; i++){peaks[i].p = correct_ihs_res(peaks[i].p, n);} //Erlang's logarithmic correction'
+    }else {
+        for (i = 0; i < length; i++){
+            if(mode > 1 && mode < 4){binsearch_peak(&peaks[i], buf, df);}
+            if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp);}
+            peaks[i].p = get_z(peaks[i].r, buf->n);
+        };
 
-    for (i = 1; i < length; i++) {
-        key = peaks[i];
-        j = i - 1;
-        while (j >= 0 && peaks[j].r < key.r) {
-            peaks[j + 1] = peaks[j];
-            j = j - 1;
+        for (i = 1; i < length; i++) {
+            key = peaks[i];
+            j = i - 1;
+            while (j >= 0 && peaks[j].r < key.r) {
+                peaks[j + 1] = peaks[j];
+                j = j - 1;
+            }
+            peaks[j + 1] = key;
         }
-        peaks[j + 1] = key;
     }
-}
+};
 
 #define FTEST_H
 #endif
