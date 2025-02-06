@@ -1,11 +1,40 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
 #define FFTW_MEASURE_THRESHOLD 19
+
 #if __STDC_VERSION__ < 202311L  // If C23 is not available
     #define constexpr const
 #endif
+#if (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L)
+    #define aligned_alloc aligned_alloc_fallback
+#endif  /* aligned_alloc */
+
 #include <stdio.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <math.h>
+
+static inline size_t bitceil(size_t n) {if(n <= 1){return 1;}
+return (size_t) (2 << (int)ceil(log2(n)));}
+
+/* C11-like aligned_alloc implementation for systems that don't already provide it.
+   This function:
+     - Rounds up the requested alignment to a power of two if needed,
+     - Ensures the alignment is at least sizeof(void*) (required by posix_memalign),
+     - Rounds up size to be a multiple of the (adjusted) alignment (as required by the C11 spec),
+     - Allocates memory using posix_memalign.
+   The returned pointer can be freed with free(). */
+void *aligned_alloc_fallback(size_t alignment, size_t size) {
+    void *ptr = NULL;
+    if (alignment == 0) return NULL;
+    if (alignment < sizeof(void*)) alignment = sizeof(void*);
+    if ((alignment & (alignment - 1)) != 0) alignment = bitceil(alignment);
+    if (size % alignment != 0) size = ((size + alignment - 1) / alignment) * alignment;
+    if (posix_memalign(&ptr, alignment, size) != 0) return NULL;
+    return ptr;
+}
 
 #include "params.h"
 #include "metadata.h"
