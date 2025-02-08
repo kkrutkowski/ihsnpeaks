@@ -1,3 +1,5 @@
+.PHONY: check_compiler download fftw mimalloc clean native all
+
 # Define the minimum required versions for C23 support
 GCC_MIN_VERSION := 14
 CLANG_MIN_VERSION := 19
@@ -10,8 +12,8 @@ MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 CFLAGS := -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
 FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-double --disable-fortran
 FFTW_COMPILER_FLAGS := -march=native -fno-sanitize=all
-# --enable-neon --enable-sse --enable-sse2 --enable-avx --enable-avx2 --enable-avx512 --enable-fma
-# gcc-only: --enable-generic-simd128 --enable-generic-simd256
+# --enable-neon --enable-avx --enable-avx2 --enable-avx512 --enable-fma
+# gcc-only:
 
 # Check if CC is set and points to a valid executable
 ifeq ($(shell which $(CC) >/dev/null 2>&1 && echo 1 || echo 0), 0)
@@ -66,6 +68,52 @@ $(info Compiler version: $(CC_VERSION_NUMBER))
 $(info Compiler major version: $(CC_MAJOR_VERSION))
 $(info Flags passed to the compiler: $(CFLAGS))
 
+# Features organized by microarchitecture versions
+FEATURES_V1 := lm cmov cx8 fpu fxsr mmx syscall sse2
+FEATURES_V2 := cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3 avx
+FEATURES_V3 := avx2 bmi1 bmi2 f16c fma abm movbe xsave
+FEATURES_V4 := avx512f avx512bw avx512cd avx512dq avx512vl
+
+# Combine all features into a single list
+FEATURES := $(FEATURES_V1) $(FEATURES_V2) $(FEATURES_V3) $(FEATURES_V4)
+
+# Get CPU flags using lscpu
+CPU_FLAGS := $(shell lscpu | grep -oP 'Flags:\s*\K.*')
+
+# Loop through each feature and check if it’s supported.
+$(foreach feature, $(FEATURES), \
+    $(if $(filter $(feature),$(CPU_FLAGS)), \
+        $(eval CFLAGS += -m$(feature)) \
+        $(info $(shell echo $(feature) | tr 'a-z' 'A-Z') is supported, enabling $(shell echo $(feature) | tr 'a-z' 'A-Z')), \
+        $(info $(shell echo $(feature) | tr 'a-z' 'A-Z') is not supported, disabling $(shell echo $(feature) | tr 'a-z' 'A-Z')) \
+    ) \
+)
+
+# Initialize version to 0 (generic build)
+version := 0
+
+# Loop over version groups in descending order.
+$(foreach ver,4 3 2 1, \
+    $(if $(strip $(foreach f, $(FEATURES_V$(ver)), $(filter $(f),$(CPU_FLAGS)))), \
+         $(if $(filter 0,$(version)), $(eval version := $(ver))) \
+    ) \
+)
+
+ifeq ($(version),0)
+  FFTW_CONFIGURE_FLAGS += --enable-generic-simd128 --enable-generic-simd256
+else ifeq ($(version),1)
+   FFTW_CONFIGURE_FLAGS += --enable-sse --enable-sse2
+else ifeq ($(version),2)
+  FFTW_CONFIGURE_FLAGS += --enable-avx
+else ifeq ($(version),3)
+  FFTW_CONFIGURE_FLAGS += --enable-avx2 --enable-fma
+else ifeq ($(version),4)
+  FFTW_CONFIGURE_FLAGS += --enable-avx2 --enable-avx512
+else
+  $(error Unknown version: $(version))
+endif
+
+
 #----------------------------------------------------------------------
 # Set the C standard flag based on compiler version:
 #
@@ -74,10 +122,14 @@ $(info Flags passed to the compiler: $(CFLAGS))
 #----------------------------------------------------------------------
 ifeq ($(shell test $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) && echo true || echo false),true)
     $(info Warning: $(CC_TYPE)-$(CC_VERSION_NUMBER) does not fully support C23. Falling back to gnu11.)
-    CFLAGS := $(CFLAGS) -std=gnu11
+    CFLAGS += $(CFLAGS) -std=gnu11
 else
-    CFLAGS := $(CFLAGS) -std=gnu23
+    CFLAGS += $(CFLAGS) -std=gnu23
 endif
+
+
+
+
 
 #----------------------------------------------------------------------
 # Targets
@@ -106,9 +158,23 @@ check_compiler:
 	else \
 	    echo "Compiler check passed: $(CC_TYPE)-$(CC_VERSION_NUMBER) supports C23."; \
 	fi
-
 download:
-	#@wget …
+	#@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/……… -O $(MAKEFILE_DIR)/ihsnpeaks
+	#@chmod +x $(MAKEFILE_DIR)/ihsnpeaks
+
+install:
+	@if [ -x ./ihsnpeaks ]; then \
+		if [ "$$(id -u)" -ne 0 ]; then \
+			echo "Error: 'make install' must be run as root."; \
+			exit 1; \
+		fi; \
+		cp ./ihsnpeaks /usr/local/bin/ihsnpeaks; \
+		/usr/local/bin/ihsnpeaks generate; \
+	else \
+		echo "Error: executable not found."; \
+		echo "Please run 'make download' or 'make native' to build it first."; \
+		exit 1; \
+	fi
 
 fftw:
 	@mkdir -p $(MAKEFILE_DIR)/lib
@@ -117,5 +183,4 @@ fftw:
 	# Unpacked to: /tmp/fftw-3.3.10/
 clean:
 	@echo "Cleaning up..."
-	@rm -rf /tmp/fftw-3.3.10/
-	@rm -f /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
+	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
