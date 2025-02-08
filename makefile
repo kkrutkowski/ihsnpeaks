@@ -159,8 +159,15 @@ check_compiler:
 	    echo "Compiler check passed: $(CC_TYPE)-$(CC_VERSION_NUMBER) supports C23."; \
 	fi
 download:
-	#@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/……… -O $(MAKEFILE_DIR)/ihsnpeaks
-	#@chmod +x $(MAKEFILE_DIR)/ihsnpeaks
+	@case "$(version)" in \
+		0) echo "No installation candidate found. Please run 'make native' to build the executable from the source";; \
+		1) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks_x86-64-v1 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
+		2) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks_x86-64-avx -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
+		3) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks-x86-64-v3 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
+		4) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks-x86-64-v4 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
+		*) echo "Error: Unknown version.";; \
+	esac
+	@chmod +x $(MAKEFILE_DIR)/ihsnpeaks
 
 install:
 	@if [ -x ./ihsnpeaks ]; then \
