@@ -10,10 +10,9 @@ MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Default CFLAGS.
 CFLAGS := -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
-FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-double --disable-fortran
+FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-fortran
 FFTW_COMPILER_FLAGS := -march=native -fno-sanitize=all
-# --enable-neon --enable-avx --enable-avx2 --enable-avx512 --enable-fma
-# gcc-only:
+# --enable-neon
 
 # Check if CC is set and points to a valid executable
 ifeq ($(shell which $(CC) >/dev/null 2>&1 && echo 1 || echo 0), 0)
@@ -185,9 +184,15 @@ install:
 
 fftw:
 	@mkdir -p $(MAKEFILE_DIR)/lib
-	@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
-	@tar -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
-	# Unpacked to: /tmp/fftw-3.3.10/
+	#@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
+	@tar --warning=no-unknown-keyword -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
+	@echo "Configuring FFTW. It may take some time."
+	@cd /tmp/fftw-3.3.10 && \
+		sh ./configure $(FFTW_CONFIGURE_FLAGS) && \
+		echo "Building FFTW" && \
+		env CC=$(CC) $(MAKE) -j8
+	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a ./lib/libfftw3f.a
+	@echo "$(MAKEFILE_DIR)/lib/libfftw3f.a built successfully"
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
