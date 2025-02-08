@@ -9,7 +9,7 @@ ICX_MIN_VERSION := 2025
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 # Default CFLAGS.
-CFLAGS := -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -I../include -lm -L../lib
+CFLAGS := -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -lm -L$(MAKEFILE_DIR)/lib -lfftw3f -I$(MAKEFILE_DIR)/include
 FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-fortran
 FFTW_COMPILER_FLAGS := -march=native -fno-sanitize=all
 # --enable-neon
@@ -82,7 +82,6 @@ CPU_FLAGS := $(shell lscpu | grep -oP 'Flags:\s*\K.*')
 # Loop through each feature and check if it’s supported.
 $(foreach feature, $(FEATURES), \
     $(if $(filter $(feature),$(CPU_FLAGS)), \
-        $(eval CFLAGS += -m$(feature)) \
         $(info $(shell echo $(feature) | tr 'a-z' 'A-Z') is supported, enabling $(shell echo $(feature) | tr 'a-z' 'A-Z')), \
         $(info $(shell echo $(feature) | tr 'a-z' 'A-Z') is not supported, disabling $(shell echo $(feature) | tr 'a-z' 'A-Z')) \
     ) \
@@ -105,7 +104,7 @@ else ifeq ($(version),1)
 else ifeq ($(version),2)
   FFTW_CONFIGURE_FLAGS += --enable-avx
 else ifeq ($(version),3)
-  FFTW_CONFIGURE_FLAGS += --enable-avx2 --enable-fma
+  FFTW_CONFIGURE_FLAGS += --enable-avx --enable-avx2 --enable-fma
 else ifeq ($(version),4)
   FFTW_CONFIGURE_FLAGS += --enable-avx2 --enable-avx512
 else
@@ -188,11 +187,13 @@ fftw:
 	@tar --warning=no-unknown-keyword -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
 	@echo "Configuring FFTW. It may take some time."
 	@cd /tmp/fftw-3.3.10 && \
-		sh ./configure $(FFTW_CONFIGURE_FLAGS) && \
+		sh ./configure $(FFTW_CONFIGURE_FLAGS) CC="$(CC)" && \
 		echo "Building FFTW" && \
-		env CC=$(CC) $(MAKE) -j8
-	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a ./lib/libfftw3f.a
-	@echo "$(MAKEFILE_DIR)/lib/libfftw3f.a built successfully"
+		$(MAKE) -j8
+	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a $(MAKEFILE_DIR)lib/libfftw3f.a
+	@echo "$(MAKEFILE_DIR)lib/libfftw3f.a built successfully"
+native:
+	@cc $(MAKEFILE_DIR)src/main.c $(CFLAGS)
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
