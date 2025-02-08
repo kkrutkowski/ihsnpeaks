@@ -60,7 +60,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.nterms = 3;
     params.defaultGridRatio = 32;
     params.gridRatio = 32;
-    params.mode = 3;
+    params.mode = 2;
     params.spectrum = false;
 
     return params;
@@ -115,7 +115,7 @@ void print_help(char** argv) {
     printf("  -p, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -n, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
-    printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:3)\n");
+    printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:2)\n");
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
     printf("  -d, --debug               Print parameters before the computation (default: false)\n");

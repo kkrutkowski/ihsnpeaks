@@ -170,8 +170,8 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
-                // Test statistics (precision 2)
-                custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
+                // Test statistics (precision 3)
+                custom_ftoa(buffer->peaks[i].r, 3, stringBuff);
                 len = (int)strlen(stringBuff);
                 pad = colWidth[3] - len;
                 if (pad > 0) {
@@ -198,7 +198,7 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
     pthread_mutex_unlock(&params->mutex);
 }
 
-void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file) {
+void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode) {
     int i = 0;
         if (buffer->nPeaks > 0){
         // Append file information to the output buffer
@@ -213,18 +213,34 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
         //buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
         // Append each peak's information to the output buffer
-        while (i < params->npeaks && buffer->peaks[i].p > 0) {
-            // Convert frequency to string using custom_ftoa
-            buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
-            custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
-            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-            buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
-            // Convert log(p) to string using custom_ftoa
-            custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
-            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-            buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
-            i++;
-        }
+        if (mode == 0){
+            while (i < params->npeaks && buffer->peaks[i].p > 0) {
+                // Convert frequency to string using custom_ftoa
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
+                custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                // Convert log(p) to string using custom_ftoa
+                custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
+                i++;
+        }} else {
+            while (i < params->npeaks && buffer->peaks[i].p > 0) {
+                // Convert frequency to string using custom_ftoa
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
+                custom_dtoa(buffer->peaks[i].freq, n+1, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                // Convert amplitude to string using custom_ftoa
+                custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                custom_ftoa(buffer->peaks[i].r, 3, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
+                i++;
+        }}
         buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
         buffer->loc_iter += 1;
         if(buffer->loc_iter == 0){ //append to the file only if the local counter oveflows
@@ -357,7 +373,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df, params->nterms);
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
-    else {append_peaks(buffer, params, n, stringBuff, in_file);}
+    else {append_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
     if (params->spectrum){write_tsv(buffer, in_file);}
     buffer->nPeaks = 0; //reset the data for buffer reuse
 }
