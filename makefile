@@ -1,4 +1,4 @@
-.PHONY: check_compiler download fftw mimalloc clean native all
+.PHONY: check_compiler download fftw clean native all #mimalloc
 
 # Define the minimum required versions for C23 support
 GCC_MIN_VERSION := 14
@@ -120,9 +120,9 @@ endif
 #----------------------------------------------------------------------
 ifeq ($(shell test $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) && echo true || echo false),true)
     $(info Warning: $(CC_TYPE)-$(CC_VERSION_NUMBER) does not fully support C23. Falling back to gnu11.)
-    CFLAGS += $(CFLAGS) -std=gnu11
+    CFLAGS += -std=gnu11
 else
-    CFLAGS += $(CFLAGS) -std=gnu23
+    CFLAGS += -std=gnu23
 endif
 
 
@@ -193,7 +193,19 @@ fftw:
 	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a $(MAKEFILE_DIR)lib/libfftw3f.a
 	@echo "$(MAKEFILE_DIR)lib/libfftw3f.a built successfully"
 native:
-	@cc $(MAKEFILE_DIR)src/main.c $(CFLAGS) -o ihsnpeaks
+	@$(CC) $(MAKEFILE_DIR)src/main.c $(CFLAGS) -o ihsnpeaks
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
+
+#----------------------------------------------------------------------
+# The "all" target runs different prerequisites depending on the version.
+# If version is 0, run download.
+# Otherwise, run fftw, native, and clean.
+#----------------------------------------------------------------------
+
+ifeq ($(version),0)
+all: download
+else
+all: fftw native clean
+endif
