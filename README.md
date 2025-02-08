@@ -5,10 +5,10 @@ A minimalistic C23 implementation of high-performance multi-harmonic Rayleigh's 
 ### Dependencies
 The makefile requires [lscpu](https://man7.org/linux/man-pages/man1/lscpu.1.html), [wget](https://www.gnu.org/software/wget/), [readlink](https://www.gnu.org/software/coreutils/manual/html_node/readlink-invocation.html#readlink-invocation) and a gnu11 compatible C compiler. 
 
-While these binaries should come preinstalled on most modern Linux distributions they may be absent on some of the other POSIX-compliant operating systems. In that case manual compilation compilation may be required
+While these binaries should come preinstalled on most modern Linux distributions they may be absent on some of the other POSIX-compliant operating systems. In that case, manual compilation may be required.
 ### Release builds for x86
 The release builds targetting the x86 architectures for the Linux operating system can be found at [the releases section of this GitHub repository](https://github.com/kkrutkowski/ihsnpeaks/releases)
-Additionally, their installation can be automated by running the makefile. The basic CLI installation of the release build (compiled with gcc-14 compiler, on top of the [MUSL standard library](https://musl.libc.org/) and [mimalloc memory allocator](https://github.com/microsoft/mimalloc)) can be performed in 3 commands as shown below
+Additionally, their installation can be automated by running the makefile. The basic CLI installation of the release build (compiled with gcc-14 compiler, on top of the [MUSL standard library](https://musl.libc.org/) and [mimalloc memory allocator](https://github.com/microsoft/mimalloc)) can be performed in 3 commands as shown below;
 ```
 git clone https://github.com/kkrutkowski/ihsnpeaks && cd ihsnpeaks
 make download
