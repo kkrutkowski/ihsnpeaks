@@ -114,8 +114,8 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     // Print table header with each header padded on the left to the column width.
     {
         char temp[64]; // temporary buffer for spaces
-        int pad;
-        for (i = 0; i < 4; i++) {
+        int pad; int HdrCols = 4; if (mode == 0){HdrCols = 2;}
+        for (i = 0; i < HdrCols; i++) {
             pad = colWidth[i] - (int)strlen(hdr[i]);
             if (pad > 0) {
                 memset(temp, ' ', pad);
@@ -127,6 +127,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
             else buffer->outBuf = sdscat(buffer->outBuf, "\n");
         }
     }
+    if (mode == 0){buffer->outBuf = sdscat(buffer->outBuf, "\n");}
     // Second pass: print each peak row with proper padding.
     {
         char temp[64];
@@ -156,28 +157,30 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
             buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
-            // Amplitude (precision 3)
-            custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
-            len = (int)strlen(stringBuff);
-            pad = colWidth[2] - len;
-            if (pad > 0) {
-                memset(temp, ' ', pad);
-                temp[pad] = '\0';
-                buffer->outBuf = sdscat(buffer->outBuf, temp);
-            }
-            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-            buffer->outBuf = sdscat(buffer->outBuf, "\t");
+            if (mode > 0){
+                // Amplitude (precision 3)
+                custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
+                len = (int)strlen(stringBuff);
+                pad = colWidth[2] - len;
+                if (pad > 0) {
+                    memset(temp, ' ', pad);
+                    temp[pad] = '\0';
+                    buffer->outBuf = sdscat(buffer->outBuf, temp);
+                }
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
-            // Test statistics (precision 2)
-            custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
-            len = (int)strlen(stringBuff);
-            pad = colWidth[3] - len;
-            if (pad > 0) {
-                memset(temp, ' ', pad);
-                temp[pad] = '\0';
-                buffer->outBuf = sdscat(buffer->outBuf, temp);
+                // Test statistics (precision 2)
+                custom_ftoa(buffer->peaks[i].r, 2, stringBuff);
+                len = (int)strlen(stringBuff);
+                pad = colWidth[3] - len;
+                if (pad > 0) {
+                    memset(temp, ' ', pad);
+                    temp[pad] = '\0';
+                    buffer->outBuf = sdscat(buffer->outBuf, temp);
+                }
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             }
-            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             buffer->outBuf = sdscat(buffer->outBuf, "\n");
         }
     }
