@@ -88,7 +88,8 @@ int main(int argc, char *argv[]) {
         // Create the output.tsv file
         FILE *outputFile = fopen(outputFilePath, "w");
         if (outputFile == NULL) {perror("Failed to create the output file");return 1;}
-        fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP)]\n");
+        if (params.mode < 1){fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP)]\n");}
+        else {fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, amp, R]\n");}
         fclose(outputFile);
 
         // Set the params.outFile pointer to the full path
