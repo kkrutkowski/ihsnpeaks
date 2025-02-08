@@ -126,12 +126,21 @@ else
 endif
 
 
-
-
-
 #----------------------------------------------------------------------
 # Targets
 #----------------------------------------------------------------------
+
+
+#----------------------------------------------------------------------
+# The "all" target runs different prerequisites depending on the version.
+# If version is 0, run download.
+# Otherwise, run fftw, native, and clean.
+#----------------------------------------------------------------------
+ifeq ($(version),0)
+all: download
+else
+all: fftw native clean
+endif
 
 # Target to check the compiler version.
 # In the case where the compiler version is below the C23 requirement,
@@ -197,15 +206,3 @@ native:
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
-
-#----------------------------------------------------------------------
-# The "all" target runs different prerequisites depending on the version.
-# If version is 0, run download.
-# Otherwise, run fftw, native, and clean.
-#----------------------------------------------------------------------
-
-ifeq ($(version),0)
-all: download
-else
-all: fftw native clean
-endif
