@@ -47,7 +47,7 @@ else ifneq ($(findstring clang, $(CC_RESOLVED)),)
     # Expect version string like "clang version 15.0.0 ..."
     CC_VERSION_NUMBER := $(shell $(CC) --version | grep -oP '(?<=clang version )\d+\.\d+\.\d+' | head -n 1)
     MIN_VERSION := $(CLANG_MIN_VERSION)
-    CFLAGS += -O3
+    CFLAGS += -Wno-nan-infinity-disabled  -O3
 else ifneq ($(findstring icx, $(CC_RESOLVED)),)
     CC_TYPE := icx
     # Expect version string like "icx version 2025.1.0 ..." (for example)
@@ -193,7 +193,7 @@ fftw:
 	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a $(MAKEFILE_DIR)lib/libfftw3f.a
 	@echo "$(MAKEFILE_DIR)lib/libfftw3f.a built successfully"
 native:
-	@cc $(MAKEFILE_DIR)src/main.c $(CFLAGS)
+	@cc $(MAKEFILE_DIR)src/main.c $(CFLAGS) -o ihsnpeaks
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
