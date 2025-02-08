@@ -165,7 +165,7 @@ download:
 		2) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks_x86-64-avx -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
 		3) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks-x86-64-v3 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
 		4) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks-x86-64-v4 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
-		*) echo "Error: Unknown version.";; \
+		*) echo "Error: Unknown version." && exit 1;; \
 	esac
 	@chmod +x $(MAKEFILE_DIR)/ihsnpeaks
 
