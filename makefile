@@ -202,7 +202,10 @@ fftw:
 	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a $(MAKEFILE_DIR)lib/libfftw3f.a
 	@echo "$(MAKEFILE_DIR)lib/libfftw3f.a built successfully"
 native:
+	@echo "Compiling the application"
 	@$(CC) $(MAKEFILE_DIR)src/main.c $(CFLAGS) -o ihsnpeaks
+	@strip -s ihsnpeaks
+	@echo "Compilation complete"
 clean:
 	@echo "Cleaning up..."
 	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
