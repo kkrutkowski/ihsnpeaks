@@ -137,9 +137,9 @@ endif
 # Otherwise, run fftw, native, and clean.
 #----------------------------------------------------------------------
 ifeq ($(version),0)
-all: download
-else
 all: fftw native clean
+else
+all: download
 endif
 
 # Target to check the compiler version.
@@ -168,10 +168,10 @@ check_compiler:
 download:
 	@case "$(version)" in \
 		0) echo "No installation candidate found. Please run 'make native' to build the executable from the source";; \
-		1) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks_x86-64-v1 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
-		2) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks_x86-64-avx -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
-		3) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks-x86-64-v3 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
-		4) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.0.0/ihsnpeaks-x86-64-v4 -O $(MAKEFILE_DIR)/ihsnpeaks ;; \
+		1) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks_x86-64-v1 -O $(MAKEFILE_DIR)ihsnpeaks ;; \
+		2) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks_x86-64-avx -O $(MAKEFILE_DIR)ihsnpeaks ;; \
+		3) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks-x86-64-v3 -O $(MAKEFILE_DIR)ihsnpeaks ;; \
+		4) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks-x86-64-v4 -O $(MAKEFILE_DIR)ihsnpeaks ;; \
 		*) echo "Error: Unknown version." && exit 1;; \
 	esac
 	@chmod +x $(MAKEFILE_DIR)/ihsnpeaks
