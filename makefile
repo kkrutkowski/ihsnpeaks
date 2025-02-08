@@ -183,7 +183,7 @@ install:
 
 fftw:
 	@mkdir -p $(MAKEFILE_DIR)/lib
-	#@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
+	@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
 	@tar --warning=no-unknown-keyword -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
 	@echo "Configuring FFTW. It may take some time."
 	@cd /tmp/fftw-3.3.10 && \
