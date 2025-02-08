@@ -3,7 +3,7 @@ A minimalistic C23 implementation of high-performance multi-harmonic Rayleigh's 
 
 ## Installation
 ### Release builds for x86
-The release builds targetting the x86 architectures for the Linux operating system can be found at [the releases section of this GitHub repo](https://github.com/kkrutkowski/ihsnpeaks/releases)
+The release builds targetting the x86 architectures for the Linux operating system can be found at [the releases section of this GitHub repository](https://github.com/kkrutkowski/ihsnpeaks/releases)
 Additionally, their installation can be automated by running the makefile. The basic CLI installation of the release build (compiled with gcc-14 compiler, on top of the [MUSL standard library](https://musl.libc.org/) and [mimalloc memory allocator](https://github.com/microsoft/mimalloc)) can be performed in 3 commands as shown below
 ```
 git clone https://github.com/kkrutkowski/ihsnpeaks && cd ihsnpeaks
