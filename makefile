@@ -68,9 +68,9 @@ $(info Compiler major version: $(CC_MAJOR_VERSION))
 $(info Flags passed to the compiler: $(CFLAGS))
 
 # Features organized by microarchitecture versions
-FEATURES_V1 := lm cmov cx8 fpu fxsr mmx syscall sse2
-FEATURES_V2 := cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3 avx
-FEATURES_V3 := avx2 bmi1 bmi2 f16c fma abm movbe xsave
+FEATURES_V1 := sse sse2 #lm cmov cx8 fpu fxsr mmx syscall
+FEATURES_V2 := avx #cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3 
+FEATURES_V3 := avx2 fma #bmi1 bmi2 f16c abm movbe xsave
 FEATURES_V4 := avx512f avx512bw avx512cd avx512dq avx512vl
 
 # Combine all features into a single list
