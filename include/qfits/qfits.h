@@ -2381,7 +2381,7 @@ static char * qfits_memory_tmpfilename(int reg)
                                    Includes
  -----------------------------------------------------------------------------*/
 
-#include "../config.h"
+#include "./config.h"
 
 /*-----------------------------------------------------------------------------
                                 Includes
@@ -3282,7 +3282,7 @@ static int qfits_is_cached(const char * filename)
 #include <unistd.h>
 #include <regex.h>
 
-#include "../config.h"
+#include "./config.h"
 
 /*-----------------------------------------------------------------------------
                                    Includes
@@ -4870,7 +4870,7 @@ char * qfits_get_ext_name(const char * filename)
                                    Includes
  -----------------------------------------------------------------------------*/
 
-#include "../config.h"
+#include "./config.h"
 
 /*-----------------------------------------------------------------------------
                                    Macros
@@ -6168,7 +6168,7 @@ static int qfits_header_makeline(
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include "../config.h"
+#include "./config.h"
 
 
 /*-----------------------------------------------------------------------------
@@ -8368,7 +8368,7 @@ static long timer_to_time(time_t time_secs)
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "../config.h"
+#include "./config.h"
 /*-----------------------------------------------------------------------------
                                    Define
  -----------------------------------------------------------------------------*/
