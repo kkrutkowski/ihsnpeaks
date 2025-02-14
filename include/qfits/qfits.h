@@ -1,4 +1,4 @@
-/* $Id: qfits_byteswap.c,v 1.5 2006/02/17 10:24:52 yjung Exp $
+/* $Id: qfits.c,v 1.5 2006/02/17 10:24:52 yjung Exp $
  *
  * This file is part of the ESO QFITS Library
  * Copyright (C) 2001-2004 European Southern Observatory
