@@ -31,7 +31,22 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <regex.h>
+#include <ctype.h>
+#include <stdarg.h>
+#include <pwd.h>
+#include <time.h>
+#include <sys/time.h>
 
+#include "config.h"
 
 /*-----------------------------------------------------------------------------
                                    Defines
@@ -450,9 +465,6 @@ const char * qfits_version(void) ;
 
 #ifndef MD5_H
 #define MD5_H
-#include <sys/stat.h>
-#include <unistd.h>
-#include <string.h>
 
 typedef unsigned int word32 ;
 
@@ -725,14 +737,8 @@ static void byteReverse(unsigned char *buf, unsigned longs)
                                    Includes
  -----------------------------------------------------------------------------*/
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+
 
 
 
@@ -893,29 +899,6 @@ const char * qfits_datamd5(const char * filename)
 
 #ifndef QFITS_MEMORY_H
 #define QFITS_MEMORY_H
-
-#define _POSIX_C_SOURCE 200809L
-/*-----------------------------------------------------------------------------
-                                Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/resource.h>
-
-/*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 /*-----------------------------------------------------------------------------
                                    Defines
@@ -2381,13 +2364,13 @@ static char * qfits_memory_tmpfilename(int reg)
                                    Includes
  -----------------------------------------------------------------------------*/
 
-#include "./config.h"
+
 
 /*-----------------------------------------------------------------------------
                                 Includes
  -----------------------------------------------------------------------------*/
 
-#include <stdlib.h>
+
 
 
 
@@ -2496,18 +2479,18 @@ void qfits_swap_bytes(void * p, int s)
 #ifndef QFITS_CACHE_H
 #define QFITS_CACHE_H
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
+
+
+
+
+
+
 
 /*-----------------------------------------------------------------------------
                                    Includes
  -----------------------------------------------------------------------------*/
 
-#include <stdio.h>
+
 
 /*-----------------------------------------------------------------------------
                                    Defines
@@ -3270,29 +3253,6 @@ static int qfits_is_cached(const char * filename)
 #define QFITS_TOOLS_H
 
 /*-----------------------------------------------------------------------------
-                                Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <regex.h>
-
-#include "./config.h"
-
-/*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-/*-----------------------------------------------------------------------------
                                    Defines
  -----------------------------------------------------------------------------*/
 
@@ -3921,22 +3881,6 @@ const char * qfits_version(void)
 #endif
 #ifndef QFITS_CARD_H
 #define QFITS_CARD_H
-/*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <unistd.h>
-
-/*-----------------------------------------------------------------------------
-                                   Defines
- -----------------------------------------------------------------------------*/
-
-/* Define the following to get zillions of debug messages */
-/* #define DEBUG_FITSHEADER */
 
 /*-----------------------------------------------------------------------------
                               Static functions
@@ -4442,25 +4386,6 @@ static char * expkey_strupc(const char * s)
 #define QFITS_ERROR_H
 
 /*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <stdarg.h>
-
-
-/*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdarg.h>
-
-
-/*-----------------------------------------------------------------------------
                                    Defines
  -----------------------------------------------------------------------------*/
 
@@ -4646,15 +4571,6 @@ static int qfits_err_register(qfits_err_dispfunc dispfn)
 #endif
 #ifndef QFITS_FILENAME_H
 #define QFITS_FILENAME_H
-/*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <pwd.h>
-#include <sys/types.h>
 
 /*-----------------------------------------------------------------------------
                                   Define
@@ -4870,7 +4786,7 @@ char * qfits_get_ext_name(const char * filename)
                                    Includes
  -----------------------------------------------------------------------------*/
 
-#include "./config.h"
+
 
 /*-----------------------------------------------------------------------------
                                    Macros
@@ -5023,121 +4939,9 @@ int _qfits_isinfd(double d)
     lx |= -lx;
     return ~(lx >> 31) & (hx >> 30);
 }
-
-/**@}*/
-
-/*
- * Test program to validate the above functions
- * Compile with:
- * % cc -o qfits_float qfits_float.c -DTEST
- */
-
-#ifdef TEST
-#include <stdio.h>
-#include <string.h>
-#include "ieeefp-compat.h"
-
-#ifndef WORDS_BIGENDIAN
-/* Little endian patterns */
-static unsigned char fnan_pat[] = {0, 0, 0xc0, 0x7f};
-static unsigned char dnan_pat[] = {0, 0, 0, 0, 0, 0, 0xf8, 0x7f};
-static unsigned char finf_pat[] = {0, 0, 0x80, 0x7f};
-static unsigned char dinf_pat[] = {0, 0, 0, 0, 0, 0, 0xf0, 0x7f};
-static unsigned char fminf_pat[] = {0, 0, 0x80, 0xff};
-/* static unsigned char dminf_pat[] = {0, 0, 0, 0, 0, 0, 0xf0, 0xff}; */
-static unsigned char dminf_pat[] = {0, 0, 0, 0, 0, 0, 0xf0, 0x7f};
-#else
-/* Big endian patterns */
-static unsigned char fnan_pat[] = {0x7f, 0xc0, 0, 0};
-static unsigned char dnan_pat[] = {0x7f, 0xf8, 0, 0, 0, 0, 0, 0};
-static unsigned char finf_pat[] = {0x7f, 0x80, 0, 0};
-static unsigned char dinf_pat[] = {0x7f, 0xf0, 0, 0, 0, 0, 0, 0};
-static unsigned char fminf_pat[] = {0xff, 0x80, 0, 0};
-static unsigned char dminf_pat[] = {0xff, 0xf0, 0, 0, 0, 0, 0, 0};
-#endif
-
-static void hexdump(void * p, int s)
-{
-    unsigned char * c ;
-    int i ;
-
-    c=(unsigned char*)p ;
-#ifndef WORDS_BIGENDIAN
-    for (i=s-1 ; i>=0 ; i--) {
-#else
-    for (i=0 ; i<s ; i++) {
-#endif
-        printf("%02x", c[i]);
-    }
-    printf("\n");
-}
-
-int main(void)
-{
-    float   f ;
-    double  d ;
-
-    printf("Testing Nan...\n");
-    memcpy(&f, fnan_pat, 4);
-    memcpy(&d, dnan_pat, 8);
-    printf("f=%g d=%g\n", f, d);
-    hexdump(&f, sizeof(float));
-    hexdump(&d, sizeof(double));
-
-    if (qfits_isnan(f)) {
-        printf("f is NaN\n");
-    }
-    if (qfits_isnan(d)) {
-        printf("d is NaN\n");
-    }
-
-    printf("Testing +Inf...\n");
-    memcpy(&f, finf_pat, 4);
-    memcpy(&d, dinf_pat, 8);
-    printf("f=%g d=%g\n", f, d);
-    hexdump(&f, sizeof(float));
-    hexdump(&d, sizeof(double));
-
-    if (qfits_isinf(f)) {
-        printf("f is Inf\n");
-    }
-    if (qfits_isinf(d)) {
-        printf("d is Inf\n");
-    }
-
-    printf("Testing -Inf...\n");
-    memcpy(&f, fminf_pat, 4);
-    memcpy(&d, dminf_pat, 8);
-    printf("f=%g d=%g\n", f, d);
-    hexdump(&f, sizeof(float));
-    hexdump(&d, sizeof(double));
-
-    if (qfits_isinf(f)) {
-        printf("f is (-)Inf\n");
-    }
-    if (qfits_isinf(d)) {
-        printf("d is (-)Inf\n");
-    }
-
-    return 0 ;
-}
-#endif
 #endif
 #ifndef QFITS_HEADER_H
 #define QFITS_HEADER_H
-
-/*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-/*-----------------------------------------------------------------------------
-                                   New types
- -----------------------------------------------------------------------------*/
 
 /*----------------------------------------------------------------------------*/
 /**
@@ -6162,13 +5966,13 @@ static int qfits_header_makeline(
                                 Includes
  -----------------------------------------------------------------------------*/
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include "./config.h"
+
+
+
+
+
+
+
 
 
 /*-----------------------------------------------------------------------------
@@ -7654,12 +7458,12 @@ int main (int argc, char * argv[])
                                 Includes
  -----------------------------------------------------------------------------*/
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
+
+
+
+
+
+
 
 /*-----------------------------------------------------------------------------
                                 Define
@@ -8141,18 +7945,6 @@ static int is_blank_line(const char * s)
 #define QFITS_TIME_H
 
 /*-----------------------------------------------------------------------------
-                                   Includes
- -----------------------------------------------------------------------------*/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <pwd.h>
-#include <unistd.h>
-#include <sys/time.h>
-
-/*-----------------------------------------------------------------------------
                                    Macros
  -----------------------------------------------------------------------------*/
 
@@ -8358,17 +8150,17 @@ static long timer_to_time(time_t time_secs)
 /*-----------------------------------------------------------------------------
                                    Includes
  -----------------------------------------------------------------------------*/
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <ctype.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
 
-#include "./config.h"
+
+
+
+
+
+
+
+
+
+
 /*-----------------------------------------------------------------------------
                                    Define
  -----------------------------------------------------------------------------*/
