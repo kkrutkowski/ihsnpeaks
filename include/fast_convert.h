@@ -258,12 +258,13 @@ main (void)
 }
 #endif
 
-static constexpr struct
-{
-  uint64_t mul1;
-  uint32_t mul2;
-  int32_t exp;
-} dpowers2[] = {
+typedef struct {
+    uint64_t mul1;
+    uint32_t mul2;
+    int32_t exp;
+} dpowers_t;
+
+static constexpr dpowers_t dpowers2[] = {
   { /* -1076 */ UINT64_C (0xAB69D82E364948D4), 0x6A0A4F6C, -343},
   { /* -1075 */ UINT64_C (0x22485E6FA4750E90), 0xE2020FE2, -342},
   { /* -1074 */ UINT64_C (0x4490BCDF48EA1D21), 0xC4041FC5, -342},
@@ -2368,11 +2369,12 @@ static constexpr struct
   { /*  1025 */ UINT64_C (0x31E560C35D40E307), 0x75677D6E, 290},
 };
 
-static constexpr struct
-{
+typedef struct {
   uint64_t mul;
   int32_t exp;
-} fpowers2[] = {
+} fpowers_t;
+
+static constexpr fpowers_t fpowers2[] = {
   { /*  -151 */ UINT64_C (0x5190F96B91344AE4), -57},
   { /*  -150 */ UINT64_C (0xA321F2D7226895C8), -57},
   { /*  -149 */ UINT64_C (0x20A063C4A07B5128), -56},
@@ -2877,12 +2879,7 @@ main (void)
 }
 #endif
 
-static constexpr struct
-{
-  uint64_t mul1;
-  uint32_t mul2;
-  int32_t exp;
-} dpowers10[] = {
+static constexpr dpowers_t dpowers10[] = {
   { /*  -362 */ UINT64_C (0xB05135F614BB847D), 0x8DA339E8, -1266},
   { /*  -361 */ UINT64_C (0xDC65837399EA659C), 0xF10C0861, -1263},
   { /*  -360 */ UINT64_C (0x89BF722840327F82), 0x16A7853D, -1259},
@@ -3557,11 +3554,7 @@ static constexpr struct
   { /*   309 */ UINT64_C (0xB201833B35D63F73), 0x2CD2CC65, 963},
 };
 
-static constexpr struct
-{
-  uint64_t mul;
-  int32_t exp;
-} fpowers10[] = {
+static constexpr fpowers_t fpowers10[] = {
   { /*   -64 */ UINT64_C (0xA87FEA27A539E9A5), -244},
   { /*   -63 */ UINT64_C (0xD29FE4B18E88640F), -241},
   { /*   -62 */ UINT64_C (0x83A3EEEEF9153E89), -237},
