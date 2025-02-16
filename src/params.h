@@ -8,42 +8,12 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#include "metadata.h"
-#include "utils/readout.h"
-
 #include <klib/ketopt.h>
 
-typedef struct {
-    char*  target;
-    char* outFile;
-    float fmin;    float fmax;
-    float threshold;
-    float oversamplingFactor;
-    float epsilon;
-    int npeaks;    int nterms;
-    int mode; int jobs;
-    bool isFile;
-    bool spectrum;
-    bool debug;
-    bool corrected;
-    bool idle;
-    pthread_mutex_t mutex; pthread_mutex_t counter_mutex; int iter_count;
+#include "utils/common.h"
+#include "utils/readout.h"
+#include "metadata.h"
 
-    fftwf_plan plan;
-
-    //Variables used to estimate optimal hyperparameters from metadata
-    uint32_t gridRatio; uint32_t defaultGridRatio;
-    //uint32_t blockSize;       //size of the FFT plan applied
-    //uint32_t bufferSize;      //size of the FFT buffer
-    uint32_t maxSize;         //number of bytes in the longest time series of the processed batch
-    uint32_t maxLen;          //number of measurements in the longest time series of the processed batch
-    uint32_t gridLen;         //length of the FFT grid used in transform
-    uint64_t avgLen;          //average number of measurements per time series in the batch
-
-    kvec_target_t targets;
-
-    buffer_t** buffers; int nbuffers;
-} parameters;
 
 // Function to initialize parameters with default values
 static parameters init_parameters(int argc, char *argv[]) {
@@ -202,9 +172,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
         }
     }
-
-    params.isFile = process_path(params.target, &params.targets, &params.maxLen, &params.maxSize, &params.avgLen, &params.gridLen, &params.gridRatio, &params.plan);
-
+    params.isFile = process_path(&params);
     return params;
 }
 
