@@ -2,6 +2,7 @@
 import sys
 import os
 import numpy as np
+from astropy.io import fits  # FITS support
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -26,8 +27,60 @@ class NumpyTableModel(QtCore.QAbstractTableModel):
         if not index.isValid():
             return None
         if role == Qt.ItemDataRole.DisplayRole:
-            value = self._data[index.row(), index.column()]
-            return str(value)
+            col_header = self._headers[index.column()].lower()
+            raw_value = self._data[index.row(), index.column()]
+            try:
+                val = float(raw_value)
+            except Exception:
+                return str(raw_value)
+
+            # Format "time": truncate to 6 decimal places at most.
+            if col_header == "time":
+                # Truncate (not round) using np.trunc
+                truncated = np.trunc(val * 1e6) / 1e6
+                s = f"{truncated:.6f}"
+                s = s.rstrip('0').rstrip('.') if '.' in s else s
+                return s
+
+            # Format "error": truncate to 2 significant digits.
+            elif col_header == "error":
+                if np.isnan(val):
+                    return "nan"
+                if val == 0:
+                    return "0"
+                # Determine exponent and scale for 2 significant digits.
+                exponent = np.floor(np.log10(abs(val)))
+                scale = 10 ** (exponent - 2)  # keeps 2 significant digits
+                truncated_val = np.floor(val / scale) * scale
+                if abs(truncated_val) < 1e-2:
+                    s = f"{truncated_val:.2e}"
+                else:
+                    s = format(truncated_val, ".2g")
+                return s
+
+            # Format "magnitude": if error isn’t NaN, use ceil(-log10(error)+1) decimals; else 4 decimals.
+            elif col_header == "magnitude":
+                headers_lower = [h.lower() for h in self._headers]
+                if "error" in headers_lower:
+                    error_idx = headers_lower.index("error")
+                    try:
+                        error_val = float(self._data[index.row(), error_idx])
+                    except Exception:
+                        error_val = np.nan
+                    if np.isnan(error_val) or error_val == 0:
+                        dp = 4
+                    else:
+                        dp = int(np.ceil(-np.log10(error_val) + 1))
+                else:
+                    dp = 4
+                truncated = np.trunc(val * (10 ** dp)) / (10 ** dp)
+                s = f"{truncated:.{dp}f}"
+                s = s.rstrip('0').rstrip('.') if '.' in s else s
+                return s
+
+            # For other columns, simply return the value.
+            else:
+                return str(raw_value)
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
@@ -94,8 +147,9 @@ class LazyTableWidget(QWidget):
         table_view.setModel(model)
         header = table_view.horizontalHeader()
         header.setStretchLastSection(False)
+        # Set each column to resize to its contents so that numbers are fully visible.
         for col in range(model.columnCount()):
-            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Interactive)
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.layout.addWidget(table_view)
         self.loaded = True
 
@@ -195,7 +249,7 @@ class MainWindow(QMainWindow):
             return
 
         # Only process files with valid extensions.
-        if not file_path.lower().endswith(('.dat', '.tsv')):
+        if not file_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
             print(f"Skipping file (invalid extension): {file_path}")
             return
 
@@ -226,8 +280,9 @@ class MainWindow(QMainWindow):
         self.last_tab_index = index
 
     def open_file(self):
+        # Updated filter to include FITS files.
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open File", "", "Text files (*.tsv *.dat)"
+            self, "Open File", "", "Photometry files (*.tsv *.dat *.fit *.fits)"
         )
         if file_path:
             self.add_file_tab(file_path)
@@ -243,28 +298,83 @@ class MainWindow(QMainWindow):
 
     def load_file(self, file_path):
         """
-        Load a .tsv or .dat file using NumPy.
+        Load a file based on its extension:
           - .dat files are assumed to be space-delimited.
           - .tsv files are tab-delimited.
-        Only files with 2 or 3 columns (all convertible to float) are accepted.
+          - .fit/.fits files are read as FITS binary tables using astropy.io.fits.
+            For FITS files:
+              - TIME column provides the time.
+              - PDCSAP_FLUX column is used to compute magnitude: - 2.5 * log10(PDCSAP_FLUX)
+              - If PDCSAP_FLUX_ERR column exists, error is computed as 1.08573625 * (PDCSAP_FLUX_ERR / PDCSAP_FLUX)
+              - Rows with NaN PDCSAP_FLUX are filtered out.
         """
-        if file_path.lower().endswith(".dat"):
+        lower_path = file_path.lower()
+        if lower_path.endswith(".dat"):
             delimiter = None  # whitespace
-        elif file_path.lower().endswith(".tsv"):
+            try:
+                data = np.loadtxt(file_path, delimiter=delimiter, dtype=float)
+            except Exception as e:
+                raise ValueError("File parsing error: " + str(e))
+            if data.ndim == 1:
+                data = data[np.newaxis, :]
+            num_cols = data.shape[1]
+            if num_cols < 2 or num_cols > 3:
+                raise ValueError(f"File must have 2 or 3 columns, found {num_cols}.")
+            headers = ["time", "magnitude"] if num_cols == 2 else ["time", "magnitude", "error"]
+            return data, headers
+
+        elif lower_path.endswith(".tsv"):
             delimiter = "\t"
+            try:
+                data = np.loadtxt(file_path, delimiter=delimiter, dtype=float)
+            except Exception as e:
+                raise ValueError("File parsing error: " + str(e))
+            if data.ndim == 1:
+                data = data[np.newaxis, :]
+            num_cols = data.shape[1]
+            if num_cols < 2 or num_cols > 3:
+                raise ValueError(f"File must have 2 or 3 columns, found {num_cols}.")
+            headers = ["time", "magnitude"] if num_cols == 2 else ["time", "magnitude", "error"]
+            return data, headers
+
+        elif lower_path.endswith(('.fit', '.fits')):
+            try:
+                with fits.open(file_path) as hdulist:
+                    # Find the first HDU with data (assumed to be a binary table)
+                    table_hdu = None
+                    for hdu in hdulist:
+                        if hdu.data is not None:
+                            table_hdu = hdu
+                            break
+                    if table_hdu is None:
+                        raise ValueError("No data found in FITS file.")
+                    data_table = table_hdu.data
+                    cols = table_hdu.columns.names
+                    if "TIME" not in cols:
+                        raise ValueError("TIME column not found in FITS file.")
+                    if "PDCSAP_FLUX" not in cols:
+                        raise ValueError("PDCSAP_FLUX column not found in FITS file.")
+                    time = data_table["TIME"]
+                    flux = data_table["PDCSAP_FLUX"]
+                    # Filter out rows with NaN flux.
+                    valid = ~np.isnan(flux)
+                    time = time[valid]
+                    flux = flux[valid]
+                    # Compute magnitude from flux.
+                    magnitude = -2.5 * np.log10(flux)
+                    if "PDCSAP_FLUX_ERR" in cols:
+                        flux_err = data_table["PDCSAP_FLUX_ERR"][valid]
+                        error = 1.08573625 * (flux_err / flux)
+                        data = np.column_stack((time, magnitude, error))
+                        headers = ["time", "magnitude", "error"]
+                    else:
+                        data = np.column_stack((time, magnitude))
+                        headers = ["time", "magnitude"]
+                    return data, headers
+            except Exception as e:
+                raise ValueError("FITS file parsing error: " + str(e))
         else:
-            delimiter = "\t"
-        try:
-            data = np.loadtxt(file_path, delimiter=delimiter, dtype=float)
-        except Exception as e:
-            raise ValueError("File parsing error: " + str(e))
-        if data.ndim == 1:
-            data = data[np.newaxis, :]
-        num_cols = data.shape[1]
-        if num_cols < 2 or num_cols > 3:
-            raise ValueError(f"File must have 2 or 3 columns, found {num_cols}.")
-        headers = ["time", "magnitude"] if num_cols == 2 else ["time", "magnitude", "error"]
-        return data, headers
+            raise ValueError("Unsupported file extension.")
 
     def on_tab_changed(self, index):
         self.stack.setCurrentIndex(index)
@@ -363,21 +473,21 @@ class MainWindow(QMainWindow):
     def _process_path(self, path):
         """
         Process a command-line argument:
-          - If it is a directory, expand it into all .dat and .tsv files (non-recursively)
+          - If it is a directory, expand it into all .dat, .tsv, .fit, and .fits files (non-recursively)
             and add them to the pending files list.
           - If it is a file (with a valid extension), add it to the pending files.
         """
         path = os.path.abspath(path.strip().strip('\'"'))
         if os.path.isdir(path):
-            # Expand the directory by adding each .dat or .tsv file found.
+            # Expand the directory by adding each valid file found.
             for entry in os.listdir(path):
                 full_path = os.path.join(path, entry)
-                if os.path.isfile(full_path) and full_path.lower().endswith(('.dat', '.tsv')):
+                if os.path.isfile(full_path) and full_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
                     self.pending_files.append(full_path)
-        elif os.path.isfile(path) and path.lower().endswith(('.dat', '.tsv')):
+        elif os.path.isfile(path) and path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
             self.pending_files.append(path)
         else:
-            print(f"Warning: {path} is not a valid .dat/.tsv file or directory.")
+            print(f"Warning: {path} is not a valid photometry file or directory.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -389,8 +499,8 @@ if __name__ == "__main__":
         if arg.strip():
             window._process_path(arg)
 
-    # Open files immediately if 4 or fewer are found; otherwise, update search results.
-    if len(window.pending_files) <= 4:
+    # Open files immediately if 10 or fewer are found; otherwise, update search results.
+    if len(window.pending_files) <= 10:
         for file_path in window.pending_files.copy():
             window.add_file_tab(file_path)
     else:
