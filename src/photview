@@ -304,8 +304,12 @@ class MainWindow(QMainWindow):
           - .fit/.fits files are read as FITS binary tables using astropy.io.fits.
             For FITS files:
               - TIME column provides the time.
-              - PDCSAP_FLUX column is used to compute magnitude: - 2.5 * log10(PDCSAP_FLUX)
-              - If PDCSAP_FLUX_ERR column exists, error is computed as 1.08573625 * (PDCSAP_FLUX_ERR / PDCSAP_FLUX)
+              - PDCSAP_FLUX column is used to compute magnitude using:
+                    magnitude = C - (2.5 * np.log10(PDCSAP_FLUX))
+                where C is 20.67 if 'tess' is found in the file name (case-insensitive)
+                or 0 otherwise (displaying the aperture magnitude).
+              - If PDCSAP_FLUX_ERR column exists, error is computed as
+                    1.08573625 * (PDCSAP_FLUX_ERR / PDCSAP_FLUX)
               - Rows with NaN PDCSAP_FLUX are filtered out.
         """
         lower_path = file_path.lower()
@@ -360,8 +364,13 @@ class MainWindow(QMainWindow):
                     valid = ~np.isnan(flux)
                     time = time[valid]
                     flux = flux[valid]
+                    # Determine constant C based on file name:
+                    if "tess" in file_path.lower():
+                        C = 20.67
+                    else:
+                        C = 0
                     # Compute magnitude from flux.
-                    magnitude = -2.5 * np.log10(flux)
+                    magnitude = C - (2.5 * np.log10(flux))
                     if "PDCSAP_FLUX_ERR" in cols:
                         flux_err = data_table["PDCSAP_FLUX_ERR"][valid]
                         error = 1.08573625 * (flux_err / flux)
