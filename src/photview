@@ -36,7 +36,6 @@ class NumpyTableModel(QtCore.QAbstractTableModel):
 
             # Format "time": truncate to 6 decimal places at most.
             if col_header == "time":
-                # Truncate (not round) using np.trunc
                 truncated = np.trunc(val * 1e6) / 1e6
                 s = f"{truncated:.6f}"
                 s = s.rstrip('0').rstrip('.') if '.' in s else s
@@ -48,9 +47,8 @@ class NumpyTableModel(QtCore.QAbstractTableModel):
                     return "nan"
                 if val == 0:
                     return "0"
-                # Determine exponent and scale for 2 significant digits.
                 exponent = np.floor(np.log10(abs(val)))
-                scale = 10 ** (exponent - 2)  # keeps 2 significant digits
+                scale = 10 ** (exponent - 2)
                 truncated_val = np.floor(val / scale) * scale
                 if abs(truncated_val) < 1e-2:
                     s = f"{truncated_val:.2e}"
@@ -78,7 +76,6 @@ class NumpyTableModel(QtCore.QAbstractTableModel):
                 s = s.rstrip('0').rstrip('.') if '.' in s else s
                 return s
 
-            # For other columns, simply return the value.
             else:
                 return str(raw_value)
         return None
@@ -103,22 +100,15 @@ class LazyTableWidget(QWidget):
         self.load_func = load_func  # Function to load the file (e.g. MainWindow.load_file)
         self.loaded = False
         self.layout = QVBoxLayout(self)
-        # Initial placeholder label.
         self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
         self.layout.addWidget(self.placeholder)
 
     def load_data(self, force=False):
-        """
-        Load (or reload) the file data.
-        If force is False and the data is already loaded, do nothing.
-        If force is True, any existing table/placeholder is removed and the data is (re)loaded.
-        """
         if self.loaded and not force:
             return
         try:
             data, headers = self.load_func(self.file_path)
         except Exception as e:
-            # Remove any existing widget and display the error.
             while self.layout.count():
                 child = self.layout.takeAt(0)
                 if child.widget():
@@ -128,35 +118,28 @@ class LazyTableWidget(QWidget):
             self.loaded = True
             return
 
-        # Remove any existing widgets (the placeholder or previous table).
         while self.layout.count():
             child = self.layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
-        # Create and add the filename label (only the filename, no extension or path).
         base_filename = os.path.basename(self.file_path)
         filename_without_extension, _ = os.path.splitext(base_filename)
         filename_label = QLabel(filename_without_extension)
         filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(filename_label)
 
-        # Create the table view with the loaded data.
         table_view = QTableView()
         model = NumpyTableModel(data, headers)
         table_view.setModel(model)
         header = table_view.horizontalHeader()
         header.setStretchLastSection(False)
-        # Set each column to resize to its contents so that numbers are fully visible.
         for col in range(model.columnCount()):
             header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.layout.addWidget(table_view)
         self.loaded = True
 
     def clear_data(self):
-        """
-        Clear the loaded data, replacing it with a new placeholder.
-        """
         while self.layout.count():
             child = self.layout.takeAt(0)
             if child.widget():
@@ -165,25 +148,37 @@ class LazyTableWidget(QWidget):
         self.layout.addWidget(self.placeholder)
         self.loaded = False
 
+class SearchLineEdit(QtWidgets.QLineEdit):
+    def keyPressEvent(self, event: QtGui.QKeyEvent):
+        # When Tab, Return, or Enter is pressed, emit the returnPressed signal.
+        if event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.returnPressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusNextPrevChild(self, next: bool) -> bool:
+        # Override to prevent Tab from moving focus away
+        return False
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._suppress_load = False
-        self.setWindowTitle("Photometry File Viewer")
-        self.last_tab_index = None  # Track last selected tab.
-        # Store file paths that are known but not yet opened as tabs.
+        self.setWindowTitle("Photometry viewer")
+        self.last_tab_index = None
         self.pending_files = []
 
-        # Central widget and main layout.
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
 
         # --- Search Bar and Dynamic Search List ---
         search_layout = QHBoxLayout()
-        self.search_bar = QtWidgets.QLineEdit()
+        self.search_bar = SearchLineEdit()  # Use the subclassed version
         self.search_bar.setPlaceholderText("Search ID")
-        self.search_bar.returnPressed.connect(self.on_search_return_pressed)
+        # Connect returnPressed to the search button’s click action
+        self.search_bar.returnPressed.connect(lambda: self.search_button.click())
         self.search_bar.textChanged.connect(self.update_search_results)
         self.search_button = QtWidgets.QPushButton("Search")
         self.search_button.clicked.connect(lambda: self.update_search_results(self.search_bar.text()))
@@ -207,7 +202,7 @@ class MainWindow(QMainWindow):
         self.tab_slider.valueChanged.connect(self.slider_tab_changed)
         self.main_layout.addWidget(self.tab_slider)
 
-        # --- Reload and Close Tab Buttons (same line) ---
+        # --- Reload and Close Tab Buttons ---
         button_layout = QHBoxLayout()
         self.reload_button = QtWidgets.QPushButton("Reload Current File")
         self.reload_button.clicked.connect(self.reload_current_tab)
@@ -243,12 +238,10 @@ class MainWindow(QMainWindow):
         if not os.path.isabs(file_path):
             file_path = os.path.abspath(file_path)
 
-        # Skip directories.
         if os.path.isdir(file_path):
             print(f"Skipping directory: {file_path}")
             return
 
-        # Only process files with valid extensions.
         if not file_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
             print(f"Skipping file (invalid extension): {file_path}")
             return
@@ -257,7 +250,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"File '{file_path}' not found.")
             return
 
-        # Avoid duplicate tabs.
         for i in range(self.stack.count()):
             widget = self.stack.widget(i)
             if hasattr(widget, "file_path") and widget.file_path == file_path:
@@ -265,11 +257,9 @@ class MainWindow(QMainWindow):
                 self.stack.setCurrentIndex(i)
                 return
 
-        # Remove file from pending if present.
         if file_path in self.pending_files:
             self.pending_files.remove(file_path)
 
-        # Create a lazy-loading tab.
         lazy_widget = LazyTableWidget(file_path, self.load_file)
         tab_label = os.path.basename(file_path)
         index = self.stack.addWidget(lazy_widget)
@@ -280,7 +270,6 @@ class MainWindow(QMainWindow):
         self.last_tab_index = index
 
     def open_file(self):
-        # Updated filter to include FITS files.
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open File", "", "Photometry files (*.tsv *.dat *.fit *.fits)"
         )
@@ -297,24 +286,9 @@ class MainWindow(QMainWindow):
                 self._process_path(path)
 
     def load_file(self, file_path):
-        """
-        Load a file based on its extension:
-          - .dat files are assumed to be space-delimited.
-          - .tsv files are tab-delimited.
-          - .fit/.fits files are read as FITS binary tables using astropy.io.fits.
-            For FITS files:
-              - TIME column provides the time.
-              - PDCSAP_FLUX column is used to compute magnitude using:
-                    magnitude = C - (2.5 * np.log10(PDCSAP_FLUX))
-                where C is 20.67 if 'tess' is found in the file name (case-insensitive)
-                or 0 otherwise (displaying the aperture magnitude).
-              - If PDCSAP_FLUX_ERR column exists, error is computed as
-                    1.08573625 * (PDCSAP_FLUX_ERR / PDCSAP_FLUX)
-              - Rows with NaN PDCSAP_FLUX are filtered out.
-        """
         lower_path = file_path.lower()
         if lower_path.endswith(".dat"):
-            delimiter = None  # whitespace
+            delimiter = None
             try:
                 data = np.loadtxt(file_path, delimiter=delimiter, dtype=float)
             except Exception as e:
@@ -344,7 +318,6 @@ class MainWindow(QMainWindow):
         elif lower_path.endswith(('.fit', '.fits')):
             try:
                 with fits.open(file_path) as hdulist:
-                    # Find the first HDU with data (assumed to be a binary table)
                     table_hdu = None
                     for hdu in hdulist:
                         if hdu.data is not None:
@@ -360,16 +333,13 @@ class MainWindow(QMainWindow):
                         raise ValueError("PDCSAP_FLUX column not found in FITS file.")
                     time = data_table["TIME"]
                     flux = data_table["PDCSAP_FLUX"]
-                    # Filter out rows with NaN flux.
                     valid = ~np.isnan(flux)
                     time = time[valid]
                     flux = flux[valid]
-                    # Determine constant C based on file name:
                     if "tess" in file_path.lower():
                         C = 20.67
                     else:
                         C = 0
-                    # Compute magnitude from flux.
                     magnitude = C - (2.5 * np.log10(flux))
                     if "PDCSAP_FLUX_ERR" in cols:
                         flux_err = data_table["PDCSAP_FLUX_ERR"][valid]
@@ -444,21 +414,31 @@ class MainWindow(QMainWindow):
             self.search_results_list.hide()
             return
 
-        # Search among open tabs.
+        search_lower = text.lower()
+        items = []
+
         for i in range(self.tab_bar.count()):
             tab_label = self.tab_bar.tabText(i)
-            if text.lower() in tab_label.lower():
+            if search_lower in tab_label.lower():
                 item = QListWidgetItem(tab_label)
                 item.setData(Qt.ItemDataRole.UserRole, ("tab", i))
-                self.search_results_list.addItem(item)
-        # Search among pending files.
-        for file_path in self.pending_files:
-            file_name = os.path.basename(file_path)
-            if text.lower() in file_name.lower():
-                item = QListWidgetItem(file_name)
-                item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
-                self.search_results_list.addItem(item)
-        if self.search_results_list.count() > 0:
+                items.append(item)
+
+        sender = self.sender()
+        if not (sender == self.search_bar and len(self.pending_files) > 8192):
+            for file_path in self.pending_files:
+                file_name = os.path.basename(file_path)
+                if search_lower in file_name.lower():
+                    item = QListWidgetItem(file_name)
+                    item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
+                    items.append(item)
+
+        items.sort(key=lambda item: item.text().lower())
+
+        for item in items:
+            self.search_results_list.addItem(item)
+
+        if items:
             self.search_results_list.show()
         else:
             self.search_results_list.hide()
@@ -474,21 +454,9 @@ class MainWindow(QMainWindow):
             self.add_file_tab(file_path)
         self.search_results_list.hide()
 
-    def on_search_return_pressed(self):
-        if self.search_results_list.count() > 0:
-            item = self.search_results_list.item(0)
-            self.on_search_item_clicked(item)
-
     def _process_path(self, path):
-        """
-        Process a command-line argument:
-          - If it is a directory, expand it into all .dat, .tsv, .fit, and .fits files (non-recursively)
-            and add them to the pending files list.
-          - If it is a file (with a valid extension), add it to the pending files.
-        """
         path = os.path.abspath(path.strip().strip('\'"'))
         if os.path.isdir(path):
-            # Expand the directory by adding each valid file found.
             for entry in os.listdir(path):
                 full_path = os.path.join(path, entry)
                 if os.path.isfile(full_path) and full_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
@@ -502,13 +470,10 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
 
-    # Process every command-line argument.
-    # Directories will be expanded into their constituent files.
     for arg in sys.argv[1:]:
         if arg.strip():
             window._process_path(arg)
 
-    # Open files immediately if 10 or fewer are found; otherwise, update search results.
     if len(window.pending_files) <= 10:
         for file_path in window.pending_files.copy():
             window.add_file_tab(file_path)
