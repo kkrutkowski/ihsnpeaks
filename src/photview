@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+import sys
+import os
+import numpy as np
+from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog,
+    QTableView, QVBoxLayout, QHBoxLayout, QWidget, QSlider, QListWidget, QListWidgetItem, QLabel,
+    QTabBar, QStackedWidget
+)
+
+class NumpyTableModel(QtCore.QAbstractTableModel):
+    def __init__(self, data, headers, parent=None):
+        super().__init__(parent)
+        self._data = data
+        self._headers = headers
+
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        return self._data.shape[0]
+
+    def columnCount(self, parent=QtCore.QModelIndex()):
+        return self._data.shape[1]
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
+            value = self._data[index.row(), index.column()]
+            return str(value)
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
+                if section < len(self._headers):
+                    return self._headers[section]
+            else:
+                return str(section)
+        return None
+
+class LazyTableWidget(QWidget):
+    """
+    A widget that defers loading of file data until the tab is selected.
+    When load_data() is called with force=True the widget re-reads the file.
+    """
+    def __init__(self, file_path, load_func, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.load_func = load_func  # Function to load the file (e.g. MainWindow.load_file)
+        self.loaded = False
+        self.layout = QVBoxLayout(self)
+        # Initial placeholder label.
+        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
+        self.layout.addWidget(self.placeholder)
+
+    def load_data(self, force=False):
+        """
+        Load (or reload) the file data.
+        If force is False and the data is already loaded, do nothing.
+        If force is True, any existing table/placeholder is removed and the data is (re)loaded.
+        """
+        if self.loaded and not force:
+            return
+        try:
+            data, headers = self.load_func(self.file_path)
+        except Exception as e:
+            # Remove any existing widget and display the error.
+            while self.layout.count():
+                child = self.layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+            error_label = QLabel(f"Error loading file:\n{e}")
+            self.layout.addWidget(error_label)
+            self.loaded = True
+            return
+
+        # Remove any existing widgets (the placeholder or previous table).
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # Create and add the filename label (only the filename, no extension or path).
+        base_filename = os.path.basename(self.file_path)
+        filename_without_extension, _ = os.path.splitext(base_filename)
+        filename_label = QLabel(filename_without_extension)
+        filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(filename_label)
+
+        # Create the table view with the loaded data.
+        table_view = QTableView()
+        model = NumpyTableModel(data, headers)
+        table_view.setModel(model)
+        header = table_view.horizontalHeader()
+        header.setStretchLastSection(False)
+        for col in range(model.columnCount()):
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Interactive)
+        self.layout.addWidget(table_view)
+        self.loaded = True
+
+    def clear_data(self):
+        """
+        Clear the loaded data, replacing it with a new placeholder.
+        """
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
+        self.layout.addWidget(self.placeholder)
+        self.loaded = False
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self._suppress_load = False
+        self.setWindowTitle("Photometry File Viewer")
+        self.last_tab_index = None  # Track last selected tab.
+        # Store file paths that are known but not yet opened as tabs.
+        self.pending_files = []
+
+        # Central widget and main layout.
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        self.main_layout = QVBoxLayout(central_widget)
+
+        # --- Search Bar and Dynamic Search List ---
+        search_layout = QHBoxLayout()
+        self.search_bar = QtWidgets.QLineEdit()
+        self.search_bar.setPlaceholderText("Search ID")
+        self.search_bar.returnPressed.connect(self.on_search_return_pressed)
+        self.search_bar.textChanged.connect(self.update_search_results)
+        self.search_button = QtWidgets.QPushButton("Search")
+        self.search_button.clicked.connect(lambda: self.update_search_results(self.search_bar.text()))
+        search_layout.addWidget(self.search_bar)
+        search_layout.addWidget(self.search_button)
+        self.main_layout.addLayout(search_layout)
+
+        self.search_results_list = QListWidget()
+        self.search_results_list.hide()
+        self.search_results_list.itemClicked.connect(self.on_search_item_clicked)
+        self.main_layout.addWidget(self.search_results_list)
+
+        # --- Tab Manager Layout ---
+        self.tab_bar = QTabBar()
+        self.tab_bar.currentChanged.connect(self.on_tab_changed)
+        self.tab_bar.tabBarClicked.connect(self.on_tab_bar_clicked)
+        self.main_layout.addWidget(self.tab_bar)
+
+        self.tab_slider = QSlider(Qt.Orientation.Horizontal)
+        self.tab_slider.setMinimum(0)
+        self.tab_slider.valueChanged.connect(self.slider_tab_changed)
+        self.main_layout.addWidget(self.tab_slider)
+
+        # --- Reload and Close Tab Buttons (same line) ---
+        button_layout = QHBoxLayout()
+        self.reload_button = QtWidgets.QPushButton("Reload Current File")
+        self.reload_button.clicked.connect(self.reload_current_tab)
+        button_layout.addWidget(self.reload_button)
+        self.close_tab_button = QtWidgets.QPushButton("Close Tab")
+        self.close_tab_button.clicked.connect(self.close_current_tab)
+        button_layout.addWidget(self.close_tab_button)
+        self.main_layout.addLayout(button_layout)
+
+        self.stack = QStackedWidget()
+        self.main_layout.addWidget(self.stack)
+
+        # --- Menu ---
+        self.create_menu()
+
+    def create_menu(self):
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("File")
+        open_menu = QtWidgets.QMenu("Open", self)
+
+        direct_action = QtGui.QAction("Direct", self)
+        direct_action.triggered.connect(self.open_file_direct)
+        open_menu.addAction(direct_action)
+
+        browse_action = QtGui.QAction("Browse", self)
+        browse_action.triggered.connect(self.open_file)
+        open_menu.addAction(browse_action)
+
+        file_menu.addMenu(open_menu)
+
+    def add_file_tab(self, file_path):
+        file_path = file_path.strip().strip('\'"')
+        if not os.path.isabs(file_path):
+            file_path = os.path.abspath(file_path)
+
+        # Skip directories.
+        if os.path.isdir(file_path):
+            print(f"Skipping directory: {file_path}")
+            return
+
+        # Only process files with valid extensions.
+        if not file_path.lower().endswith(('.dat', '.tsv')):
+            print(f"Skipping file (invalid extension): {file_path}")
+            return
+
+        if not os.path.exists(file_path):
+            QMessageBox.critical(self, "Error", f"File '{file_path}' not found.")
+            return
+
+        # Avoid duplicate tabs.
+        for i in range(self.stack.count()):
+            widget = self.stack.widget(i)
+            if hasattr(widget, "file_path") and widget.file_path == file_path:
+                self.tab_bar.setCurrentIndex(i)
+                self.stack.setCurrentIndex(i)
+                return
+
+        # Remove file from pending if present.
+        if file_path in self.pending_files:
+            self.pending_files.remove(file_path)
+
+        # Create a lazy-loading tab.
+        lazy_widget = LazyTableWidget(file_path, self.load_file)
+        tab_label = os.path.basename(file_path)
+        index = self.stack.addWidget(lazy_widget)
+        self.tab_bar.addTab(tab_label)
+        self.tab_bar.setCurrentIndex(index)
+        self.stack.setCurrentIndex(index)
+        self.update_slider_range()
+        self.last_tab_index = index
+
+    def open_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open File", "", "Text files (*.tsv *.dat)"
+        )
+        if file_path:
+            self.add_file_tab(file_path)
+
+    def open_file_direct(self):
+        text, ok = QInputDialog.getText(
+            self, "Direct Open", "Enter file path(s) separated by spaces:"
+        )
+        if ok and text:
+            paths = [p.strip() for p in text.split(" ") if p.strip()]
+            for path in paths:
+                self._process_path(path)
+
+    def load_file(self, file_path):
+        """
+        Load a .tsv or .dat file using NumPy.
+          - .dat files are assumed to be space-delimited.
+          - .tsv files are tab-delimited.
+        Only files with 2 or 3 columns (all convertible to float) are accepted.
+        """
+        if file_path.lower().endswith(".dat"):
+            delimiter = None  # whitespace
+        elif file_path.lower().endswith(".tsv"):
+            delimiter = "\t"
+        else:
+            delimiter = "\t"
+        try:
+            data = np.loadtxt(file_path, delimiter=delimiter, dtype=float)
+        except Exception as e:
+            raise ValueError("File parsing error: " + str(e))
+        if data.ndim == 1:
+            data = data[np.newaxis, :]
+        num_cols = data.shape[1]
+        if num_cols < 2 or num_cols > 3:
+            raise ValueError(f"File must have 2 or 3 columns, found {num_cols}.")
+        headers = ["time", "magnitude"] if num_cols == 2 else ["time", "magnitude", "error"]
+        return data, headers
+
+    def on_tab_changed(self, index):
+        self.stack.setCurrentIndex(index)
+        widget = self.stack.widget(index)
+        if widget and hasattr(widget, 'load_data'):
+            if not self._suppress_load:
+                widget.load_data(force=False)
+        self.tab_slider.blockSignals(True)
+        self.tab_slider.setValue(index)
+        self.tab_slider.blockSignals(False)
+        self._suppress_load = False
+        self.last_tab_index = index
+
+    def on_tab_bar_clicked(self, index):
+        if index == self.tab_bar.currentIndex():
+            widget = self.stack.widget(index)
+            if widget and hasattr(widget, 'load_data'):
+                widget.load_data(force=True)
+
+    def slider_tab_changed(self, value):
+        if 0 <= value < self.stack.count():
+            self._suppress_load = True
+            self.tab_bar.setCurrentIndex(value)
+            self.stack.setCurrentIndex(value)
+
+    def reload_current_tab(self):
+        index = self.tab_bar.currentIndex()
+        widget = self.stack.widget(index)
+        if widget and hasattr(widget, 'load_data'):
+            widget.load_data(force=True)
+
+    def close_current_tab(self):
+        index = self.tab_bar.currentIndex()
+        if index < 0:
+            return
+        widget = self.stack.widget(index)
+        self.stack.removeWidget(widget)
+        widget.deleteLater()
+        self.tab_bar.removeTab(index)
+        self.update_slider_range()
+        if self.stack.count() > 0:
+            new_index = max(0, index - 1)
+            self.tab_bar.setCurrentIndex(new_index)
+            self.stack.setCurrentIndex(new_index)
+            self.last_tab_index = new_index
+        else:
+            self.last_tab_index = None
+
+    def update_slider_range(self):
+        count = self.stack.count()
+        self.tab_slider.setMaximum(max(count - 1, 0))
+        self.tab_slider.setEnabled(count > 1)
+
+    def update_search_results(self, text):
+        text = text.strip()
+        self.search_results_list.clear()
+        if not text:
+            self.search_results_list.hide()
+            return
+
+        # Search among open tabs.
+        for i in range(self.tab_bar.count()):
+            tab_label = self.tab_bar.tabText(i)
+            if text.lower() in tab_label.lower():
+                item = QListWidgetItem(tab_label)
+                item.setData(Qt.ItemDataRole.UserRole, ("tab", i))
+                self.search_results_list.addItem(item)
+        # Search among pending files.
+        for file_path in self.pending_files:
+            file_name = os.path.basename(file_path)
+            if text.lower() in file_name.lower():
+                item = QListWidgetItem(file_name)
+                item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
+                self.search_results_list.addItem(item)
+        if self.search_results_list.count() > 0:
+            self.search_results_list.show()
+        else:
+            self.search_results_list.hide()
+
+    def on_search_item_clicked(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data[0] == "tab":
+            index = data[1]
+            self.tab_bar.setCurrentIndex(index)
+            self.stack.setCurrentIndex(index)
+        elif data[0] == "pending":
+            file_path = data[1]
+            self.add_file_tab(file_path)
+        self.search_results_list.hide()
+
+    def on_search_return_pressed(self):
+        if self.search_results_list.count() > 0:
+            item = self.search_results_list.item(0)
+            self.on_search_item_clicked(item)
+
+    def _process_path(self, path):
+        """
+        Process a command-line argument:
+          - If it is a directory, expand it into all .dat and .tsv files (non-recursively)
+            and add them to the pending files list.
+          - If it is a file (with a valid extension), add it to the pending files.
+        """
+        path = os.path.abspath(path.strip().strip('\'"'))
+        if os.path.isdir(path):
+            # Expand the directory by adding each .dat or .tsv file found.
+            for entry in os.listdir(path):
+                full_path = os.path.join(path, entry)
+                if os.path.isfile(full_path) and full_path.lower().endswith(('.dat', '.tsv')):
+                    self.pending_files.append(full_path)
+        elif os.path.isfile(path) and path.lower().endswith(('.dat', '.tsv')):
+            self.pending_files.append(path)
+        else:
+            print(f"Warning: {path} is not a valid .dat/.tsv file or directory.")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+
+    # Process every command-line argument.
+    # Directories will be expanded into their constituent files.
+    for arg in sys.argv[1:]:
+        if arg.strip():
+            window._process_path(arg)
+
+    # Open files immediately if 4 or fewer are found; otherwise, update search results.
+    if len(window.pending_files) <= 4:
+        for file_path in window.pending_files.copy():
+            window.add_file_tab(file_path)
+    else:
+        window.update_search_results(window.search_bar.text())
+
+    window.resize(800, 600)
+    window.show()
+    sys.exit(app.exec())
