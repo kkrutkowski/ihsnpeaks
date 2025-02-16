@@ -16,53 +16,9 @@
 #include <fast_convert.h>
 #include <fftw3.h>
 
+#include "common.h"
+
 static inline size_t round_buffer(size_t size) {return (size + 63) & ~63;}
-
-#ifndef PEAK_T
-#define PEAK_T
-typedef struct {
-    double freq;
-    float  p;
-    float  amp;
-    float  r;
-} peak_t;
-#endif
-
-#ifndef BUFFER_T
-#define BUFFER_T
-typedef struct {
-    bool allocated;
-    uint8_t loc_iter;
-    uint32_t   len;
-    uint32_t     n;
-    uint32_t     r;
-    uint32_t terms;
-    uint32_t memBlockSize;
-
-    peak_t* peaks;
-    uint32_t nPeaks;
-
-    char*  readBuf;
-    double*      x;
-    float*       y;
-    float*      dy;
-
-    size_t* pidx; //phase indices for counting sort
-
-    void** buf;
-
-    float magnitude;
-    uint32_t gridSize; uint32_t nGrids;
-
-    complex float ** grids; //used to compute the FFT
-    uint32_t** gidx; //grid indices for NFFT
-    float** gdist;
-    float** weights;
-
-    sds spectrum;
-    sds outBuf;
-} buffer_t;
-#endif
 
 #include "convolution.h"
 
