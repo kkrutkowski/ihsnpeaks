@@ -3,6 +3,10 @@ import sys
 import os
 import numpy as np
 from astropy.io import fits  # FITS support
+
+#import pyqtgraph as pg
+#add a 'lazy import' for pyqtgraph
+
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
