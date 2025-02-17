@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 import sys
 import os
+import struct
 import numpy as np
 from astropy.io import fits  # FITS support
-
-#import pyqtgraph as pg
-#add a 'lazy import' for pyqtgraph
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
@@ -15,6 +13,209 @@ from PyQt6.QtWidgets import (
     QTabBar, QStackedWidget
 )
 
+# --- Phot64 Quantization Constants ---
+TIME_QUANT = 1e-5      # for the 32-bit time field
+Y_QUANT = 1.25e-4      # for the 20-bit y field
+DY_QUANT = 2.5e-4      # for the 12-bit dy field
+
+# -------------------------------
+# Functions for loading & converting .phot64 files
+# -------------------------------
+def load_phot64_file(filepath):
+    """
+    Loads a .phot64 file fully into memory.
+    Returns a list of photometry objects (dictionaries) where each object has:
+       - "id": the object's ID (a string)
+       - "allocated": padded size (an int)
+       - "filled": actual number of measurements (an int)
+       - "time": the time of the first measurement (a float)
+       - "data": a numpy array of uint64 values containing the packed measurements
+    """
+    with open(filepath, "rb") as f:
+        # Read the number of objects (uint64) and convert to a Python int.
+        count = int(np.frombuffer(f.read(8), dtype='<u8')[0])
+
+        # Read offsets (count+1 uint64 values)
+        offsets = np.frombuffer(f.read(8 * (count + 1)), dtype='<u8')
+
+        # Read the IDs block (each ID is exactly 64 bytes, padded with zeros)
+        ids_array = np.frombuffer(f.read(count * 64), dtype='S64')
+        ids = [s.decode('utf-8').rstrip('\x00') for s in ids_array]
+
+        # Read the sizes block (allocated, filled, and time for each object; stored as doubles)
+        sizes = np.frombuffer(f.read(count * 24), dtype='<f8').reshape((count, 3))
+        allocated = sizes[:, 0]
+        filled = sizes[:, 1]
+        first_times = sizes[:, 2]
+
+        # Total number of uint64 values in the data block is given by the last offset.
+        total_data = int(offsets[-1])
+        data = np.frombuffer(f.read(total_data * 8), dtype='<u8')
+
+        objects = []
+        for i in range(count):
+            start = int(offsets[i])
+            end = int(offsets[i+1])
+            # Copy the slice so that each object’s data is independent.
+            raw_data = data[start:end].copy()
+            obj = {
+                "id": ids[i],
+                "allocated": int(allocated[i]),
+                "filled": int(filled[i]),
+                "time": first_times[i],
+                "data": raw_data  # still in packed uint64 format
+            }
+            objects.append(obj)
+    return objects
+
+def convert_phot64_data(phot64_obj):
+    """
+    Converts the packed uint64 data for a phot64 object into a float table.
+    Only the first 'filled' measurements are converted.
+    Returns (data, headers), where data is a 2D numpy array with columns:
+         time, magnitude, error.
+    The conversion uses the global quantization constants.
+    """
+    # Use only the first "filled" elements (the rest are zero padding).
+    raw_data = phot64_obj["data"][:phot64_obj["filled"]]
+    raw_data = np.asarray(raw_data, dtype=np.uint64)
+
+    # Extract fields:
+    time_int = raw_data >> 32
+    y_packed = (raw_data >> 12) & 0xFFFFF  # 20 bits for magnitude (sign–magnitude)
+    dy_int = raw_data & 0xFFF              # 12 bits for error
+
+    # Convert y_packed to signed integer:
+    sign_mask = 1 << 19
+    y_int = np.where((y_packed & sign_mask) != 0, - (y_packed & 0x7FFFF), y_packed)
+
+    # Reconstruct the actual values.
+    time_vals = phot64_obj["time"] + time_int.astype(np.float64) * TIME_QUANT
+    mag_vals = y_int.astype(np.float64) * Y_QUANT
+    err_vals = dy_int.astype(np.float64) * DY_QUANT
+
+    data = np.column_stack((time_vals, mag_vals, err_vals))
+    return data, ["time", "magnitude", "error"]
+
+# -------------------------------
+# Lazy widget for phot64 object tabs
+# -------------------------------
+class LazyPhot64ObjectWidget(QWidget):
+    """
+    A widget for displaying a single phot64 object.
+    The widget stores the file path and the phot64 object metadata.
+    Data conversion from the raw uint64 measurements to floats is done
+    only when load_data() is called (e.g. when the tab is selected).
+    """
+    def __init__(self, file_path, phot64_obj, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.phot64_obj = phot64_obj
+        self.loaded = False
+        self.layout = QVBoxLayout(self)
+        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
+        self.layout.addWidget(self.placeholder)
+
+    def load_data(self, force=False):
+        if self.loaded and not force:
+            return
+        try:
+            data, headers = convert_phot64_data(self.phot64_obj)
+        except Exception as e:
+            while self.layout.count():
+                child = self.layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+            error_label = QLabel(f"Error loading phot64 object data:\n{e}")
+            self.layout.addWidget(error_label)
+            self.loaded = True
+            return
+
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # Show only the object's ID here (instead of file/ID).
+        id_label = QLabel(self.phot64_obj['id'])
+        id_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(id_label)
+
+        table_view = QTableView()
+        model = NumpyTableModel(data, headers)
+        table_view.setModel(model)
+        header = table_view.horizontalHeader()
+        header.setStretchLastSection(False)
+        for col in range(model.columnCount()):
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.layout.addWidget(table_view)
+        self.loaded = True
+
+# -------------------------------
+# Original Lazy widget for non–phot64 files (unchanged)
+# -------------------------------
+class LazyTableWidget(QWidget):
+    """
+    A widget that defers loading of file data until the tab is selected.
+    When load_data() is called with force=True the widget re-reads the file.
+    """
+    def __init__(self, file_path, load_func, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.load_func = load_func  # Function to load the file (e.g. MainWindow.load_file)
+        self.loaded = False
+        self.layout = QVBoxLayout(self)
+        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
+        self.layout.addWidget(self.placeholder)
+
+    def load_data(self, force=False):
+        if self.loaded and not force:
+            return
+        try:
+            data, headers = self.load_func(self.file_path)
+        except Exception as e:
+            while self.layout.count():
+                child = self.layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+            error_label = QLabel(f"Error loading file:\n{e}")
+            self.layout.addWidget(error_label)
+            self.loaded = True
+            return
+
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        base_filename = os.path.basename(self.file_path)
+        filename_without_extension, _ = os.path.splitext(base_filename)
+        filename_label = QLabel(filename_without_extension)
+        filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(filename_label)
+
+        table_view = QTableView()
+        model = NumpyTableModel(data, headers)
+        table_view.setModel(model)
+        header = table_view.horizontalHeader()
+        header.setStretchLastSection(False)
+        for col in range(model.columnCount()):
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.layout.addWidget(table_view)
+        self.loaded = True
+
+    def clear_data(self):
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
+        self.layout.addWidget(self.placeholder)
+        self.loaded = False
+
+# -------------------------------
+# Table model (unchanged)
+# -------------------------------
 class NumpyTableModel(QtCore.QAbstractTableModel):
     def __init__(self, data, headers, parent=None):
         super().__init__(parent)
@@ -93,65 +294,9 @@ class NumpyTableModel(QtCore.QAbstractTableModel):
                 return str(section)
         return None
 
-class LazyTableWidget(QWidget):
-    """
-    A widget that defers loading of file data until the tab is selected.
-    When load_data() is called with force=True the widget re-reads the file.
-    """
-    def __init__(self, file_path, load_func, parent=None):
-        super().__init__(parent)
-        self.file_path = file_path
-        self.load_func = load_func  # Function to load the file (e.g. MainWindow.load_file)
-        self.loaded = False
-        self.layout = QVBoxLayout(self)
-        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
-        self.layout.addWidget(self.placeholder)
-
-    def load_data(self, force=False):
-        if self.loaded and not force:
-            return
-        try:
-            data, headers = self.load_func(self.file_path)
-        except Exception as e:
-            while self.layout.count():
-                child = self.layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            error_label = QLabel(f"Error loading file:\n{e}")
-            self.layout.addWidget(error_label)
-            self.loaded = True
-            return
-
-        while self.layout.count():
-            child = self.layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        base_filename = os.path.basename(self.file_path)
-        filename_without_extension, _ = os.path.splitext(base_filename)
-        filename_label = QLabel(filename_without_extension)
-        filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(filename_label)
-
-        table_view = QTableView()
-        model = NumpyTableModel(data, headers)
-        table_view.setModel(model)
-        header = table_view.horizontalHeader()
-        header.setStretchLastSection(False)
-        for col in range(model.columnCount()):
-            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        self.layout.addWidget(table_view)
-        self.loaded = True
-
-    def clear_data(self):
-        while self.layout.count():
-            child = self.layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
-        self.layout.addWidget(self.placeholder)
-        self.loaded = False
-
+# -------------------------------
+# Customized Search LineEdit (unchanged)
+# -------------------------------
 class SearchLineEdit(QtWidgets.QLineEdit):
     def keyPressEvent(self, event: QtGui.QKeyEvent):
         # When Tab, Return, or Enter is pressed, emit the returnPressed signal.
@@ -165,13 +310,17 @@ class SearchLineEdit(QtWidgets.QLineEdit):
         # Override to prevent Tab from moving focus away
         return False
 
+# -------------------------------
+# Main window with added .phot64 support
+# -------------------------------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._suppress_load = False
         self.setWindowTitle("Photometry viewer")
         self.last_tab_index = None
-        self.pending_files = []
+        self.pending_files = []  # for non–phot64 files
+        self.phot64_objects = []  # list of tuples: (file_path, phot64_object)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -246,6 +395,12 @@ class MainWindow(QMainWindow):
             print(f"Skipping directory: {file_path}")
             return
 
+        # For phot64 files, use the separate handler.
+        if file_path.lower().endswith(".phot64"):
+            self.add_phot64_file(file_path)
+            self.update_search_results(self.search_bar.text())
+            return
+
         if not file_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
             print(f"Skipping file (invalid extension): {file_path}")
             return
@@ -273,12 +428,47 @@ class MainWindow(QMainWindow):
         self.update_slider_range()
         self.last_tab_index = index
 
+    def add_phot64_file(self, file_path):
+        """
+        Loads a phot64 file and stores each contained object for later access.
+        """
+        try:
+            phot_objects = load_phot64_file(file_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading phot64 file:\n{e}")
+            return
+        for obj in phot_objects:
+            # Each item is a tuple: (file_path, phot64_object)
+            self.phot64_objects.append((file_path, obj))
+        print(f"Loaded {len(phot_objects)} objects from {file_path}.")
+
+    def add_phot64_tab(self, file_path, phot64_obj):
+        # Check if a tab for this phot64 object already exists.
+        for i in range(self.stack.count()):
+            widget = self.stack.widget(i)
+            if hasattr(widget, "file_path") and hasattr(widget, "phot64_obj"):
+                if widget.file_path == file_path and widget.phot64_obj["id"] == phot64_obj["id"]:
+                    self.tab_bar.setCurrentIndex(i)
+                    self.stack.setCurrentIndex(i)
+                    return
+        widget = LazyPhot64ObjectWidget(file_path, phot64_obj)
+        tab_label = f"{os.path.basename(file_path)}/{phot64_obj['id']}"
+        index = self.stack.addWidget(widget)
+        self.tab_bar.addTab(tab_label)
+        self.tab_bar.setCurrentIndex(index)
+        self.stack.setCurrentIndex(index)
+        self.update_slider_range()
+
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open File", "", "Photometry files (*.tsv *.dat *.fit *.fits)"
+            self, "Open File", "", "Photometry files (*.tsv *.dat *.fit *.fits *.phot64)"
         )
         if file_path:
-            self.add_file_tab(file_path)
+            if file_path.lower().endswith(".phot64"):
+                self.add_phot64_file(file_path)
+                self.update_search_results(self.search_bar.text())
+            else:
+                self.add_file_tab(file_path)
 
     def open_file_direct(self):
         text, ok = QInputDialog.getText(
@@ -421,6 +611,7 @@ class MainWindow(QMainWindow):
         search_lower = text.lower()
         items = []
 
+        # First, add items for already open tabs (non–phot64 files).
         for i in range(self.tab_bar.count()):
             tab_label = self.tab_bar.tabText(i)
             if search_lower in tab_label.lower():
@@ -428,16 +619,26 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.ItemDataRole.UserRole, ("tab", i))
                 items.append(item)
 
-        sender = self.sender()
-        if not (sender == self.search_bar and len(self.pending_files) > 8192):
-            for file_path in self.pending_files:
-                file_name = os.path.basename(file_path)
-                if search_lower in file_name.lower():
-                    item = QListWidgetItem(file_name)
-                    item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
-                    items.append(item)
+        # Next, add pending files (non–phot64).
+        for file_path in self.pending_files:
+            file_name = os.path.basename(file_path)
+            if search_lower in file_name.lower():
+                item = QListWidgetItem(file_name)
+                item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
+                items.append(item)
 
-        items.sort(key=lambda item: item.text().lower())
+        # Finally, add phot64 objects.
+        for (fpath, obj) in self.phot64_objects:
+            label = f"{os.path.basename(fpath)}/{obj['id']}"
+            if search_lower in label.lower():
+                item = QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, ("phot64", fpath, obj))
+                items.append(item)
+
+        # If there is any non-phot64 result, sort the items;
+        # otherwise, leave phot64 items in file–order.
+        if any(item.data(Qt.ItemDataRole.UserRole)[0] in ("tab", "pending") for item in items):
+            items.sort(key=lambda item: item.text().lower())
 
         for item in items:
             self.search_results_list.addItem(item)
@@ -456,6 +657,10 @@ class MainWindow(QMainWindow):
         elif data[0] == "pending":
             file_path = data[1]
             self.add_file_tab(file_path)
+        elif data[0] == "phot64":
+            file_path = data[1]
+            phot64_obj = data[2]
+            self.add_phot64_tab(file_path, phot64_obj)
         self.search_results_list.hide()
 
     def _process_path(self, path):
@@ -463,10 +668,17 @@ class MainWindow(QMainWindow):
         if os.path.isdir(path):
             for entry in os.listdir(path):
                 full_path = os.path.join(path, entry)
-                if os.path.isfile(full_path) and full_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
-                    self.pending_files.append(full_path)
-        elif os.path.isfile(path) and path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
-            self.pending_files.append(path)
+                if os.path.isfile(full_path) and full_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits', '.phot64')):
+                    # For phot64 files, process them separately.
+                    if full_path.lower().endswith('.phot64'):
+                        self.add_phot64_file(full_path)
+                    else:
+                        self.pending_files.append(full_path)
+        elif os.path.isfile(path) and path.lower().endswith(('.dat', '.tsv', '.fit', '.fits', '.phot64')):
+            if path.lower().endswith('.phot64'):
+                self.add_phot64_file(path)
+            else:
+                self.pending_files.append(path)
         else:
             print(f"Warning: {path} is not a valid photometry file or directory.")
 
@@ -474,10 +686,12 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
 
+    # Process command-line arguments.
     for arg in sys.argv[1:]:
         if arg.strip():
             window._process_path(arg)
 
+    # If only a few non–phot64 files are pending, open them as tabs.
     if len(window.pending_files) <= 10:
         for file_path in window.pending_files.copy():
             window.add_file_tab(file_path)
