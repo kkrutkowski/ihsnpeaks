@@ -295,19 +295,22 @@ class NumpyTableModel(QtCore.QAbstractTableModel):
         return None
 
 # -------------------------------
-# Customized Search LineEdit (unchanged)
+# Customized Search LineEdit with forced–search support
 # -------------------------------
 class SearchLineEdit(QtWidgets.QLineEdit):
+    # Custom signal to indicate a forced search (via Tab or Enter)
+    forceSearch = QtCore.pyqtSignal()
+
     def keyPressEvent(self, event: QtGui.QKeyEvent):
-        # When Tab, Return, or Enter is pressed, emit the returnPressed signal.
+        # For Tab, Return, or Enter, emit forceSearch and do not pass the event on.
         if event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.returnPressed.emit()
+            self.forceSearch.emit()
             event.accept()
             return
         super().keyPressEvent(event)
 
     def focusNextPrevChild(self, next: bool) -> bool:
-        # Override to prevent Tab from moving focus away
+        # Override to prevent Tab from moving focus away.
         return False
 
 # -------------------------------
@@ -330,11 +333,13 @@ class MainWindow(QMainWindow):
         search_layout = QHBoxLayout()
         self.search_bar = SearchLineEdit()  # Use the subclassed version
         self.search_bar.setPlaceholderText("Search ID")
-        # Connect returnPressed to the search button’s click action
-        self.search_bar.returnPressed.connect(lambda: self.search_button.click())
-        self.search_bar.textChanged.connect(self.update_search_results)
+        # Connect forceSearch (from Tab, Enter, or Space) to force a full search.
+        self.search_bar.forceSearch.connect(lambda: self.update_search_results(self.search_bar.text(), True))
+        # Also, textChanged will trigger an automatic search.
+        self.search_bar.textChanged.connect(lambda text: self.update_search_results(text, False))
         self.search_button = QtWidgets.QPushButton("Search")
-        self.search_button.clicked.connect(lambda: self.update_search_results(self.search_bar.text()))
+        # Clicking the search button forces a full search.
+        self.search_button.clicked.connect(lambda: self.update_search_results(self.search_bar.text(), True))
         search_layout.addWidget(self.search_bar)
         search_layout.addWidget(self.search_button)
         self.main_layout.addLayout(search_layout)
@@ -398,7 +403,7 @@ class MainWindow(QMainWindow):
         # For phot64 files, use the separate handler.
         if file_path.lower().endswith(".phot64"):
             self.add_phot64_file(file_path)
-            self.update_search_results(self.search_bar.text())
+            self.update_search_results(self.search_bar.text(), False)
             return
 
         if not file_path.lower().endswith(('.dat', '.tsv', '.fit', '.fits')):
@@ -466,7 +471,7 @@ class MainWindow(QMainWindow):
         if file_path:
             if file_path.lower().endswith(".phot64"):
                 self.add_phot64_file(file_path)
-                self.update_search_results(self.search_bar.text())
+                self.update_search_results(self.search_bar.text(), False)
             else:
                 self.add_file_tab(file_path)
 
@@ -601,7 +606,13 @@ class MainWindow(QMainWindow):
         self.tab_slider.setMaximum(max(count - 1, 0))
         self.tab_slider.setEnabled(count > 1)
 
-    def update_search_results(self, text):
+    def update_search_results(self, text, force_all=False):
+        """
+        When force_all is True (triggered by Tab/Enter or search button),
+        search among ALL available objects (open tabs, pending files, phot64 objects).
+        Otherwise, if the total unloaded count (pending+phot64) is 1000 or more,
+        search only among already open tabs.
+        """
         text = text.strip()
         self.search_results_list.clear()
         if not text:
@@ -611,32 +622,33 @@ class MainWindow(QMainWindow):
         search_lower = text.lower()
         items = []
 
-        # First, add items for already open tabs (non–phot64 files).
-        for i in range(self.tab_bar.count()):
-            tab_label = self.tab_bar.tabText(i)
-            if search_lower in tab_label.lower():
-                item = QListWidgetItem(tab_label)
-                item.setData(Qt.ItemDataRole.UserRole, ("tab", i))
-                items.append(item)
+        # Count unloaded items (pending files and phot64 objects)
+        total_unloaded = len(self.pending_files) + len(self.phot64_objects)
 
-        # Next, add pending files (non–phot64).
-        for file_path in self.pending_files:
-            file_name = os.path.basename(file_path)
-            if search_lower in file_name.lower():
-                item = QListWidgetItem(file_name)
-                item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
-                items.append(item)
+        if force_all or total_unloaded < 1000:
+            # Also search among pending files
+            for file_path in self.pending_files:
+                file_name = os.path.basename(file_path)
+                if search_lower in file_name.lower():
+                    item = QListWidgetItem(file_name)
+                    item.setData(Qt.ItemDataRole.UserRole, ("pending", file_path))
+                    items.append(item)
+            # And among phot64 objects
+            for (fpath, obj) in self.phot64_objects:
+                label = f"{os.path.basename(fpath)}/{obj['id']}"
+                if search_lower in label.lower():
+                    item = QListWidgetItem(label)
+                    item.setData(Qt.ItemDataRole.UserRole, ("phot64", fpath, obj))
+                    items.append(item)
+        else:
+            # Only search among already open tabs
+            for i in range(self.tab_bar.count()):
+                tab_label = self.tab_bar.tabText(i)
+                if search_lower in tab_label.lower():
+                    item = QListWidgetItem(tab_label)
+                    item.setData(Qt.ItemDataRole.UserRole, ("tab", i))
+                    items.append(item)
 
-        # Finally, add phot64 objects.
-        for (fpath, obj) in self.phot64_objects:
-            label = f"{os.path.basename(fpath)}/{obj['id']}"
-            if search_lower in label.lower():
-                item = QListWidgetItem(label)
-                item.setData(Qt.ItemDataRole.UserRole, ("phot64", fpath, obj))
-                items.append(item)
-
-        # If there is any non-phot64 result, sort the items;
-        # otherwise, leave phot64 items in file–order.
         if any(item.data(Qt.ItemDataRole.UserRole)[0] in ("tab", "pending") for item in items):
             items.sort(key=lambda item: item.text().lower())
 
@@ -696,7 +708,7 @@ if __name__ == "__main__":
         for file_path in window.pending_files.copy():
             window.add_file_tab(file_path)
     else:
-        window.update_search_results(window.search_bar.text())
+        window.update_search_results(window.search_bar.text(), False)
 
     window.resize(800, 600)
     window.show()
