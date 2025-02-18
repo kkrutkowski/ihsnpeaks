@@ -589,6 +589,12 @@ class MainWindow(QMainWindow):
         if index < 0:
             return
         widget = self.stack.widget(index)
+
+        # If this is a non–phot64 file tab (LazyTableWidget), add its file_path back to pending_files.
+        if hasattr(widget, "file_path") and not hasattr(widget, "phot64_obj"):
+            if widget.file_path not in self.pending_files:
+                self.pending_files.append(widget.file_path)
+
         self.stack.removeWidget(widget)
         widget.deleteLater()
         self.tab_bar.removeTab(index)
