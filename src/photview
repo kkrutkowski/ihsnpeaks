@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (
     QTableView, QVBoxLayout, QHBoxLayout, QWidget, QSlider, QListWidget, QListWidgetItem, QLabel,
     QTabBar, QStackedWidget
 )
+# [NEW] Import PyQt6-Charts classes
+from PyQt6.QtCharts import QChart, QChartView, QScatterSeries, QValueAxis
 
 # --- Phot64 Quantization Constants ---
 TIME_QUANT = 1e-5      # for the 32-bit time field
@@ -101,12 +103,6 @@ def convert_phot64_data(phot64_obj):
 # Lazy widget for phot64 object tabs
 # -------------------------------
 class LazyPhot64ObjectWidget(QWidget):
-    """
-    A widget for displaying a single phot64 object.
-    The widget stores the file path and the phot64 object metadata.
-    Data conversion from the raw uint64 measurements to floats is done
-    only when load_data() is called (e.g. when the tab is selected).
-    """
     def __init__(self, file_path, phot64_obj, parent=None):
         super().__init__(parent)
         self.file_path = file_path
@@ -115,6 +111,14 @@ class LazyPhot64ObjectWidget(QWidget):
         self.layout = QVBoxLayout(self)
         self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
         self.layout.addWidget(self.placeholder)
+        self.data = None
+        self.headers = None
+        self.table_view = None
+        self.chart_view = None
+        self.is_plot_shown = False
+        self.plot_data_col_major = None
+        self.plot_data_row_major = None
+        self.content_widget = None  # Track current main content widget
 
     def load_data(self, force=False):
         if self.loaded and not force:
@@ -122,37 +126,248 @@ class LazyPhot64ObjectWidget(QWidget):
         try:
             data, headers = convert_phot64_data(self.phot64_obj)
         except Exception as e:
-            while self.layout.count():
-                child = self.layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
+            self.clear_layout()
             error_label = QLabel(f"Error loading phot64 object data:\n{e}")
             self.layout.addWidget(error_label)
             self.loaded = True
             return
 
+        self.clear_layout()
+
+        id_label = QLabel(self.phot64_obj['id'])
+        id_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(id_label)
+
+        self.table_view = QTableView()
+        model = NumpyTableModel(data, headers)
+        self.table_view.setModel(model)
+        header = self.table_view.horizontalHeader()
+        header.setStretchLastSection(False)
+        for col in range(model.columnCount()):
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+
+        self.content_widget = self.table_view  # Set as current content
+        self.layout.addWidget(self.content_widget)
+
+        self.data = data
+        self.headers = headers
+        self.loaded = True
+
+    def clear_layout(self):
         while self.layout.count():
             child = self.layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
-        # Show only the object's ID here (instead of file/ID).
-        id_label = QLabel(self.phot64_obj['id'])
-        id_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(id_label)
+    def show_plot(self):
+        if self.data is None or self.data.shape[0] == 0:
+            return
 
-        table_view = QTableView()
+        n = self.data.shape[0]
+
+        # Create a new chart.
+        chart = QChart()
+        chart.setTitle("Photometry Plot")
+
+        # Create a single scatter series.
+        series = QScatterSeries()
+        series.setName("Photometry Data")
+
+        # Set marker size inversely proportional to sqrt(n)
+        marker_size = 50 / n**(0.25)  # adjust scaling constant (10) as needed
+        series.setMarkerSize(marker_size)
+
+        # Remove outlines by setting a transparent pen.
+        series.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 0)))
+        # Set a brush color so that markers are visible.
+        series.setBrush(QtGui.QBrush(QtGui.QColor("blue")))
+
+        # Add only time (x) and magnitude (y) points (ignore 'dy').
+        for row in self.data:
+            t = float(row[0])
+            y = float(row[1])
+            series.append(t, y)
+        chart.addSeries(series)
+
+        # Create and attach axes.
+        axisX = QValueAxis()
+        axisY = QValueAxis()
+        axisX.setTitleText("Time")
+        axisY.setTitleText("Magnitude")
+        chart.addAxis(axisX, Qt.AlignmentFlag.AlignBottom)
+        chart.addAxis(axisY, Qt.AlignmentFlag.AlignLeft)
+        series.attachAxis(axisX)
+        series.attachAxis(axisY)
+
+        # Compute axis ranges from your data.
+        xmin = float(np.min(self.data[:, 0]))
+        xmax = float(np.max(self.data[:, 0]))
+        ymin = float(np.min(self.data[:, 1]))
+        ymax = float(np.max(self.data[:, 1]))
+        # Optionally, add a margin around the data.
+        margin_x = (xmax - xmin) * 0.05
+        margin_y = (ymax - ymin) * 0.05
+        axisX.setRange(xmin - margin_x, xmax + margin_x)
+        axisY.setRange(ymin - margin_y, ymax + margin_y)
+
+        # Remove the previous content widget and display the chart.
+        if self.content_widget is not None:
+            self.layout.removeWidget(self.content_widget)
+            self.content_widget.hide()
+
+        self.chart_view = QChartView(chart)
+        self.content_widget = self.chart_view
+        self.layout.addWidget(self.content_widget)
+        self.is_plot_shown = True
+
+
+    def hide_plot(self):
+        if self.chart_view is not None:
+            self.layout.removeWidget(self.chart_view)
+            self.chart_view.hide()
+            self.chart_view.deleteLater()
+            self.chart_view = None
+
+            # Restore table view
+            self.content_widget = self.table_view
+            self.layout.addWidget(self.content_widget)
+            self.content_widget.show()
+            self.is_plot_shown = False
+
+class LazyTableWidget(QWidget):
+    def __init__(self, file_path, load_func, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.load_func = load_func
+        self.loaded = False
+        self.layout = QVBoxLayout(self)
+        self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
+        self.layout.addWidget(self.placeholder)
+        self.data = None
+        self.headers = None
+        self.table_view = None
+        self.chart_view = None
+        self.is_plot_shown = False
+        self.plot_data_col_major = None
+        self.plot_data_row_major = None
+        self.content_widget = None  # Track current main content widget
+
+    def load_data(self, force=False):
+        if self.loaded and not force:
+            return
+        try:
+            data, headers = self.load_func(self.file_path)
+        except Exception as e:
+            self.clear_layout()
+            error_label = QLabel(f"Error loading file:\n{e}")
+            self.layout.addWidget(error_label)
+            self.loaded = True
+            return
+
+        self.clear_layout()
+
+        base_filename = os.path.basename(self.file_path)
+        filename_without_extension, _ = os.path.splitext(base_filename)
+        filename_label = QLabel(filename_without_extension)
+        filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(filename_label)
+
+        self.table_view = QTableView()
         model = NumpyTableModel(data, headers)
-        table_view.setModel(model)
-        header = table_view.horizontalHeader()
+        self.table_view.setModel(model)
+        header = self.table_view.horizontalHeader()
         header.setStretchLastSection(False)
         for col in range(model.columnCount()):
             header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        self.layout.addWidget(table_view)
+
+        self.content_widget = self.table_view  # Set as current content
+        self.layout.addWidget(self.content_widget)
+
+        self.data = data
+        self.headers = headers
         self.loaded = True
 
+    def clear_layout(self):
+        while self.layout.count():
+            child = self.layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+    def show_plot(self):
+        if self.data is None or self.data.shape[0] == 0:
+            return
+
+        n = self.data.shape[0]
+
+        # Create a new chart.
+        chart = QChart()
+        chart.setTitle("Photometry Plot")
+
+        # Create a single scatter series.
+        series = QScatterSeries()
+        series.setName("Photometry Data")
+
+        # Set marker size inversely proportional to sqrt(n)
+        marker_size = 50 / n**(0.25)
+        series.setMarkerSize(marker_size)
+
+        # Remove outlines by setting a transparent pen.
+        series.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 0)))
+        # Set a brush color so that markers are visible.
+        series.setBrush(QtGui.QBrush(QtGui.QColor("blue")))
+
+        # Add only time (x) and magnitude (y) points.
+        for row in self.data:
+            t = float(row[0])
+            y = float(row[1])
+            series.append(t, y)
+        chart.addSeries(series)
+
+        # Create and attach axes.
+        axisX = QValueAxis()
+        axisY = QValueAxis()
+        axisX.setTitleText("Time")
+        axisY.setTitleText("Magnitude")
+        chart.addAxis(axisX, Qt.AlignmentFlag.AlignBottom)
+        chart.addAxis(axisY, Qt.AlignmentFlag.AlignLeft)
+        series.attachAxis(axisX)
+        series.attachAxis(axisY)
+
+        # Compute axis ranges based on your data.
+        xmin = float(np.min(self.data[:, 0]))
+        xmax = float(np.max(self.data[:, 0]))
+        ymin = float(np.min(self.data[:, 1]))
+        ymax = float(np.max(self.data[:, 1]))
+        margin_x = (xmax - xmin) * 0.05
+        margin_y = (ymax - ymin) * 0.05
+        axisX.setRange(xmin - margin_x, xmax + margin_x)
+        axisY.setRange(ymin - margin_y, ymax + margin_y)
+
+        # Remove any existing content and show the chart view.
+        if self.content_widget is not None:
+            self.layout.removeWidget(self.content_widget)
+            self.content_widget.hide()
+
+        self.chart_view = QChartView(chart)
+        self.content_widget = self.chart_view
+        self.layout.addWidget(self.content_widget)
+        self.is_plot_shown = True
+
+    def hide_plot(self):
+        if self.chart_view is not None:
+            self.layout.removeWidget(self.chart_view)
+            self.chart_view.hide()
+            self.chart_view.deleteLater()
+            self.chart_view = None
+
+            # Restore table view
+            self.content_widget = self.table_view
+            self.layout.addWidget(self.content_widget)
+            self.content_widget.show()
+            self.is_plot_shown = False
+
 # -------------------------------
-# Original Lazy widget for non–phot64 files (unchanged)
+# Original Lazy widget for non–phot64 files (unchanged except for plot support)
 # -------------------------------
 class LazyTableWidget(QWidget):
     """
@@ -167,6 +382,14 @@ class LazyTableWidget(QWidget):
         self.layout = QVBoxLayout(self)
         self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
         self.layout.addWidget(self.placeholder)
+        # [NEW] Initialize attributes for plot functionality.
+        self.data = None
+        self.headers = None
+        self.table_view = None
+        self.chart_view = None
+        self.is_plot_shown = False
+        self.plot_data_col_major = None
+        self.plot_data_row_major = None
 
     def load_data(self, force=False):
         if self.loaded and not force:
@@ -202,6 +425,10 @@ class LazyTableWidget(QWidget):
         for col in range(model.columnCount()):
             header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.layout.addWidget(table_view)
+        # [NEW] Save data and table_view for later use (e.g. for plotting)
+        self.data = data
+        self.headers = headers
+        self.table_view = table_view
         self.loaded = True
 
     def clear_data(self):
@@ -212,6 +439,79 @@ class LazyTableWidget(QWidget):
         self.placeholder = QLabel("Data not loaded yet. Select a tab to load.")
         self.layout.addWidget(self.placeholder)
         self.loaded = False
+
+    # [NEW] Method to show plot using PyQt6-Charts
+    def show_plot(self):
+        if self.data is None:
+            return
+
+        # Create a column-major copy for efficient access
+        self.plot_data_col_major = np.array(self.data, order='F')
+
+        # Remove any existing content widget from the layout
+        if self.content_widget is not None:
+            self.layout.removeWidget(self.content_widget)
+            self.content_widget.hide()
+
+        # Create a new chart and set its title
+        chart = QChart()
+        chart.setTitle("Photometry Plot")
+
+        # Create one QScatterSeries for ALL data points.
+        series = QScatterSeries()
+        series.setName("Photometry Data")
+
+        # Get the columns: time and magnitude (and error if available)
+        times = self.plot_data_col_major[:, 0]
+        mags = self.plot_data_col_major[:, 1]
+
+        # Append the main measurement points (one at a time)
+        for t, m in zip(times, mags):
+            series.append(float(t), float(m))
+
+        # If an error column exists, add its endpoints to the same series
+        #if self.plot_data_col_major.shape[1] > 2:
+        #    errors = self.plot_data_col_major[:, 2]
+        #    for t, m, e in zip(times, mags, errors):
+        #        # Append the lower error endpoint
+        #        series.append(float(t), float(m - e))
+        #        # Append the upper error endpoint
+        #        series.append(float(t), float(m + e))
+
+        # Add the single series to the chart
+        chart.addSeries(series)
+
+        # Create and set up the X and Y axes
+        axisX = QValueAxis()
+        axisY = QValueAxis()
+        axisX.setTitleText("Time")
+        axisY.setTitleText("Magnitude")
+        chart.addAxis(axisX, Qt.AlignmentFlag.AlignBottom)
+        chart.addAxis(axisY, Qt.AlignmentFlag.AlignLeft)
+        series.attachAxis(axisX)
+        series.attachAxis(axisY)
+
+        # Create the chart view widget and add it to the layout
+        self.chart_view = QChartView(chart)
+        self.content_widget = self.chart_view
+        self.layout.addWidget(self.content_widget)
+        self.is_plot_shown = True
+
+    def hide_plot(self):
+        if self.chart_view is not None:
+            self.layout.removeWidget(self.chart_view)
+            self.chart_view.hide()
+            self.chart_view.deleteLater()
+            self.chart_view = None
+
+            # Clean up plot data
+            self.plot_data_col_major = None
+
+            # Restore table view
+            self.content_widget = self.table_view
+            self.layout.addWidget(self.content_widget)
+            self.content_widget.show()
+            self.is_plot_shown = False
 
 # -------------------------------
 # Table model (unchanged)
@@ -314,7 +614,7 @@ class SearchLineEdit(QtWidgets.QLineEdit):
         return False
 
 # -------------------------------
-# Main window with added .phot64 support
+# Main window with added .phot64 support and plotting functionality
 # -------------------------------
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -360,21 +660,47 @@ class MainWindow(QMainWindow):
         self.tab_slider.valueChanged.connect(self.slider_tab_changed)
         self.main_layout.addWidget(self.tab_slider)
 
-        # --- Reload and Close Tab Buttons ---
-        button_layout = QHBoxLayout()
-        self.reload_button = QtWidgets.QPushButton("Reload Current File")
-        self.reload_button.clicked.connect(self.reload_current_tab)
-        button_layout.addWidget(self.reload_button)
-        self.close_tab_button = QtWidgets.QPushButton("Close Tab")
-        self.close_tab_button.clicked.connect(self.close_current_tab)
-        button_layout.addWidget(self.close_tab_button)
-        self.main_layout.addLayout(button_layout)
+        # --- Reload, Plot, and Close Tab Buttons ---
+        self.button_layout = QHBoxLayout()
+        self.setup_normal_buttons()  # [NEW] Setup initial buttons: Reload, Plot, Close Tab
+        self.main_layout.addLayout(self.button_layout)
 
         self.stack = QStackedWidget()
         self.main_layout.addWidget(self.stack)
 
         # --- Menu ---
         self.create_menu()
+
+    def setup_normal_buttons(self):  # [NEW] Buttons shown when no plot is active
+        # Clear existing buttons
+        while self.button_layout.count():
+            item = self.button_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.reload_button = QtWidgets.QPushButton("Reload Current File")
+        self.reload_button.clicked.connect(self.reload_current_tab)
+        self.button_layout.addWidget(self.reload_button)
+        self.plot_button = QtWidgets.QPushButton("Plot")
+        self.plot_button.clicked.connect(self.plot_current_tab)
+        self.button_layout.addWidget(self.plot_button)
+        self.close_tab_button = QtWidgets.QPushButton("Close Tab")
+        self.close_tab_button.clicked.connect(self.close_current_tab)
+        self.button_layout.addWidget(self.close_tab_button)
+
+    def setup_plot_buttons(self):  # [NEW] Buttons shown when plot is active
+        while self.button_layout.count():
+            item = self.button_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.hide_plot_button = QtWidgets.QPushButton("Hide plot")
+        self.hide_plot_button.clicked.connect(self.hide_plot_current_tab)
+        self.button_layout.addWidget(self.hide_plot_button)
+        self.detrend_button = QtWidgets.QPushButton("Detrend/Prewhiten")
+        self.detrend_button.clicked.connect(self.detrend_current_tab)
+        self.button_layout.addWidget(self.detrend_button)
+        self.fold_button = QtWidgets.QPushButton("Fold data")
+        self.fold_button.clicked.connect(self.fold_current_tab)
+        self.button_layout.addWidget(self.fold_button)
 
     def create_menu(self):
         menubar = self.menuBar()
@@ -681,6 +1007,28 @@ class MainWindow(QMainWindow):
             self.add_phot64_tab(file_path, phot64_obj)
         self.search_results_list.hide()
 
+    # [NEW] Method called when the Plot button is pressed.
+    def plot_current_tab(self):
+        widget = self.stack.currentWidget()
+        if widget and hasattr(widget, 'show_plot') and not widget.is_plot_shown:
+            widget.show_plot()
+            self.setup_plot_buttons()
+
+    # [NEW] Method called when Hide plot is pressed.
+    def hide_plot_current_tab(self):
+        widget = self.stack.currentWidget()
+        if widget and hasattr(widget, 'hide_plot') and widget.is_plot_shown:
+            widget.hide_plot()
+            self.setup_normal_buttons()
+
+    # [NEW] Placeholder for Detrend/Prewhiten functionality.
+    def detrend_current_tab(self):
+        QMessageBox.information(self, "Info", "Detrend/Prewhiten not implemented.")
+
+    # [NEW] Placeholder for Fold data functionality.
+    def fold_current_tab(self):
+        QMessageBox.information(self, "Info", "Fold data not implemented.")
+
     def _process_path(self, path):
         path = os.path.abspath(path.strip().strip('\'"'))
         if os.path.isdir(path):
@@ -710,7 +1058,7 @@ if __name__ == "__main__":
             window._process_path(arg)
 
     # If only a few non–phot64 files are pending, open them as tabs.
-    if len(window.pending_files) <= 10:
+    if len(window.pending_files) <= 1:
         for file_path in window.pending_files.copy():
             window.add_file_tab(file_path)
     else:
