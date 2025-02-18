@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-import sys
-import os
-import struct
+import sys, os, struct
 import numpy as np
 from astropy.io import fits  # FITS support
-
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog,
-    QTableView, QVBoxLayout, QHBoxLayout, QWidget, QSlider, QListWidget, QListWidgetItem, QLabel,
-    QTabBar, QStackedWidget
+    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog, QTableView, QVBoxLayout,
+    QHBoxLayout, QWidget, QSlider, QListWidget, QListWidgetItem, QLabel, QTabBar, QStackedWidget
 )
 from PyQt6.QtCharts import QChart, QChartView, QScatterSeries, QValueAxis
 
