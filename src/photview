@@ -351,12 +351,11 @@ class LazyWidgetBase(QWidget):
             if mag < min_val or mag > max_val:
                 self.data[i, :] = np.nan
 
-        # --- New Code: Remove rows that were clamped (all values are NaN)
+        # Remove rows that were clamped (all values are NaN)
         self.data = self.data[~np.isnan(self.data).all(axis=1)]
         if self.table_view is not None:
             new_model = NumpyTableModel(self.data, self.headers)
             self.table_view.setModel(new_model)
-        # --- End New Code
 
         # Regenerate the plot with the clamped (and filtered) data.
         if self.is_plot_shown:
