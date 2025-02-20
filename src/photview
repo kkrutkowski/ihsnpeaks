@@ -345,12 +345,20 @@ class LazyWidgetBase(QWidget):
                 "Minimum magnitude must be less than or equal to maximum magnitude."
             )
             return
-        # For each row, set all columns to NaN if the magnitude (column index 1) is out-of-range.
+        # Set entire row to NaN if the magnitude (column index 1) is out-of-range.
         for i in range(self.data.shape[0]):
             mag = self.data[i, 1]
             if mag < min_val or mag > max_val:
                 self.data[i, :] = np.nan
-        # Regenerate the plot with the clamped data.
+
+        # --- New Code: Remove rows that were clamped (all values are NaN)
+        self.data = self.data[~np.isnan(self.data).all(axis=1)]
+        if self.table_view is not None:
+            new_model = NumpyTableModel(self.data, self.headers)
+            self.table_view.setModel(new_model)
+        # --- End New Code
+
+        # Regenerate the plot with the clamped (and filtered) data.
         if self.is_plot_shown:
             self.show_plot()
 
