@@ -3,12 +3,12 @@ import sys, os, struct
 import numpy as np
 from astropy.io import fits  # FITS support
 from PyQt6 import QtWidgets, QtCore, QtGui
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QLocale, QPointF
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog, QTableView, QVBoxLayout,
-    QHBoxLayout, QWidget, QSlider, QListWidget, QListWidgetItem, QLabel, QTabBar, QStackedWidget
+    QApplication, QMainWindow, QFileDialog, QMessageBox, QInputDialog, QTableView, QVBoxLayout, QDialog, QDialogButtonBox, QGraphicsLineItem,
+    QHBoxLayout, QWidget, QSlider, QListWidget, QListWidgetItem, QLabel, QTabBar, QStackedWidget, QFormLayout, QDoubleSpinBox
 )
-from PyQt6.QtCharts import QChart, QChartView, QScatterSeries, QValueAxis
+from PyQt6.QtCharts import QChart, QChartView, QScatterSeries, QLineSeries, QValueAxis
 
 # --- Phot64 Quantization Constants ---
 TIME_QUANT = 1e-5      # for the 32-bit time field
@@ -59,6 +59,13 @@ def convert_phot64_data(phot64_obj):
     data = np.column_stack((time_vals, mag_vals, err_vals))
     return data, ["time", "magnitude", "error"]
 
+class InteractiveChartView(QChartView):
+    def __init__(self, chart, clamp_callback, parent=None):
+        super().__init__(chart, parent)
+        self.clamp_mode = False
+        self.first_click_value = None
+        self.clamp_callback = clamp_callback  # Callback to apply clamping
+
 class LazyWidgetBase(QWidget):
     def __init__(self, file_path, parent=None):
         super().__init__(parent)
@@ -74,6 +81,22 @@ class LazyWidgetBase(QWidget):
         self.is_plot_shown = False
         self.content_widget = None  # Tracks current main content widget
         self._saving_plot = False
+        # For interactive clamping using sliders.
+        self.clamp_sliders_active = False
+        self.clamp_slider_widget = None
+        self.slider_scale = 10000.0  # Scale factor to convert float to int for slider precision
+        # For displaying horizontal clamp lines
+        self.clamp_line_min_series = None
+        self.clamp_line_max_series = None
+        # To store axis ranges (computed without NaNs)
+        self.x_min = None
+        self.x_max = None
+        self.y_min = None
+        self.y_max = None
+        # Will be set in show_plot:
+        self.chart = None
+        self.axisX = None
+        self.axisY = None
 
     def clear_layout(self):
         while self.layout.count():
@@ -105,7 +128,9 @@ class LazyWidgetBase(QWidget):
         header = self.table_view.horizontalHeader()
         header.setStretchLastSection(False)
         for col in range(model.columnCount()):
-            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(
+                col, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+            )
         self.layout.addWidget(self.table_view)
 
         self.data = data
@@ -145,22 +170,189 @@ class LazyWidgetBase(QWidget):
         series.attachAxis(axisY)
         self._configure_axes(axisX, axisY)
 
+        # Save the chart and axes for later use (e.g. for clamping lines)
+        self.chart = chart
+        self.axisX = axisX
+        self.axisY = axisY
+
         if self.content_widget is not None:
             self.layout.removeWidget(self.content_widget)
             self.content_widget.hide()
 
         self.chart_view = QChartView(chart)
-        # Create a container widget with a save button above the chart view.
+        # Create a container widget with buttons above the chart.
         plot_container = QWidget()
         container_layout = QVBoxLayout(plot_container)
+        self.plot_container_layout = container_layout  # Save the layout for later use
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addStretch()  # Push buttons to the right side
+
+        # Create the Clamp button (which toggles clamp mode) and Save Plot button.
+        clamp_button = QtWidgets.QPushButton("Clamp")
         save_button = QtWidgets.QPushButton("Save Plot")
-        container_layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignRight)
+        buttons_layout.addWidget(clamp_button)
+        buttons_layout.addWidget(save_button)
+        container_layout.addLayout(buttons_layout)
         container_layout.addWidget(self.chart_view)
+
+        clamp_button.clicked.connect(self.toggle_clamp_mode)
         save_button.clicked.connect(self.save_plot)
 
         self.content_widget = plot_container
         self.layout.addWidget(self.content_widget)
         self.is_plot_shown = True
+
+    def _configure_axes(self, axisX, axisY):
+        # Use np.nanmin/np.nanmax to ignore NaNs when computing the range.
+        data = getattr(self, "plot_data_col_major", self.data)
+        if data is None or data.shape[0] == 0:
+            return
+        x = data[:, 0]
+        y = data[:, 1]
+        # Compute min/max ignoring NaNs
+        xmin = float(np.nanmin(x))
+        xmax = float(np.nanmax(x))
+        ymin = float(np.nanmin(y))
+        ymax = float(np.nanmax(y))
+        margin_x = (xmax - xmin) * 0.025
+        margin_y = (ymax - ymin) * 0.05
+        axisX.setRange(xmin - margin_x, xmax + margin_x)
+        axisY.setRange(ymax + margin_y, ymin - margin_y)  # note: magnitude axis is inverted
+        # Save computed ranges for use with the horizontal clamp lines
+        self.x_min = xmin - margin_x
+        self.x_max = xmax + margin_x
+        self.y_min = ymin - margin_y
+        self.y_max = ymax + margin_y
+
+    def create_clamp_sliders(self, default_min, default_max):
+        """Creates a slider panel for setting min and max clamp values and adds horizontal lines to the chart."""
+        self.clamp_slider_widget = QWidget()
+        slider_layout = QHBoxLayout(self.clamp_slider_widget)
+
+        min_int = int(default_min * self.slider_scale)
+        max_int = int(default_max * self.slider_scale)
+
+        min_label = QLabel(f"Min: {default_min:.4f}")
+        self.min_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
+        self.min_slider.setRange(min_int, max_int)
+        self.min_slider.setValue(min_int)
+        self.min_slider.valueChanged.connect(lambda value: min_label.setText(f"Min: {value/self.slider_scale:.4f}"))
+        # Also update the horizontal line position when the slider moves.
+        self.min_slider.valueChanged.connect(lambda value: self.update_clamp_lines())
+
+        max_label = QLabel(f"Max: {default_max:.4f}")
+        self.max_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
+        self.max_slider.setRange(min_int, max_int)
+        self.max_slider.setValue(max_int)
+        self.max_slider.valueChanged.connect(lambda value: max_label.setText(f"Max: {value/self.slider_scale:.4f}"))
+        self.max_slider.valueChanged.connect(lambda value: self.update_clamp_lines())
+
+        slider_layout.addWidget(min_label)
+        slider_layout.addWidget(self.min_slider)
+        slider_layout.addWidget(max_label)
+        slider_layout.addWidget(self.max_slider)
+
+        # Add the slider widget to the plot container layout (below the chart)
+        self.plot_container_layout.addWidget(self.clamp_slider_widget)
+        # Add horizontal lines for clamp min and max
+        self.add_clamp_lines(default_min, default_max)
+
+    def add_clamp_lines(self, min_val, max_val):
+        """Adds two horizontal lines to the chart at the given min and max values."""
+        self.clamp_line_min_series = QLineSeries()
+        self.clamp_line_min_series.setName("Clamp Min")
+        pen = QtGui.QPen(QtGui.QColor("red"))
+        pen.setWidth(2)
+        self.clamp_line_min_series.setPen(pen)
+
+        self.clamp_line_max_series = QLineSeries()
+        self.clamp_line_max_series.setName("Clamp Max")
+        pen2 = QtGui.QPen(QtGui.QColor("red"))
+        pen2.setWidth(2)
+        self.clamp_line_max_series.setPen(pen2)
+
+        # Use the saved x-range to cover the full horizontal span
+        x_min = self.x_min if self.x_min is not None else self.axisX.min()
+        x_max = self.x_max if self.x_max is not None else self.axisX.max()
+        self.clamp_line_min_series.append(x_min, min_val)
+        self.clamp_line_min_series.append(x_max, min_val)
+        self.clamp_line_max_series.append(x_min, max_val)
+        self.clamp_line_max_series.append(x_max, max_val)
+
+        self.chart.addSeries(self.clamp_line_min_series)
+        self.chart.addSeries(self.clamp_line_max_series)
+        self.clamp_line_min_series.attachAxis(self.axisX)
+        self.clamp_line_min_series.attachAxis(self.axisY)
+        self.clamp_line_max_series.attachAxis(self.axisX)
+        self.clamp_line_max_series.attachAxis(self.axisY)
+
+    def update_clamp_lines(self):
+        """Updates the horizontal lines according to the current slider values."""
+        if self.clamp_line_min_series is None or self.clamp_line_max_series is None:
+            return
+        clamp_min = self.min_slider.value() / self.slider_scale
+        clamp_max = self.max_slider.value() / self.slider_scale
+        x_min = self.x_min if self.x_min is not None else self.axisX.min()
+        x_max = self.x_max if self.x_max is not None else self.axisX.max()
+        self.clamp_line_min_series.clear()
+        self.clamp_line_max_series.clear()
+        self.clamp_line_min_series.append(x_min, clamp_min)
+        self.clamp_line_min_series.append(x_max, clamp_min)
+        self.clamp_line_max_series.append(x_min, clamp_max)
+        self.clamp_line_max_series.append(x_max, clamp_max)
+
+    def toggle_clamp_mode(self):
+        """
+        Toggles interactive clamp mode using sliders. On the first press, two sliders
+        for minimum and maximum magnitudes are added below the plot along with horizontal lines.
+        When pressed again, the current slider values are read, the sliders (and horizontal lines)
+        are removed, and clamping is applied.
+        """
+        if not self.clamp_sliders_active:
+            if self.data is None or self.data.shape[0] == 0:
+                return
+            magnitudes = self.data[:, 1]
+            default_min = float(np.nanmin(magnitudes))
+            default_max = float(np.nanmax(magnitudes))
+            self.create_clamp_sliders(default_min, default_max)
+            self.clamp_sliders_active = True
+        else:
+            # Read slider values (scaling back to float values)
+            if self.clamp_slider_widget is None:
+                return
+            clamp_min = self.min_slider.value() / self.slider_scale
+            clamp_max = self.max_slider.value() / self.slider_scale
+            # Remove the slider widget.
+            self.plot_container_layout.removeWidget(self.clamp_slider_widget)
+            self.clamp_slider_widget.deleteLater()
+            self.clamp_slider_widget = None
+            self.clamp_sliders_active = False
+            # Remove the horizontal clamp lines from the chart.
+            if self.clamp_line_min_series:
+                self.chart.removeSeries(self.clamp_line_min_series)
+                self.clamp_line_min_series = None
+            if self.clamp_line_max_series:
+                self.chart.removeSeries(self.clamp_line_max_series)
+                self.clamp_line_max_series = None
+            self.apply_clamp(clamp_min, clamp_max)
+
+    def apply_clamp(self, min_val, max_val):
+        if self.data is None or self.data.shape[0] == 0:
+            return
+        if min_val > max_val:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Range",
+                "Minimum magnitude must be less than or equal to maximum magnitude."
+            )
+            return
+        # For each row, set all columns to NaN if the magnitude (column index 1) is out-of-range.
+        for i in range(self.data.shape[0]):
+            mag = self.data[i, 1]
+            if mag < min_val or mag > max_val:
+                self.data[i, :] = np.nan
+        # Regenerate the plot with the clamped data.
+        if self.is_plot_shown:
+            self.show_plot()
 
     def hide_plot(self):
         if self.content_widget is not None and self.is_plot_shown:
@@ -171,7 +363,6 @@ class LazyWidgetBase(QWidget):
             self.layout.addWidget(self.content_widget)
             self.content_widget.show()
             self.is_plot_shown = False
-            # Notify the main window to update its button layout.
             main_window = self.window()
             if isinstance(main_window, MainWindow):
                 main_window.setup_normal_buttons()
@@ -199,47 +390,24 @@ class LazyWidgetBase(QWidget):
             self.hide_plot()
         super().showEvent(event)
 
-    def _configure_axes(self, axisX, axisY):
-        # Configures the axes. It uses self.data or self.plot_data_col_major (if present) to compute the ranges, applies a small margin, and flips the y-axis.
-        # Use self.plot_data_col_major if available (e.g. in LazyTableWidget), else use self.data.
-        data = getattr(self, "plot_data_col_major", self.data)
-        if data is None or data.shape[0] == 0:
-            return
-        # Extract x and y data.
-        x = data[:, 0]
-        y = data[:, 1]
-        xmin = float(np.min(x))
-        xmax = float(np.max(x))
-        ymin = float(np.min(y))
-        ymax = float(np.max(y))
-        margin_x = (xmax - xmin) * 0.05
-        margin_y = (ymax - ymin) * 0.05
-        axisX.setRange(xmin - margin_x, xmax + margin_x)
-        # Flip the y-axis by setting the range from (extended) maximum to minimum.
-        axisY.setRange(ymax + margin_y, ymin - margin_y)
+    def _get_plot_series_data(self):
+        for row in self.data:
+            if np.isnan(row[0]) or np.isnan(row[1]):
+                continue
+            yield float(row[0]), float(row[1])
 
     # --- Hook methods for subclasses to implement ---
     def _load_data_impl(self):
-        # Should load the data and return a tuple (data, headers).
         raise NotImplementedError
 
     def _get_data_title(self):
-        # Returns a title (e.g. an ID or filename) to be displayed above the table.
         raise NotImplementedError
 
     def _get_error_prefix(self):
-        # Returns the prefix string to use when an error occurs.
         return "Error loading data:"
 
     def _get_plot_title(self):
-        # Returns the title for the plot.
         return "Plot"
-
-    def _get_plot_series_data(self):
-        # Returns an iterable of (t, y) pairs to be plotted. Default implementation simply iterates over self.data.
-        for row in self.data:
-            yield float(row[0]), float(row[1])
-
 
 # -------------------------------
 # Lazy widget for phot64 object tabs
