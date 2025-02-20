@@ -10,55 +10,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCharts import QChart, QChartView, QScatterSeries, QLineSeries, QValueAxis
 
-# --- Phot64 Quantization Constants ---
-TIME_QUANT = 1e-5      # for the 32-bit time field
-Y_QUANT = 1.25e-4      # for the 20-bit y field
-DY_QUANT = 2.5e-4      # for the 12-bit dy field
-
-# -------------------------------
-# Functions for loading & converting .phot64 files
-# -------------------------------
-def load_phot64_file(filepath):
-    with open(filepath, "rb") as f:
-        count = int(np.frombuffer(f.read(8), dtype='<u8')[0])
-        offsets = np.frombuffer(f.read(8 * (count + 1)), dtype='<u8')
-        ids_array = np.frombuffer(f.read(count * 64), dtype='S64')
-        ids = [s.decode('utf-8').rstrip('\x00') for s in ids_array]
-        sizes = np.frombuffer(f.read(count * 24), dtype='<f8').reshape((count, 3))
-        allocated = sizes[:, 0]
-        filled = sizes[:, 1]
-        first_times = sizes[:, 2]
-        total_data = int(offsets[-1])
-        data = np.frombuffer(f.read(total_data * 8), dtype='<u8')
-        objects = []
-        for i in range(count):
-            start = int(offsets[i])
-            end = int(offsets[i+1])
-            raw_data = data[start:end].copy()
-            obj = {
-                "id": ids[i],
-                "allocated": int(allocated[i]),
-                "filled": int(filled[i]),
-                "time": first_times[i],
-                "data": raw_data
-            }
-            objects.append(obj)
-    return objects
-
-def convert_phot64_data(phot64_obj):
-    raw_data = phot64_obj["data"][:phot64_obj["filled"]]
-    raw_data = np.asarray(raw_data, dtype=np.uint64)
-    time_int = raw_data >> 32
-    y_packed = (raw_data >> 12) & 0xFFFFF  # 20 bits for magnitude (sign–magnitude)
-    dy_int = raw_data & 0xFFF              # 12 bits for error
-    sign_mask = 1 << 19
-    y_int = np.where((y_packed & sign_mask) != 0, - (y_packed & 0x7FFFF), y_packed)
-    time_vals = phot64_obj["time"] + time_int.astype(np.float64) * TIME_QUANT
-    mag_vals = y_int.astype(np.float64) * Y_QUANT
-    err_vals = dy_int.astype(np.float64) * DY_QUANT
-    data = np.column_stack((time_vals, mag_vals, err_vals))
-    return data, ["time", "magnitude", "error"]
-
 class InteractiveChartView(QChartView):
     def __init__(self, chart, clamp_callback, parent=None):
         super().__init__(chart, parent)
@@ -260,13 +211,13 @@ class LazyWidgetBase(QWidget):
     def add_clamp_lines(self, min_val, max_val):
         """Adds two horizontal lines to the chart at the given min and max values."""
         self.clamp_line_min_series = QLineSeries()
-        self.clamp_line_min_series.setName("Clamp Min")
+        self.clamp_line_min_series.setName("Min")
         pen = QtGui.QPen(QtGui.QColor("red"))
         pen.setWidth(2)
         self.clamp_line_min_series.setPen(pen)
 
         self.clamp_line_max_series = QLineSeries()
-        self.clamp_line_max_series.setName("Clamp Max")
+        self.clamp_line_max_series.setName("Max")
         pen2 = QtGui.QPen(QtGui.QColor("red"))
         pen2.setWidth(2)
         self.clamp_line_max_series.setPen(pen2)
@@ -415,161 +366,6 @@ class LazyWidgetBase(QWidget):
 
     def _get_plot_title(self):
         return "Plot"
-
-# -------------------------------
-# Lazy widget for phot64 object tabs
-# -------------------------------
-class LazyPhot64ObjectWidget(LazyWidgetBase):
-    def __init__(self, file_path, phot64_obj, parent=None):
-        super().__init__(file_path, parent)
-        self.phot64_obj = phot64_obj
-
-    def _load_data_impl(self):
-        # Use the provided conversion function to load data.
-        return convert_phot64_data(self.phot64_obj)
-
-    def _get_data_title(self):
-        # Display the phot64 object's ID.
-        return self.phot64_obj['id']
-
-    def _get_error_prefix(self):
-        return "Error loading phot64 object data:"
-
-    def _get_plot_title(self):
-        return self.phot64_obj.get('id', 'Plot')
-
-
-# -------------------------------
-# Lazy widget for non–phot64 files (single file photometry)
-# -------------------------------
-class LazyTableWidget(LazyWidgetBase):
-    def __init__(self, file_path, load_func, parent=None):
-        super().__init__(file_path, parent)
-        self.load_func = load_func  # Function to load the file
-        self.plot_data_col_major = None  # For reordering the data for plotting
-
-    def _load_data_impl(self):
-        return self.load_func(self.file_path)
-
-    def _get_data_title(self):
-        base_filename = os.path.basename(self.file_path)
-        filename_without_extension, _ = os.path.splitext(base_filename)
-        return filename_without_extension
-
-    def _get_error_prefix(self):
-        return "Error loading file:"
-
-    def _get_plot_title(self):
-        return os.path.splitext(os.path.basename(self.file_path))[0]
-
-    def _get_plot_series_data(self):
-        # Reorder the data in column-major order before plotting.
-        self.plot_data_col_major = np.array(self.data, order='F')
-        times = self.plot_data_col_major[:, 0]
-        mags = self.plot_data_col_major[:, 1]
-        for t, m in zip(times, mags):
-            yield float(t), float(m)
-
-
-# -------------------------------
-# Table model (unchanged)
-# -------------------------------
-class NumpyTableModel(QtCore.QAbstractTableModel):
-    def __init__(self, data, headers, parent=None):
-        super().__init__(parent)
-        self._data = data
-        self._headers = headers
-
-    def rowCount(self, parent=QtCore.QModelIndex()):
-        return self._data.shape[0]
-
-    def columnCount(self, parent=QtCore.QModelIndex()):
-        return self._data.shape[1]
-
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        if role == Qt.ItemDataRole.DisplayRole:
-            col_header = self._headers[index.column()].lower()
-            raw_value = self._data[index.row(), index.column()]
-            try:
-                val = float(raw_value)
-            except Exception:
-                return str(raw_value)
-
-            # Format "time": truncate to 6 decimal places at most.
-            if col_header == "time":
-                truncated = np.trunc(val * 1e6) / 1e6
-                s = f"{truncated:.6f}"
-                s = s.rstrip('0').rstrip('.') if '.' in s else s
-                return s
-
-            # Format "error": truncate to 2 significant digits.
-            elif col_header == "error":
-                if np.isnan(val):
-                    return "nan"
-                if val == 0:
-                    return "0"
-                exponent = np.floor(np.log10(abs(val)))
-                scale = 10 ** (exponent - 2)
-                truncated_val = np.floor(val / scale) * scale
-                if abs(truncated_val) < 1e-2:
-                    s = f"{truncated_val:.2e}"
-                else:
-                    s = format(truncated_val, ".2g")
-                return s
-
-            # Format "magnitude": if error isn’t NaN, use ceil(-log10(error)+1) decimals; else 4 decimals.
-            elif col_header == "magnitude":
-                headers_lower = [h.lower() for h in self._headers]
-                if "error" in headers_lower:
-                    error_idx = headers_lower.index("error")
-                    try:
-                        error_val = float(self._data[index.row(), error_idx])
-                    except Exception:
-                        error_val = np.nan
-                    if np.isnan(error_val) or error_val == 0:
-                        dp = 4
-                    else:
-                        dp = int(np.ceil(-np.log10(error_val) + 1))
-                else:
-                    dp = 4
-                truncated = np.trunc(val * (10 ** dp)) / (10 ** dp)
-                s = f"{truncated:.{dp}f}"
-                s = s.rstrip('0').rstrip('.') if '.' in s else s
-                return s
-
-            else:
-                return str(raw_value)
-        return None
-
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role == Qt.ItemDataRole.DisplayRole:
-            if orientation == Qt.Orientation.Horizontal:
-                if section < len(self._headers):
-                    return self._headers[section]
-            else:
-                return str(section)
-        return None
-
-# -------------------------------
-# Customized Search LineEdit with forced–search support
-# -------------------------------
-class SearchLineEdit(QtWidgets.QLineEdit):
-    # Custom signal to indicate a forced search (via Tab or Enter)
-    forceSearch = QtCore.pyqtSignal()
-
-    def keyPressEvent(self, event: QtGui.QKeyEvent):
-        # For Tab, Return, or Enter, emit forceSearch and do not pass the event on.
-        if event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.forceSearch.emit()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def focusNextPrevChild(self, next: bool) -> bool:
-        # Override to prevent Tab from moving focus away.
-        return False
 
 # -------------------------------
 # Main window with added .phot64 support and plotting functionality
@@ -1005,6 +801,210 @@ class MainWindow(QMainWindow):
                 self.pending_files.append(path)
         else:
             print(f"Warning: {path} is not a valid photometry file or directory.")
+
+# --- Phot64 Quantization Constants ---
+TIME_QUANT = 1e-5      # for the 32-bit time field
+Y_QUANT = 1.25e-4      # for the 20-bit y field
+DY_QUANT = 2.5e-4      # for the 12-bit dy field
+
+# -------------------------------
+# Functions for loading & converting .phot64 files
+# -------------------------------
+def load_phot64_file(filepath):
+    with open(filepath, "rb") as f:
+        count = int(np.frombuffer(f.read(8), dtype='<u8')[0])
+        offsets = np.frombuffer(f.read(8 * (count + 1)), dtype='<u8')
+        ids_array = np.frombuffer(f.read(count * 64), dtype='S64')
+        ids = [s.decode('utf-8').rstrip('\x00') for s in ids_array]
+        sizes = np.frombuffer(f.read(count * 24), dtype='<f8').reshape((count, 3))
+        allocated = sizes[:, 0]
+        filled = sizes[:, 1]
+        first_times = sizes[:, 2]
+        total_data = int(offsets[-1])
+        data = np.frombuffer(f.read(total_data * 8), dtype='<u8')
+        objects = []
+        for i in range(count):
+            start = int(offsets[i])
+            end = int(offsets[i+1])
+            raw_data = data[start:end].copy()
+            obj = {
+                "id": ids[i],
+                "allocated": int(allocated[i]),
+                "filled": int(filled[i]),
+                "time": first_times[i],
+                "data": raw_data
+            }
+            objects.append(obj)
+    return objects
+
+def convert_phot64_data(phot64_obj):
+    raw_data = phot64_obj["data"][:phot64_obj["filled"]]
+    raw_data = np.asarray(raw_data, dtype=np.uint64)
+    time_int = raw_data >> 32
+    y_packed = (raw_data >> 12) & 0xFFFFF  # 20 bits for magnitude (sign–magnitude)
+    dy_int = raw_data & 0xFFF              # 12 bits for error
+    sign_mask = 1 << 19
+    y_int = np.where((y_packed & sign_mask) != 0, - (y_packed & 0x7FFFF), y_packed)
+    time_vals = phot64_obj["time"] + time_int.astype(np.float64) * TIME_QUANT
+    mag_vals = y_int.astype(np.float64) * Y_QUANT
+    err_vals = dy_int.astype(np.float64) * DY_QUANT
+    data = np.column_stack((time_vals, mag_vals, err_vals))
+    return data, ["time", "magnitude", "error"]
+
+# -------------------------------
+# Lazy widget for phot64 object tabs
+# -------------------------------
+class LazyPhot64ObjectWidget(LazyWidgetBase):
+    def __init__(self, file_path, phot64_obj, parent=None):
+        super().__init__(file_path, parent)
+        self.phot64_obj = phot64_obj
+
+    def _load_data_impl(self):
+        # Use the provided conversion function to load data.
+        return convert_phot64_data(self.phot64_obj)
+
+    def _get_data_title(self):
+        # Display the phot64 object's ID.
+        return self.phot64_obj['id']
+
+    def _get_error_prefix(self):
+        return "Error loading phot64 object data:"
+
+    def _get_plot_title(self):
+        return self.phot64_obj.get('id', 'Plot')
+
+
+# -------------------------------
+# Lazy widget for non–phot64 files (single file photometry)
+# -------------------------------
+class LazyTableWidget(LazyWidgetBase):
+    def __init__(self, file_path, load_func, parent=None):
+        super().__init__(file_path, parent)
+        self.load_func = load_func  # Function to load the file
+        self.plot_data_col_major = None  # For reordering the data for plotting
+
+    def _load_data_impl(self):
+        return self.load_func(self.file_path)
+
+    def _get_data_title(self):
+        base_filename = os.path.basename(self.file_path)
+        filename_without_extension, _ = os.path.splitext(base_filename)
+        return filename_without_extension
+
+    def _get_error_prefix(self):
+        return "Error loading file:"
+
+    def _get_plot_title(self):
+        return os.path.splitext(os.path.basename(self.file_path))[0]
+
+    def _get_plot_series_data(self):
+        # Reorder the data in column-major order before plotting.
+        self.plot_data_col_major = np.array(self.data, order='F')
+        times = self.plot_data_col_major[:, 0]
+        mags = self.plot_data_col_major[:, 1]
+        for t, m in zip(times, mags):
+            yield float(t), float(m)
+
+
+# -------------------------------
+# Table model (unchanged)
+# -------------------------------
+class NumpyTableModel(QtCore.QAbstractTableModel):
+    def __init__(self, data, headers, parent=None):
+        super().__init__(parent)
+        self._data = data
+        self._headers = headers
+
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        return self._data.shape[0]
+
+    def columnCount(self, parent=QtCore.QModelIndex()):
+        return self._data.shape[1]
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
+            col_header = self._headers[index.column()].lower()
+            raw_value = self._data[index.row(), index.column()]
+            try:
+                val = float(raw_value)
+            except Exception:
+                return str(raw_value)
+
+            # Format "time": truncate to 6 decimal places at most.
+            if col_header == "time":
+                truncated = np.trunc(val * 1e6) / 1e6
+                s = f"{truncated:.6f}"
+                s = s.rstrip('0').rstrip('.') if '.' in s else s
+                return s
+
+            # Format "error": truncate to 2 significant digits.
+            elif col_header == "error":
+                if np.isnan(val):
+                    return "nan"
+                if val == 0:
+                    return "0"
+                exponent = np.floor(np.log10(abs(val)))
+                scale = 10 ** (exponent - 2)
+                truncated_val = np.floor(val / scale) * scale
+                if abs(truncated_val) < 1e-2:
+                    s = f"{truncated_val:.2e}"
+                else:
+                    s = format(truncated_val, ".2g")
+                return s
+
+            # Format "magnitude": if error isn’t NaN, use ceil(-log10(error)+1) decimals; else 4 decimals.
+            elif col_header == "magnitude":
+                headers_lower = [h.lower() for h in self._headers]
+                if "error" in headers_lower:
+                    error_idx = headers_lower.index("error")
+                    try:
+                        error_val = float(self._data[index.row(), error_idx])
+                    except Exception:
+                        error_val = np.nan
+                    if np.isnan(error_val) or error_val == 0:
+                        dp = 4
+                    else:
+                        dp = int(np.ceil(-np.log10(error_val) + 1))
+                else:
+                    dp = 4
+                truncated = np.trunc(val * (10 ** dp)) / (10 ** dp)
+                s = f"{truncated:.{dp}f}"
+                s = s.rstrip('0').rstrip('.') if '.' in s else s
+                return s
+
+            else:
+                return str(raw_value)
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
+                if section < len(self._headers):
+                    return self._headers[section]
+            else:
+                return str(section)
+        return None
+
+# -------------------------------
+# Customized Search LineEdit with forced–search support
+# -------------------------------
+class SearchLineEdit(QtWidgets.QLineEdit):
+    # Custom signal to indicate a forced search (via Tab or Enter)
+    forceSearch = QtCore.pyqtSignal()
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent):
+        # For Tab, Return, or Enter, emit forceSearch and do not pass the event on.
+        if event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.forceSearch.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusNextPrevChild(self, next: bool) -> bool:
+        # Override to prevent Tab from moving focus away.
+        return False
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
