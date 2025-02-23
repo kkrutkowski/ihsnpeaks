@@ -810,18 +810,34 @@ DY_QUANT = 2.5e-4      # for the 12-bit dy field
 # -------------------------------
 # Functions for loading & converting .phot64 files
 # -------------------------------
+import numpy as np
+
 def load_phot64_file(filepath):
     with open(filepath, "rb") as f:
-        count = int(np.frombuffer(f.read(8), dtype='<u8')[0])
+        # Read the global header: two uint64_t values (count, max_filled)
+        header = np.frombuffer(f.read(16), dtype='<u8')
+        count = int(header[0])
+        max_filled = int(header[1])  # This value is read but not used further.
+
+        # Read the offsets array.
         offsets = np.frombuffer(f.read(8 * (count + 1)), dtype='<u8')
+
+        # Read the IDs block.
         ids_array = np.frombuffer(f.read(count * 64), dtype='S64')
         ids = [s.decode('utf-8').rstrip('\x00') for s in ids_array]
-        sizes = np.frombuffer(f.read(count * 24), dtype='<f8').reshape((count, 3))
-        allocated = sizes[:, 0]
-        filled = sizes[:, 1]
-        first_times = sizes[:, 2]
+
+        # Read the sizes block.
+        # Note: allocated and filled are now stored as uint64_t, and t0 as a double.
+        sizes_dtype = np.dtype([("allocated", "<u8"), ("filled", "<u8"), ("t0", "<f8")])
+        sizes = np.frombuffer(f.read(count * 24), dtype=sizes_dtype)
+        allocated = sizes["allocated"]
+        filled = sizes["filled"]
+        first_times = sizes["t0"]
+
+        # Read the data block.
         total_data = int(offsets[-1])
         data = np.frombuffer(f.read(total_data * 8), dtype='<u8')
+
         objects = []
         for i in range(count):
             start = int(offsets[i])
