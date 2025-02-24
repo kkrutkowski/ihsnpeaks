@@ -108,13 +108,16 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
         {"epsilon", ko_required_argument, 'e'},
-        {"mode", ko_required_argument, 'm'}, //partially implemented, 0-4, decides amount of
+        {"mode", ko_required_argument, 'm'},
         {"jobs", ko_required_argument, 'j'},
         {"spectrum", ko_no_argument, 's'},
         {"debug", ko_no_argument, 'd'},
-        {"corrected", ko_no_argument, 'c'}, //apply the logarithmic correction, not implemented
+        {"corrected", ko_no_argument, 'c'}, //apply the logarithmic correction, not fully implemented
         {"idle", ko_no_argument, 'i'},
         {"help", ko_no_argument, 'h'},
+        // Negative cases, corresponding to long arguments only;
+        {"pack", ko_no_argument, '\xfe'},
+        {"strip", ko_no_argument, '\xfd'},
         {NULL, 0, 0}
     };
 
@@ -123,7 +126,8 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2; // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:j:m:sdich", longopts)) >= 0) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:j:m:sdich\xfe\xfd", longopts)) != -1) {
+        //printf("argument: %c", c);
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
@@ -162,6 +166,12 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.corrected = true;
                 break;
             case 'h':
+                print_help(argv); exit(0);
+                break;
+            case '\xfe':
+                print_help(argv); exit(0);
+                break;
+            case '\xfd':
                 print_help(argv); exit(0);
                 break;
             case '?':
