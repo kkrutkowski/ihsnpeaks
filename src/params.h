@@ -88,8 +88,10 @@ void print_help(char** argv) {
     printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:2)\n");
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
-    printf("  -d, --debug               Print parameters before the computation (default: false)\n");
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
+    printf("\n"};
+    printf("      --debug               Print parameters before the computation (default: false)\n");
+    printf("\n"};
     printf("  -h, --help                Display this help message and exit\n");
     printf("Example:\n");
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 -d --spectrum \n", argv[0]);
