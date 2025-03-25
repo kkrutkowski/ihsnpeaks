@@ -82,8 +82,8 @@ void print_help(char** argv) {
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
     printf("  -t, --threshold            Set the peak detection threshold (default: 10.0)\n");
     printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
-    printf("  -p, --peaks               Set the maximum number of peaks (default: 10)\n");
-    printf("  -n, --terms               Set the number of harmonics used for computation (default: 3)\n");
+    printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
+    printf("  -d, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
     printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:2)\n");
     printf("\n");
@@ -104,8 +104,8 @@ static parameters read_parameters(int argc, char *argv[]) {
     // Define long options
     static ko_longopt_t longopts[] = {
          //impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
-        {"peaks", ko_required_argument, 'p'},
-        {"terms", ko_required_argument, 'n'},
+        {"peaks", ko_required_argument, 'n'},
+        {"terms", ko_required_argument, 'd'},
         {"threshold", ko_required_argument, 't'},
         {"fmin", ko_required_argument, 'f'},
         {"oversampling", ko_required_argument, 'o'},
@@ -113,10 +113,10 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"mode", ko_required_argument, 'm'},
         {"jobs", ko_required_argument, 'j'},
         {"spectrum", ko_no_argument, 's'},
-        {"debug", ko_no_argument, 'd'},
         {"corrected", ko_no_argument, 'c'}, //apply the logarithmic correction, not fully implemented
         {"idle", ko_no_argument, 'i'},
         {"help", ko_no_argument, 'h'},
+        {"debug", ko_no_argument, '\xfc'},
         // Negative cases, corresponding to long arguments only;
         {"pack", ko_no_argument, '\xfe'},
         {"strip", ko_no_argument, '\xfd'},
@@ -128,16 +128,16 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2; // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:p:n:t:f:e:j:m:sdich\xfe\xfd", longopts)) != -1) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:sich\xfc\xfe\xfd", longopts)) != -1) {
         //printf("argument: %c", c);
         switch (c) {
             case 'o':
                 params.oversamplingFactor = atof(opt.arg);
                 break;
-            case 'p':
+            case 'n':
                 params.npeaks = atoi(opt.arg);
                 break;
-            case 'n':
+            case 'd':
                 params.nterms = atoi(opt.arg);
                 break;
             case 't':
@@ -158,7 +158,7 @@ static parameters read_parameters(int argc, char *argv[]) {
             case 's':
                 params.spectrum = true;
                 break;
-            case 'd':
+            case '\xfc':
                 params.debug = true;
                 break;
             case 'i':
