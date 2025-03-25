@@ -94,7 +94,7 @@ void print_help(char** argv) {
     printf("\n"};
     printf("  -h, --help                Display this help message and exit\n");
     printf("Example:\n");
-    printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 -d --spectrum \n", argv[0]);
+    printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
 }
 
 // Function to parse command-line arguments into a parameters struct
