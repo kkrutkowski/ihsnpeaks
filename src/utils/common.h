@@ -77,6 +77,7 @@ typedef struct {
     bool debug;
     bool corrected;
     bool idle;
+    bool prewhiten;
     pthread_mutex_t mutex; pthread_mutex_t counter_mutex; int iter_count;
 
     fftwf_plan plan;
