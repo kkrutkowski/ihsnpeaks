@@ -31,4 +31,17 @@ make
 sudo make install
 ```
 Will make the makefile choose the preferred installation method based on the availability of a suitable release candidate for Linux operating systems, depending on the target's architecture.
+
+## Planned features
+### Prewhitening
+#### Transit detection and outlier filtering
+### MAST .fits photometry support
+### Multi-target archive support
+#### Custom .phot64 binary archive
+#### Tape archive input (.dat + .fits content)
+#### Multiband periodograms
+#### LZ4 runtime decompression
+#### Archive creation
+### GUI results evalutation tool
+
 ## Credits
