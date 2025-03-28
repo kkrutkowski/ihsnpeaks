@@ -33,8 +33,8 @@ sudo make install
 Will make the makefile choose the preferred installation method based on the availability of a suitable release candidate for Linux operating systems, depending on the target's architecture.
 
 ## Planned features
-### Prewhitening
-#### Transit detection and outlier filtering
+* Prewhitening
+*     Transit detection and outlier filtering
 ### MAST .fits photometry support
 ### Multi-target archive support
 #### Custom .phot64 binary archive
