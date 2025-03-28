@@ -34,7 +34,7 @@ Will make the makefile choose the preferred installation method based on the ava
 
 ## Planned features
 * Prewhitening
-*   Transit detection and outlier filtering
+ * Transit detection and outlier filtering
 ### MAST .fits photometry support
 ### Multi-target archive support
 #### Custom .phot64 binary archive
