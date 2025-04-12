@@ -89,9 +89,9 @@ void print_help(char** argv) {
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
-    printf("\n"};
+    printf("\n");
     printf("      --debug               Print parameters before the computation (default: false)\n");
-    printf("\n"};
+    printf("\n");
     printf("  -h, --help                Display this help message and exit\n");
     printf("Example:\n");
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
