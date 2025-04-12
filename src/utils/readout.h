@@ -69,8 +69,10 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         for (int i = 0; i < buffer->terms; i++){buffer->grids[i] = (fftwf_complex*) fftwf_malloc(buffer->memBlockSize);}
         if (!buffer->grids) goto error;
         else buffer->nGrids = params->nterms;
-    if (!buffer->peaks){buffer->peaks = calloc(params->npeaks, sizeof(peak_t));} buffer->nPeaks = 0;
-        if (!buffer->peaks) goto error;
+    if (params->prewhiten){if (!buffer->peaks){buffer->peaks = calloc(2 * params->npeaks, sizeof(peak_t));} buffer->nPeaks = 0;}
+        else {if (!buffer->peaks){buffer->peaks = calloc(params->npeaks, sizeof(peak_t));} buffer->nPeaks = 0;
+        } if (!buffer->peaks) goto error;
+
     if (!buffer->gidx) {buffer->gidx = calloc(params->nterms, sizeof(uint32_t **));}//
         if (!buffer->gidx) goto error;
         for (int i = 0; i < buffer->terms; i++){
