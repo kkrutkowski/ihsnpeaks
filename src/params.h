@@ -31,7 +31,6 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.defaultGridRatio = 32;
     params.gridRatio = 32;
     params.mode = 2;
-    params.spectrum = false;
 
     return params;
 }
@@ -47,6 +46,7 @@ void print_parameters(parameters *params) {
     printf("\tNpeaks: %d\n", params->npeaks);
     printf("\tNterms: %d\n", params->nterms);
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
+    printf("\tPrewhiten: %s\n", params->prewhiten ? "true" : "false");
     printf("\tIs file: %s\n", params->isFile ? "true" : "false");
     printf("\tIDLE: %s\n", params->idle ? "true" : "false");
     printf("\tLargest file's length: %i\n", params->maxLen);
@@ -91,6 +91,7 @@ void print_help(char** argv) {
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
     printf("\n");
     printf("      --debug               Print parameters before the computation (default: false)\n");
+    printf("      --prewhiten           Attenuate detected variability modes (default: false)\n");
     printf("\n");
     printf("  -h, --help                Display this help message and exit\n");
     printf("Example:\n");
@@ -116,10 +117,11 @@ static parameters read_parameters(int argc, char *argv[]) {
         {"corrected", ko_no_argument, 'c'}, //apply the logarithmic correction, not fully implemented
         {"idle", ko_no_argument, 'i'},
         {"help", ko_no_argument, 'h'},
+        {"prewhiten", ko_no_argument, '\xfb'},
         {"debug", ko_no_argument, '\xfc'},
         // Negative cases, corresponding to long arguments only;
-        {"pack", ko_no_argument, '\xfe'},
         {"strip", ko_no_argument, '\xfd'},
+        {"pack", ko_no_argument, '\xfe'},
         {NULL, 0, 0}
     };
 
@@ -128,7 +130,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2; // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:sich\xfc\xfe\xfd", longopts)) != -1) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:sich\xfb\xfc\xfd\xfe", longopts)) != -1) {
         //printf("argument: %c", c);
         switch (c) {
             case 'o':
@@ -157,6 +159,10 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 's':
                 params.spectrum = true;
+                break;
+            case '\xfb':
+                params.prewhiten = true;
+                //printf("Prewhitening\n");
                 break;
             case '\xfc':
                 params.debug = true;
