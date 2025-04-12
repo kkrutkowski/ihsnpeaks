@@ -51,48 +51,48 @@ static inline void free_buffer (buffer_t* buffer) {
     #endif
 }
 
-static inline int alloc_buffer(buffer_t* buffer, int terms, int n, int size, uint32_t gridLen, int npeaks, int mode) {
-    buffer->memBlockSize = (gridLen + 16) * sizeof(fftwf_complex);
-    buffer->len = n; buffer->allocated = true; buffer->terms = terms;
+static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
+    buffer->memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
+    buffer->len = params->maxLen; buffer->allocated = true; buffer->terms = params->nterms;
     buffer->spectrum = sdsempty(); buffer->outBuf = sdsempty();
-    if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(n * sizeof(double)));}
+    if (!buffer->x) {buffer->x = aligned_alloc(64, round_buffer(params->maxLen * sizeof(double)));}
         if (!buffer->x) goto error;
-    if (!buffer->y) {buffer->y = aligned_alloc(64, round_buffer(n * sizeof(float)));}
+    if (!buffer->y) {buffer->y = aligned_alloc(64, round_buffer(params->maxLen * sizeof(float)));}
         if (!buffer->y) goto error;
-    if (!buffer->dy) {buffer->dy = aligned_alloc(64, round_buffer(n * sizeof(float)));}
+    if (!buffer->dy) {buffer->dy = aligned_alloc(64, round_buffer(params->maxLen * sizeof(float)));}
         if (!buffer->dy) goto error;
     if (!buffer->pidx) {buffer->pidx = (size_t*) malloc(1024 * sizeof(size_t));}
         if (!buffer->pidx) goto error;
-    if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(size));}
+    if (!buffer->readBuf) {buffer->readBuf = aligned_alloc(64, round_buffer(params->maxSize));}
         if (!buffer->readBuf) goto error;
-    if (!buffer->grids) {buffer->grids = calloc(terms, sizeof(complex float *));}
+    if (!buffer->grids) {buffer->grids = calloc(params->nterms, sizeof(complex float *));}
         for (int i = 0; i < buffer->terms; i++){buffer->grids[i] = (fftwf_complex*) fftwf_malloc(buffer->memBlockSize);}
         if (!buffer->grids) goto error;
-        else buffer->nGrids = terms;
-    if (!buffer->peaks){buffer->peaks = calloc(npeaks, sizeof(peak_t));} buffer->nPeaks = 0;
+        else buffer->nGrids = params->nterms;
+    if (!buffer->peaks){buffer->peaks = calloc(params->npeaks, sizeof(peak_t));} buffer->nPeaks = 0;
         if (!buffer->peaks) goto error;
-    if (!buffer->gidx) {buffer->gidx = calloc(terms, sizeof(uint32_t **));}//
+    if (!buffer->gidx) {buffer->gidx = calloc(params->nterms, sizeof(uint32_t **));}//
         if (!buffer->gidx) goto error;
         for (int i = 0; i < buffer->terms; i++){
-            buffer->gidx[i] = aligned_alloc(64, round_buffer(n * sizeof(uint32_t)));
+            buffer->gidx[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(uint32_t)));
             if (!buffer->gidx[i]) goto error;
         }
 
-    if (!buffer->gdist) {buffer->gdist = calloc(terms, sizeof(float *));}//
+    if (!buffer->gdist) {buffer->gdist = calloc(params->nterms, sizeof(float *));}//
         if (!buffer->gdist) goto error;
         for (int i = 0; i < buffer->terms; i++){
-            buffer->gdist[i] = aligned_alloc(64, round_buffer(n * sizeof(float)));
+            buffer->gdist[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(float)));
             if (!buffer->gdist[i]) goto error;
         }
-    if (mode > 0 && !buffer->buf){
+    if (params->mode > 0 && !buffer->buf){
         buffer -> buf = calloc(3, sizeof(void*));
-        for (int i = 0; i < 3; i++){buffer->buf[i] = aligned_alloc(64, round_buffer(n * sizeof(uint64_t)));}
+        for (int i = 0; i < 3; i++){buffer->buf[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(uint64_t)));}
     }
     #ifndef __AVX__
-    if (!buffer->weights) {buffer->weights = calloc(terms, sizeof(float *));}//
+    if (!buffer->weights) {buffer->weights = calloc(params->nterms, sizeof(float *));}//
         if (!buffer->weights) goto error;
         for (int i = 0; i < buffer->terms; i++){
-            buffer->weights[i] = aligned_alloc(64, round_buffer(16 * n * sizeof(float)));
+            buffer->weights[i] = aligned_alloc(64, round_buffer(16 * params->maxLen * sizeof(float)));
             if (!buffer->weights[i]) goto error;
         }
     #endif
