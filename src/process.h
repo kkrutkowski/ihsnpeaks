@@ -260,6 +260,8 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         for(int i = 0; i < buffer->n; i++){tmp[i].parts.val = buffer->y[i];}
     }*/
 
+    int prewhitening_iter = 0;
+
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
     const float threshold = params->threshold; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
 
@@ -280,6 +282,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     double invGridLen = 1.0 / (double)(gridLen);
     double df = 1.0 / buffer->x[buffer->n - 1];
     uint32_t shift = (gridLen * 43 / 64);
+
+    prewhiten:
+    if (prewhitening_iter > 0){}
 
     for(int t = 0; t < buffer->terms; t++){
         #ifndef __AVX__
