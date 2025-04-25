@@ -250,7 +250,6 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
     }
 }
 
-//wrong results for fmin > 0, grids <= 32768 (2^15) and >= 524288 (2^19). To be fixed (muFFT's bug?)
 void process_target(char* in_file, buffer_t* buffer, parameters* params, const bool batch){
     read_dat(in_file, buffer); preprocess_buffer(buffer, params->epsilon, params->mode); //read the data from .dat file
 
@@ -263,10 +262,11 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     int prewhitening_iter = 0;
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
-    const float threshold = params->threshold; memset(buffer->peaks, 0, params->npeaks * sizeof(peak_t));
+    const float threshold = params->threshold;
 
 
-    double fmin = params->fmin; double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
+    double fmin = params->fmin;
+    double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
     double fspan = (double)(params->gridLen) * fstep; // used to compute the scale of FFT grid
     double fjump = fspan * (21.0/32.0); //used to switch to next transform
     double fmax = fmin + fjump;
@@ -282,9 +282,6 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     double invGridLen = 1.0 / (double)(gridLen);
     double df = 1.0 / buffer->x[buffer->n - 1];
     uint32_t shift = (gridLen * 43 / 64);
-
-    prewhiten:
-    if (prewhitening_iter > 0){}
 
     for(int t = 0; t < buffer->terms; t++){
         #ifndef __AVX__
@@ -309,6 +306,17 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             #endif
         }
     }
+
+    prewhiten:
+    if (prewhitening_iter > 0){
+
+        fmin = params->fmin; fmax = fmin + fjump; fmid = (fmax + fmin) * 0.5;
+
+        double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
+        printf("%.3f\n", prewhitening_freq);
+    }
+
+    memset(&buffer->peaks[prewhitening_iter], 0, params->npeaks * sizeof(peak_t));
 
     while(fmin < params->fmax){
         double freq = 0;
@@ -375,7 +383,12 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     } end:
 
 
-    sortPeaks(buffer->peaks, buffer->nPeaks, buffer, params->mode, df, params->nterms);
+    sortPeaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params->mode, df, params->nterms);
+
+    if (params-> prewhiten && prewhitening_iter < buffer->nPeaks) {
+        prewhitening_iter += 1;
+        goto prewhiten
+    ;}
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
     else {append_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
