@@ -309,14 +309,17 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
     prewhiten:
     if (prewhitening_iter > 0){
-
         fmin = params->fmin; fmax = fmin + fjump; fmid = (fmax + fmin) * 0.5;
-
         double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
+        float norm = sqrtf(sqrtf(1.0 / (float)(buffer->n)));
+
+        for (unsigned int i = 0; i < buffer->n; i++){buffer->dy[i] = buffer->y[i] * norm;}
+
         printf("%.3f\n", prewhitening_freq);
     }
 
-    memset(&buffer->peaks[prewhitening_iter], 0, params->npeaks * sizeof(peak_t));
+    memset(&buffer->peaks[prewhitening_iter + 1], 0, params->npeaks * sizeof(peak_t));
+    buffer->nPeaks = prewhitening_iter;
 
     while(fmin < params->fmax){
         double freq = 0;
