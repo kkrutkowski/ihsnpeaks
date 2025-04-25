@@ -311,7 +311,9 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     if (prewhitening_iter > 0){
         fmin = params->fmin; fmax = fmin + fjump; fmid = (fmax + fmin) * 0.5;
         double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
-        float norm = sqrtf(sqrtf(1.0 / (float)(buffer->n)));
+        double ysum = 0;
+        for (unsigned int i = 0; i < buffer->n; i++){ysum += fabs(buffer->y[i]);}
+        float norm = (sqrtf(buffer->neff) / (float)(ysum));
 
         for (unsigned int i = 0; i < buffer->n; i++){buffer->dy[i] = buffer->y[i] * norm;}
 

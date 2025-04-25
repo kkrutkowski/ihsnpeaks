@@ -23,6 +23,7 @@ typedef struct {
     uint32_t     r;
     uint32_t terms;
     uint32_t memBlockSize;
+    double neff;
 
     peak_t* peaks;
     uint32_t nPeaks;

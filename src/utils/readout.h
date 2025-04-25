@@ -188,14 +188,14 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode)
         buffer->dy[i] = 1.0 / buffer->dy[i];
     }
 
-    double wsum = 0; double wsqsum = 0; double neff = 0;
+    double wsum = 0; double wsqsum = 0;
 
     for(uint32_t i = 0; i < buffer->n; i++){wsum += fabs(buffer->dy[i]); wsqsum += buffer->dy[i] * buffer->dy[i];}
-    neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
-    //float nEffInv = 1 / neff;
-    //printf("%f\n", neff); // ok
+    buffer->neff = ((wsum * wsum) / wsqsum) - 2.0; wsum = 0; // -2 for linear regression
+    //float buffer->neffInv = 1 / buffer->neff;
+    //printf("%f\n", buffer->neff); // ok
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= buffer->y[i]; wsum += fabs(buffer->dy[i]);} // ok
-    wsum = sqrt(neff) / wsum; //sqrt because of square later
+    wsum = sqrt(buffer->neff) / wsum; //sqrt because of square later
     for(uint32_t i = 0; i < buffer->n; i++){buffer->dy[i] *= wsum;} //correct result
 
     if (mode > 0){linreg_buffer(buffer);}
