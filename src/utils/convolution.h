@@ -110,7 +110,7 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     for (int j = 0; j < n; j++) {out[j] *= norm;} // Normalize
 }
 
-static inline float get_r(buffer_t *buffer, double freq, float* amp){
+static inline float get_r(buffer_t *buffer, double freq, float* amp, bool prewhiten){
     double freq_tmp = 1024.0 * freq; //10-bit key
     double min = 0; double max = 0;
     double ref = 0; double res = 0;
@@ -155,11 +155,11 @@ static inline void binsearch_peak(peak_t *peak, buffer_t *buffer, double df){
         step *= 0.5;
 
         freq_tmp = peak->freq - step;
-        R = get_r(buffer, freq_tmp, NULL);
+        R = get_r(buffer, freq_tmp, NULL, false);
         if(R > peak->r){peak->r = R; peak->freq = freq_tmp;}
 
         freq_tmp = peak->freq + step;
-        R = get_r(buffer, freq_tmp, NULL);
+        R = get_r(buffer, freq_tmp, NULL, false);
         if(R > peak->r){peak->r = R; peak->freq = freq_tmp;}
     }
 }
@@ -184,7 +184,7 @@ static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode,
     }else {
         for (i = 0; i < length; i++){
             if(mode > 1 && mode < 4){binsearch_peak(&peaks[i], buf, df);}
-            if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp);}
+            if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp, false);}
             peaks[i].p = get_z(peaks[i].r, buf->n);
         };
 
