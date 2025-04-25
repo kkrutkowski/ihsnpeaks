@@ -315,7 +315,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
 
         for (unsigned int i = 0; i < buffer->n; i++){buffer->dy[i] = buffer->y[i] * norm;}
 
-        printf("%.3f\n", prewhitening_freq);
+        // printf("%.3f\n", prewhitening_freq);
     }
 
     memset(&buffer->peaks[prewhitening_iter + 1], 0, params->npeaks * sizeof(peak_t));
