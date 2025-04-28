@@ -31,6 +31,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.defaultGridRatio = 32;
     params.gridRatio = 32;
     params.mode = 2;
+    params.r_threshold = 1.05;
 
     return params;
 }

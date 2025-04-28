@@ -69,6 +69,7 @@ typedef struct {
     char* outFile;
     float fmin;    float fmax;
     float threshold;
+    float r_threshold;
     float oversamplingFactor;
     float epsilon;
     int npeaks;    int nterms;

@@ -125,6 +125,7 @@ static inline float get_r(buffer_t *buffer, double freq, float* amp, bool prewhi
     for (int i = 0; i < buffer->n; i++){
         input[i].parts.key = ((uint16_t)(buffer->x[i] * freq_tmp)) & 0b0000001111111111; // get rid of the 6 most significant bits
         input[i].parts.val = buffer->y[i];
+        if (prewhiten){input[i].parts.idx = i;}
     }
 
     csort64_10(sort_in, buffer->n, sort_out, buffer->pidx); //sort the pairs by phase
@@ -138,6 +139,9 @@ static inline float get_r(buffer_t *buffer, double freq, float* amp, bool prewhi
         if (amp){
             if (output[i] < min){min = output[i];}
             if (output[i] > max){max = output[i];}
+        }
+        if (prewhiten) {
+            buffer->y[sorted[i].parts.idx] -= output[i];// return 0;
         }
         output[i] = (output[i] - (corr[r-1] * (double)(sorted[i].parts.val))) * multiplier;
         res += ((double)(sorted[i].parts.val) - output[i]) * ((double)(sorted[i].parts.val) - output[i]);
@@ -183,7 +187,9 @@ static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode,
         for (i = 0; i < length; i++){peaks[i].p = correct_ihs_res(peaks[i].p, n);} //Erlang's logarithmic correction'
     }else {
         for (i = 0; i < length; i++){
-            if(mode > 1 && mode < 4){binsearch_peak(&peaks[i], buf, df);}
+            if(mode > 1 && mode < 4){
+                binsearch_peak(&peaks[i], buf, df);
+            }
             if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp, false);}
             peaks[i].p = get_z(peaks[i].r, buf->n);
         };
