@@ -88,7 +88,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
 
     /* First pass: scan through peaks and compute the maximum printed width for each column.
        Note: For log(p) we compute log10(p) by first converting the natural log to log10 using M_LOG10E. */
-    for(i = 0; i < params->npeaks && buffer->peaks[i].p > 0; i++){
+    for(i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++){
         double freq = buffer->peaks[i].freq;
         double logp = buffer->peaks[i].p * M_LOG10E; // equivalent to log10(p)
         double amp  = buffer->peaks[i].amp;
@@ -134,7 +134,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     {
         char temp[64];
         int pad, len;
-        for (i = 0; i < params->npeaks && buffer->peaks[i].p > 0; i++){
+        for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++){
             // Frequency column (precision n)
             custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
             len = (int)strlen(stringBuff);
@@ -216,7 +216,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
 
         // Append each peak's information to the output buffer
         if (mode == 0){
-            while (i < params->npeaks && buffer->peaks[i].p > 0) {
+            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
                 // Convert frequency to string using custom_ftoa
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
                 custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
@@ -228,7 +228,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
                 i++;
         }} else {
-            while (i < params->npeaks && buffer->peaks[i].p > 0) {
+            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
                 // Convert frequency to string using custom_ftoa
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
                 custom_dtoa(buffer->peaks[i].freq, n+1, stringBuff);
@@ -404,22 +404,23 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     sortPeaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params->mode, df, params->nterms);
 
     if (params-> prewhiten && prewhitening_iter < buffer->nPeaks) {
-        //temporary fix, to be replaced
-        if (prewhitening_iter > 1){
-            for (int i = 1; i <= prewhitening_iter; i++){
-                buffer->peaks[i-1].r = backup_r[i];
-                buffer->peaks[i-1].p = backup_p[i];
-            };
-            }
-
         prewhitening_iter += 1;
         buffer->nPeaks = prewhitening_iter;
-            for (int i = 0; i < buffer->nPeaks; i++){printf("%.3f\n", buffer->peaks[i].r);}
-            printf("\n");
+            //debugging prints for memory loss - do not remove
+            //for (int i = 0; i < buffer->nPeaks; i++){printf("%.3f\n", buffer->peaks[i].r);}
+            //printf("\n");
         goto prewhiten
     ;}
 
     next:
+    //a temporary memory loss fix
+    if (prewhitening_iter > 1){
+        for (int i = 1; i <= prewhitening_iter; i++){
+            buffer->peaks[i-1].r = backup_r[i];
+            buffer->peaks[i-1].p = backup_p[i];
+        };
+        buffer->nPeaks = prewhitening_iter;
+    }
 
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
     else {append_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
