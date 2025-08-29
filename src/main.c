@@ -1,7 +1,7 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
 #define FFTW_MEASURE_THRESHOLD 19
 
-#if __STDC_VERSION__ < 202311L  // If C23 is not available
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L  // If C23 is not available
     #define constexpr const
 #endif
 #if (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L)
