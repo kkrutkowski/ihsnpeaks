@@ -108,7 +108,8 @@ static bool process_path(parameters* params) {
 
         params->maxSize = file_stat.st_size + 1;
         params->maxLen = newline_count;
-        params->gridLen = intmax(1<<11, bitCeil(newline_count * params->gridRatio)); //to be modified (?)
+        //params->gridLen = intmax(1<<11, bitCeil(newline_count * params->gridRatio)); //to be modified (?)
+        params->gridLen = intmax(1<<11, bitCeil((int)sqrt((float)(newline_count)) * (uint64_t)(params->gridRatio)));
         params->plan = fftwf_plan_dft_1d(params->gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
         return true;
     } else {
@@ -169,7 +170,7 @@ static bool process_path(parameters* params) {
         closedir(dir);
         //approximate an near-optimal transform size
         params->avgLen /= DEFAULT_MEASUREMENT_SIZE * kv_size(params->targets);
-        params->gridLen = intmax(1<<11, bitCeil((params->avgLen) * (uint64_t)(params->gridRatio)));
+        params->gridLen = intmax(1<<11, bitCeil((int)sqrt((float)(params->avgLen)) * (uint64_t)(params->gridRatio)));
         params->plan = fftwf_plan_dft_1d(params->gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
     }
 return false;}

@@ -28,8 +28,8 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.epsilon = 0.001;
     params.npeaks = 10;
     params.nterms = 3;
-    params.defaultGridRatio = 32;
-    params.gridRatio = 32;
+    params.defaultGridRatio = 256;
+    params.gridRatio = 256;
     params.mode = 2;
     params.r_threshold = 1.05;
 
