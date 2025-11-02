@@ -265,16 +265,13 @@ static inline VEC ln_ps(const VEC x) {
    #endif
     exp_ln2.data = exp_float.data * ln2_vec.data;
 
-    // Compute mantissa - 1.0 for polynomial evaluation
-    x_minus_one.data = mant_vec.data - one_vec.data;
-
     // Horner's method for polynomial evaluation
     VEC ln_mant = c[5];
-    ln_mant.data = ln_mant.data * x_minus_one.data + c[4].data;
-    ln_mant.data = ln_mant.data * x_minus_one.data + c[3].data;
-    ln_mant.data = ln_mant.data * x_minus_one.data + c[2].data;
-    ln_mant.data = ln_mant.data * x_minus_one.data + c[1].data;
-    ln_mant.data = ln_mant.data * x_minus_one.data + c[0].data;
+    ln_mant.data = ln_mant.data * mant_vec.data + c[4].data;
+    ln_mant.data = ln_mant.data * mant_vec.data + c[3].data;
+    ln_mant.data = ln_mant.data * mant_vec.data + c[2].data;
+    ln_mant.data = ln_mant.data * mant_vec.data + c[1].data;
+    ln_mant.data = ln_mant.data * mant_vec.data + c[0].data;
 
     // Combine results: ln(x) = e * ln(2) + ln(mantissa)
     ln_result.data = exp_ln2.data + ln_mant.data;
