@@ -1,6 +1,7 @@
 #ifndef SIMD_H
 #define SIMD_H
 #include <stdint.h>
+#include <math.h>
 
 // Type definitions
 #ifdef __AVX512F__
@@ -31,13 +32,29 @@
         typedef m256d_union DVEC;
         typedef m256i_union IVEC;
     #else
-        typedef union {uint32_t data; float values[1];} scalar_union;
-        typedef union {uint64_t data; double values[1];} scalard_union;
-        typedef union {uint32_t data; uint32_t values[1];} scalari_union;
+        // GNU Vector extensions for 256-bit vectors
+        typedef float v8sf __attribute__ ((vector_size (32)));
+        typedef double v4df __attribute__ ((vector_size (32)));
+        typedef uint32_t v8ui __attribute__ ((vector_size (32)));
+        typedef int32_t v8si __attribute__ ((vector_size (32)));
 
-        typedef scalar_union VEC;
-        typedef scalard_union DVEC;
-        typedef scalari_union IVEC;
+        #define SET_VEC(val) ((v8sf){val, val, val, val, val, val, val, val})
+        #define SET_IVEC(val) ((v8ui){val, val, val, val, val, val, val, val})
+        #define SET_DVEC(val) ((v4df){val, val, val, val})
+
+        typedef union {v8sf data; float values[8];} m256_union;
+        typedef union {v4df data; double values[4];} m256d_union;
+        typedef union {v8ui data; uint32_t values[8];} m256i_union;
+
+        typedef m256_union VEC;
+        typedef m256d_union DVEC;
+        typedef m256i_union IVEC;
+
+        // Helper function for floor using __builtin_convertvector
+        static inline v8sf vec_floor_ps(v8sf x) {
+            v8si truncated = __builtin_convertvector(x, v8si);
+            return __builtin_convertvector(truncated, v8sf);
+        }
     #endif
 #endif
 
@@ -145,6 +162,66 @@
 
             h1->data = _mm256_div_ps(num[0].data, denom[0].data);
             h2->data = _mm256_div_ps(num[1].data, denom[1].data);
+        }
+    #else
+        // GNU Vector extensions implementation using built-in operators
+        static inline VEC sin_2pi_poly_ps(const VEC x) {
+            constexpr VEC c[4] = {SET_VEC(6.2831676e+0f), SET_VEC(-4.1337518e+1f), SET_VEC(8.1351678e+1f), SET_VEC(-7.1087358e+1f)};
+            const v8sf x2 = x.data * x.data;
+
+            VEC result;
+            result.data = c[3].data * x2 + c[2].data;
+            result.data = result.data * x2 + c[1].data;
+            result.data = result.data * x2 + c[0].data;
+            result.data = result.data * x.data;
+            return result;
+        }
+
+        static inline VEC sin_2pi_ps(const VEC angle) {
+            constexpr VEC c[4] = {SET_VEC(0.25f), SET_VEC(0.5f), SET_VEC(0.75f), SET_VEC(1.0f)};
+            const v8sf AVX_SIGNMASK_PS = (v8sf){-0.0f, -0.0f, -0.0f, -0.0f, -0.0f, -0.0f, -0.0f, -0.0f};
+
+            VEC sinangle;
+            sinangle.data = angle.data - vec_floor_ps(angle.data);
+            const v8sf angle_orig = sinangle.data;
+
+            // Use built-in comparison operators that return mask vectors
+            v8sf mask0 = angle_orig >= c[0].data;
+            v8sf mask1 = angle_orig >= c[1].data;
+            v8sf mask2 = angle_orig >= c[2].data;
+
+            sinangle.data = sinangle.data ^ (mask0 & (sinangle.data ^ (c[1].data - angle_orig)));
+            sinangle.data = sinangle.data ^ (mask1 & AVX_SIGNMASK_PS);
+            sinangle.data = sinangle.data ^ (mask2 & (sinangle.data ^ (c[3].data - angle_orig)));
+
+            VEC result = sin_2pi_poly_ps(sinangle);
+            result.data = result.data ^ (mask1 & AVX_SIGNMASK_PS);
+            return result;
+        }
+
+        static inline void generateWeights(const float dst, VEC *h1, VEC *h2) {
+            constexpr VEC c[4] = {SET_VEC(0.16666666f), SET_VEC(0.5f), SET_VEC(3.0f), SET_VEC(M_PI * M_PI)};
+            constexpr VEC DST[2] = {(m256_union){{7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f}}, (m256_union){{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}}};
+
+            VEC denom[2];
+            const v8sf dst_vec = (v8sf){dst, dst, dst, dst, dst, dst, dst, dst};
+            denom[0].data = DST[0].data + dst_vec;
+            denom[1].data = DST[1].data - dst_vec;
+
+            VEC num[2];
+            VEC temp0 = { .data = c[0].data * denom[0].data };
+            VEC temp1 = { .data = c[1].data * denom[0].data };
+            num[0].data = c[2].data * (sin_2pi_ps(temp0).data * sin_2pi_ps(temp1).data);
+
+            temp0.data = c[0].data * denom[1].data;
+            temp1.data = c[1].data * denom[1].data;
+            num[1].data = c[2].data * (sin_2pi_ps(temp0).data * sin_2pi_ps(temp1).data);
+
+            denom[0].data = (denom[0].data * denom[0].data) * c[3].data;
+            denom[1].data = (denom[1].data * denom[1].data) * c[3].data;
+
+            h1->data = num[0].data / denom[0].data;
+            h2->data = num[1].data / denom[1].data;
         }
     #endif
 #endif
