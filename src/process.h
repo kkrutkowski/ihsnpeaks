@@ -20,10 +20,13 @@
 #include <fftw3.h>  // Include FFTW3 header
 
 
-inline float correctPower(float K, float nInv) {
+static inline float correctPower(float K, float nInv) {
     float term1 = ((2.0 * K) - (K * K)) * (0.25 * nInv);
     float term2 = ((24.0 * K) - (132.0 * K * K) + (76.0 * K * K * K) - (9.0 * K * K * K * K)) * (nInv * nInv * 3.4722222e-3); // 1/288
-    float inside_log = logf(1 + term1 - term2);
+    float inside_log = 1 + term1 - term2;
+    VEC tmp;
+    tmp.data[0] = inside_log;
+    inside_log = ln_ps(tmp).data[0];
 return K - inside_log;}
 
 inline float sabs(complex float z) {return (creal(z) * creal(z)) + (cimag(z) * cimag(z));}
