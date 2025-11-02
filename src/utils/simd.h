@@ -38,12 +38,12 @@
         typedef int32_t v8si __attribute__ ((vector_size (32)));
 
         #define SET_VEC(val) ((v8sf){val, val, val, val, val, val, val, val})
-        #define SET_IVEC(val) ((v8ui){val, val, val, val, val, val, val, val})
+        #define SET_IVEC(val) ((v8si){val, val, val, val, val, val, val, val})
         #define SET_DVEC(val) ((v4df){val, val, val, val})
 
         typedef union {v8sf data; float values[8];} m256_union;
         typedef union {v4df data; double values[4];} m256d_union;
-        typedef union {v8ui data; int32_t values[8];} m256i_union;
+        typedef union {v8si data; int32_t values[8];} m256i_union;
 
         typedef m256_union VEC;
         typedef m256d_union DVEC;
