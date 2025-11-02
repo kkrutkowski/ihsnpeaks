@@ -12,7 +12,7 @@
     #include <immintrin.h>
     typedef union {__m512 data; float values[16];} m512_union;
     typedef union {__m512d data; double values[8];} m512d_union;
-    typedef union {__m512i data; uint32_t values[16];} m512i_union;
+    typedef union {__m512i data; int32_t values[16];} m512i_union;
 
     typedef m512_union VEC;
     typedef m512d_union DVEC;
@@ -26,7 +26,7 @@
         #include <immintrin.h>
         typedef union {__m256 data; float values[8];} m256_union;
         typedef union {__m256d data; double values[4];} m256d_union;
-        typedef union {__m256i data; uint32_t values[8];} m256i_union;
+        typedef union {__m256i data; int32_t values[8];} m256i_union;
 
         typedef m256_union VEC;
         typedef m256d_union DVEC;
@@ -35,7 +35,6 @@
         // GNU Vector extensions for 256-bit vectors
         typedef float v8sf __attribute__ ((vector_size (32)));
         typedef double v4df __attribute__ ((vector_size (32)));
-        typedef uint32_t v8ui __attribute__ ((vector_size (32)));
         typedef int32_t v8si __attribute__ ((vector_size (32)));
 
         #define SET_VEC(val) ((v8sf){val, val, val, val, val, val, val, val})
@@ -44,7 +43,7 @@
 
         typedef union {v8sf data; float values[8];} m256_union;
         typedef union {v4df data; double values[4];} m256d_union;
-        typedef union {v8ui data; uint32_t values[8];} m256i_union;
+        typedef union {v8ui data; int32_t values[8];} m256i_union;
 
         typedef m256_union VEC;
         typedef m256d_union DVEC;
@@ -60,7 +59,7 @@
 
 #define VEC_LEN (sizeof(VEC) / sizeof(float))
 #define DVEC_LEN (sizeof(DVEC) / sizeof(double))
-#define IVEC_LEN (sizeof(IVEC) / sizeof(uint32_t))
+#define IVEC_LEN (sizeof(IVEC) / sizeof(int32_t))
 
 // Definitions of functions
 #ifdef __AVX512F__
