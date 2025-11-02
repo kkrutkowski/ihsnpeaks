@@ -5,9 +5,9 @@
 
 // Type definitions
 #ifdef __AVX512F__
-        #define SET_VEC(val) ((m512_union){{val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
-        #define SET_IVEC(val) ((m512i_union){{val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
-        #define SET_DVEC(val) ((m512_union){{val, val, val, val, val, val, val, val}})
+        #define SET_VEC(val) ((m512_union){.values={val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
+        #define SET_IVEC(val) ((m512i_union){.values={val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((m512_union){.values={val, val, val, val, val, val, val, val}})
 
     #include <immintrin.h>
     typedef union {__m512 data; float values[16];} m512_union;
@@ -19,9 +19,9 @@
     typedef m512i_union IVEC;
 #else
     #ifdef __AVX__
-        #define SET_VEC(val) ((m256_union){{val, val, val, val, val, val, val, val}})
-        #define SET_IVEC(val) ((m256i_union){{val, val, val, val, val, val, val, val}})
-        #define SET_DVEC(val) ((m256_union){{val, val, val, val}})
+        #define SET_VEC(val) ((m256_union){.values={val, val, val, val, val, val, val, val}})
+        #define SET_IVEC(val) ((m256i_union){.values={val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((m256_union){.values={val, val, val, val}})
 
         #include <immintrin.h>
         typedef union {__m256 data; float values[8];} m256_union;
@@ -37,9 +37,9 @@
         typedef double v4df __attribute__ ((vector_size (32)));
         typedef int32_t v8si __attribute__ ((vector_size (32)));
 
-        #define SET_VEC(val) ((v8sf){val, val, val, val, val, val, val, val})
-        #define SET_IVEC(val) ((v8si){val, val, val, val, val, val, val, val})
-        #define SET_DVEC(val) ((v4df){val, val, val, val})
+        #define SET_VEC(val) ((v8sf){.values={val, val, val, val, val, val, val, val}})
+        #define SET_IVEC(val) ((v8si){.values={val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((v4df){.values={val, val, val, val}})
 
         typedef union {v8sf data; float values[8];} m256_union;
         typedef union {v4df data; double values[4];} m256d_union;
@@ -242,21 +242,20 @@ static inline VEC ln_ps(const VEC x) {
         SET_VEC(-2.83826848e-1f), SET_VEC(3.04490045e-2f)
     };
 
+    IVEC x_bits, exp_bits, unbiased_exp, mant_bits; VEC mant_vec, exp_float, exp_ln2, x_minus_one, ln_result; // Initialize the temporary vectors
+
     // Convert float vector to int vector for bit manipulation
-    IVEC x_bits;
     x_bits.data = (typeof(x_bits.data))x.data;
 
     // frexp: Extract exponent and mantissa
-    IVEC exp_bits = (x_bits >> 23) & SET_IVEC(0xFF); // Extract exponent bits
-    IVEC unbiased_exp = exp_bits - exp_bias;         // Unbias exponent
+    exp_bits.data = (x_bits.data >> 23) & SET_IVEC(0xFF).data; // Extract exponent bits
+    unbiased_exp.data = exp_bits.data - exp_bias.data;       // Unbias exponent
 
     // Extract mantissa: clear exponent bits and set them to 0x3F800000 (1.0)
-    IVEC mant_bits = (x_bits & mant_mask) | set_1;
-    VEC mant_vec;
+    mant_bits.data = (x_bits.data & mant_mask.data) | set_1.data;
     mant_vec.data = (typeof(mant_vec.data))mant_bits.data;
 
     // Compute e * ln(2) - convert integer exponent to float
-    VEC exp_float;
     #ifdef __AVX512F__
         exp_float.data = _mm512_cvtepi32_ps(unbiased_exp.data);
     #elif defined(__AVX__)
@@ -264,11 +263,9 @@ static inline VEC ln_ps(const VEC x) {
     #else
         exp_float.data = __builtin_convertvector(unbiased_exp.data, typeof(exp_float.data));
    #endif
-    VEC exp_ln2;
     exp_ln2.data = exp_float.data * ln2_vec.data;
 
     // Compute mantissa - 1.0 for polynomial evaluation
-    VEC x_minus_one;
     x_minus_one.data = mant_vec.data - one_vec.data;
 
     // Horner's method for polynomial evaluation
@@ -280,7 +277,6 @@ static inline VEC ln_ps(const VEC x) {
     ln_mant.data = ln_mant.data * x_minus_one.data + c[0].data;
 
     // Combine results: ln(x) = e * ln(2) + ln(mantissa)
-    VEC ln_result;
     ln_result.data = exp_ln2.data + ln_mant.data;
 
     return ln_result;
