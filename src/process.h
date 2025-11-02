@@ -115,7 +115,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     while(fmin < params->fmax){
         double freq = 0;
 
-        //compute the IHS here
+        //compute the RZTs here
         for(int t = 0; t < buffer->terms; t++){ //compute the NFFTs required for the data
             memset(buffer->grids[t], 0, buffer->memBlockSize);
             double freqFactor = (double)(t+1); //printf("%.2f\n", freqFactor);
