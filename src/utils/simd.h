@@ -225,4 +225,65 @@
     #endif
 #endif
 
+// Natural logarithm implementation using GNU vector extensions
+static inline VEC ln_ps(const VEC x) {
+    // Constants for frexp
+    constexpr IVEC exp_mask = SET_IVEC(0x7F800000);  // Mask for exponent bits
+    constexpr IVEC mant_mask = SET_IVEC(0x807FFFFF); // Mask for mantissa (clear exp)
+    constexpr VEC one_vec = SET_VEC(1.0f);           // Value 1.0
+    constexpr VEC ln2_vec = SET_VEC(0.69314718f);    // ln(2)
+    constexpr IVEC exp_bias = SET_IVEC(127);         // Exponent bias
+    constexpr IVEC set_1 = SET_IVEC(0x3F800000);     // Bit pattern for 1.0
+
+    // Coefficients for ln(1 + x) on [0, 1)
+    constexpr VEC c[6] = {
+        SET_VEC(-1.936759742e0f), SET_VEC(3.514087297e0f),
+        SET_VEC(-2.440029763e0f), SET_VEC(1.116090027e0f),
+        SET_VEC(-2.83826848e-1f), SET_VEC(3.04490045e-2f)
+    };
+
+    // Convert float vector to int vector for bit manipulation
+    IVEC x_bits;
+    x_bits.data = (typeof(x_bits.data))x.data;
+
+    // frexp: Extract exponent and mantissa
+    IVEC exp_bits = (x_bits >> 23) & SET_IVEC(0xFF); // Extract exponent bits
+    IVEC unbiased_exp = exp_bits - exp_bias;         // Unbias exponent
+
+    // Extract mantissa: clear exponent bits and set them to 0x3F800000 (1.0)
+    IVEC mant_bits = (x_bits & mant_mask) | set_1;
+    VEC mant_vec;
+    mant_vec.data = (typeof(mant_vec.data))mant_bits.data;
+
+    // Compute e * ln(2) - convert integer exponent to float
+    VEC exp_float;
+    #ifdef __AVX512F__
+        exp_float.data = _mm512_cvtepi32_ps(unbiased_exp.data);
+    #elif defined(__AVX__)
+        exp_float.data = _mm256_cvtepi32_ps(unbiased_exp.data);
+    #else
+        exp_float.data = __builtin_convertvector(unbiased_exp.data, typeof(exp_float.data));
+   #endif
+    VEC exp_ln2;
+    exp_ln2.data = exp_float.data * ln2_vec.data;
+
+    // Compute mantissa - 1.0 for polynomial evaluation
+    VEC x_minus_one;
+    x_minus_one.data = mant_vec.data - one_vec.data;
+
+    // Horner's method for polynomial evaluation
+    VEC ln_mant = c[5];
+    ln_mant.data = ln_mant.data * x_minus_one.data + c[4].data;
+    ln_mant.data = ln_mant.data * x_minus_one.data + c[3].data;
+    ln_mant.data = ln_mant.data * x_minus_one.data + c[2].data;
+    ln_mant.data = ln_mant.data * x_minus_one.data + c[1].data;
+    ln_mant.data = ln_mant.data * x_minus_one.data + c[0].data;
+
+    // Combine results: ln(x) = e * ln(2) + ln(mantissa)
+    VEC ln_result;
+    ln_result.data = exp_ln2.data + ln_mant.data;
+
+    return ln_result;
+}
+
 #endif // SIMD_H
