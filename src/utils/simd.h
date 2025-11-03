@@ -279,4 +279,20 @@ static inline VEC ln_ps(const VEC x) {
     return ln_result;
 }
 
+static inline VEC correctPower(const VEC K, const float nInv) {
+    VEC term1, term2, inside_log, n, result;
+    n = SET_VEC(nInv);
+
+    term1.data = ((SET_VEC(2.0).data * K.data) - (K.data * K.data)) * (SET_VEC(0.25).data * n.data);
+
+    term2.data = ((SET_VEC(24.0).data * K.data) -(SET_VEC(132.0).data * K.data * K.data) + (SET_VEC(76.0).data * K.data * K.data * K.data) -
+        (SET_VEC(9.0).data * K.data * K.data * K.data * K.data)) * (n.data * n.data * SET_VEC(3.4722222e-3).data);
+
+    inside_log.data = SET_VEC(1.0).data + term1.data - term2.data;
+
+    VEC log_result = ln_ps(inside_log);
+    result.data = K.data - log_result.data;
+    return result;
+}
+
 #endif // SIMD_H

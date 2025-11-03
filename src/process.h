@@ -20,14 +20,11 @@
 #include <fftw3.h>  // Include FFTW3 header
 
 
-static inline float correctPower(float K, float nInv) {
-    float term1 = ((2.0 * K) - (K * K)) * (0.25 * nInv);
-    float term2 = ((24.0 * K) - (132.0 * K * K) + (76.0 * K * K * K) - (9.0 * K * K * K * K)) * (nInv * nInv * 3.4722222e-3); // 1/288
-    float inside_log = 1 + term1 - term2;
-    VEC tmp;
-    tmp.data[0] = inside_log;
-    inside_log = ln_ps(tmp).data[0];
-return K - inside_log;}
+static inline float correctPowerTmp(float K, float nInv) {
+    VEC K_tmp;
+    K_tmp.values[0] = K;
+    K_tmp = correctPower(K_tmp, nInv);
+return K_tmp.values[0];}
 
 inline float sabs(complex float z) {return (creal(z) * creal(z)) + (cimag(z) * cimag(z));}
 
@@ -149,17 +146,19 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         if (params->mode < 5){fftwf_execute_dft(params->plan, buffer->grids[t], buffer->grids[t]);}
     }
 
-        float NeffInv = 1.0 / buffer->neff;
+        float NeffInv = 1.0 / buffer->neff; VEC corrBuff[VEC_LEN];
 
         // Inteppret the results - first half
         float magnitudes[3] = {0};
-        for(int t = 0; t < buffer->terms; t++) {magnitudes[0] += correctPower(sabs(buffer->grids[t][shift]), NeffInv) ; magnitudes[1] += correctPower(sabs(buffer->grids[t][shift+1]), NeffInv);}
+        for(int t = 0; t < buffer->terms; t++) {magnitudes[0] += sabs(buffer->grids[t][shift]); magnitudes[1] += sabs(buffer->grids[t][shift+1]);}
+        //{magnitudes[0] += correctPowerTmp(sabs(buffer->grids[t][shift]), NeffInv) ; magnitudes[1] += correctPowerTmp(sabs(buffer->grids[t][shift+1]), NeffInv);}
 
 
-        for (uint32_t i = shift + 1; i < gridLen; i++) { // negative half
+        for (uint32_t i = shift ; i < gridLen; i++) { // negative half
             freq = fmin + ((double)((i) - shift) * invGridLen * fspan); if (freq > params->fmax){goto end;}
             magnitudes[2] = 0;
-            if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPower(sabs(buffer->grids[t][i+1]), NeffInv);}}
+            //if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPowerTmp(sabs(buffer->grids[t][i+1]), NeffInv);}}
+            if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}}
             else {magnitudes[2] = get_z(get_r(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);}
             if (params->spectrum && params->mode < 5){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (params->spectrum && params->mode > 4){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
@@ -167,13 +166,15 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             magnitudes[0] = magnitudes[1]; magnitudes[1] = magnitudes[2]; //reuse the results in the next iteration
         }
 
-        for(int t = 0; t < buffer->terms; t++){magnitudes[1] += correctPower(sabs(buffer->grids[t][0]), NeffInv);}
+        //for(int t = 0; t < buffer->terms; t++){magnitudes[1] += correctPowerTmp(sabs(buffer->grids[t][0]), NeffInv);}
+        for(int t = 0; t < buffer->terms; t++){magnitudes[1] += sabs(buffer->grids[t][0]);}
         if (params->debug && params->spectrum) {buffer->spectrum = sdscat(buffer->spectrum, "break\n");}
 
         for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) { // positive half
             freq = fmid + ((double)(i) * invGridLen * fspan);  if (freq > params->fmax){goto end;}
             magnitudes[2] = 0;
-            if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPower(sabs(buffer->grids[t][i+1]), NeffInv);}}
+            //if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPowerTmp(sabs(buffer->grids[t][i+1]), NeffInv);}}
+            if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}}
             else {magnitudes[2] = get_z(get_r(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);}
             if (params->spectrum && params->mode < 5){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (params->spectrum && params->mode > 4){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
