@@ -45,3 +45,9 @@ Will make the makefile choose the preferred installation method based on the ava
 * GUI results evalutation tool
 
 ## Credits
+1. [astropy](https://github.com/astropy/astropy)
+2. [aovdist](https://users.camk.edu.pl/alex/)
+3. [FastChi2](https://web.archive.org/web/20260000000000*/https://public.lanl.gov/palmer/fastchi.html)
+4. [fnpeaks](http://helas.astro.uni.wroc.pl/deliverables.php?active=fnpeaks)
+5. [klib](https://github.com/attractivechaos/klib)
+6. [FastTransforms.jl](https://github.com/JuliaApproximation/FastTransforms.jl)
