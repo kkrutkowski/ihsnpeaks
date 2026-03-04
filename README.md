@@ -51,3 +51,4 @@ Will make the makefile choose the preferred installation method based on the ava
 4. [fnpeaks](http://helas.astro.uni.wroc.pl/deliverables.php?active=fnpeaks)
 5. [klib](https://github.com/attractivechaos/klib)
 6. [FastTransforms.jl](https://github.com/JuliaApproximation/FastTransforms.jl)
+7. [qfits](https://www.eso.org/sci/software/eclipse/qfits/html/index.html)
