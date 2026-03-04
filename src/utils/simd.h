@@ -7,49 +7,72 @@
 #ifdef __AVX512F__
         #define SET_VEC(val) ((m512_union){.values={val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
         #define SET_IVEC(val) ((m512i_union){.values={val, val, val, val, val, val, val, val, val, val, val, val, val, val, val, val}})
-        #define SET_DVEC(val) ((m512_union){.values={val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((m512d_union){.values={val, val, val, val, val, val, val, val}})
 
     #include <immintrin.h>
-    typedef union {__m512 data; float values[16];} m512_union;
-    typedef union {__m512d data; double values[8];} m512d_union;
-    typedef union {__m512i data; int32_t values[16];} m512i_union;
 
-    typedef m512_union VEC;
+    // GNU vector equivalents
+    typedef float    v16sf __attribute__ ((vector_size (64)));
+    typedef double   v8df  __attribute__ ((vector_size (64)));
+    typedef int32_t  v16si __attribute__ ((vector_size (64)));
+
+    typedef union {__m512  data; v16sf gdata; float    values[16];} m512_union;
+    typedef union {__m512d data; v8df  gdata; double   values[8]; } m512d_union;
+    typedef union {__m512i data; v16si gdata; int32_t  values[16];} m512i_union;
+
+    typedef m512_union  VEC;
     typedef m512d_union DVEC;
     typedef m512i_union IVEC;
+
+    static inline v16sf vec_floor_ps(v16sf x) {
+        v16si truncated = __builtin_convertvector(x, v16si);
+        return __builtin_convertvector(truncated, v16sf);
+    }
+
 #else
     #ifdef __AVX__
         #define SET_VEC(val) ((m256_union){.values={val, val, val, val, val, val, val, val}})
         #define SET_IVEC(val) ((m256i_union){.values={val, val, val, val, val, val, val, val}})
-        #define SET_DVEC(val) ((m256_union){.values={val, val, val, val}})
+        #define SET_DVEC(val) ((m256d_union){.values={val, val, val, val}})
 
         #include <immintrin.h>
-        typedef union {__m256 data; float values[8];} m256_union;
-        typedef union {__m256d data; double values[4];} m256d_union;
-        typedef union {__m256i data; int32_t values[8];} m256i_union;
 
-        typedef m256_union VEC;
+        // GNU vector equivalents
+        typedef float    v8sf __attribute__ ((vector_size (32)));
+        typedef double   v4df __attribute__ ((vector_size (32)));
+        typedef int32_t  v8si __attribute__ ((vector_size (32)));
+
+        typedef union {__m256  data; v8sf gdata; float    values[8];} m256_union;
+        typedef union {__m256d data; v4df gdata; double   values[4];} m256d_union;
+        typedef union {__m256i data; v8si gdata; int32_t  values[8];} m256i_union;
+
+        typedef m256_union  VEC;
         typedef m256d_union DVEC;
         typedef m256i_union IVEC;
+
+        static inline v8sf vec_floor_ps(v8sf x) {
+            v8si truncated = __builtin_convertvector(x, v8si);
+            return __builtin_convertvector(truncated, v8sf);
+        }
+
     #else
         // GNU Vector extensions for 256-bit vectors
-        typedef float v8sf __attribute__ ((vector_size (32)));
-        typedef double v4df __attribute__ ((vector_size (32)));
-        typedef int32_t v8si __attribute__ ((vector_size (32)));
+        typedef float    v8sf __attribute__ ((vector_size (32)));
+        typedef double   v4df __attribute__ ((vector_size (32)));
+        typedef int32_t  v8si __attribute__ ((vector_size (32)));
 
-        #define SET_VEC(val) ((v8sf){.values={val, val, val, val, val, val, val, val}})
-        #define SET_IVEC(val) ((v8si){.values={val, val, val, val, val, val, val, val}})
-        #define SET_DVEC(val) ((v4df){.values={val, val, val, val}})
+        #define SET_VEC(val)  ((m256_union){.values={val, val, val, val, val, val, val, val}})
+        #define SET_IVEC(val) ((m256i_union){.values={val, val, val, val, val, val, val, val}})
+        #define SET_DVEC(val) ((m256d_union){.values={val, val, val, val}})
 
-        typedef union {v8sf data; float values[8];} m256_union;
-        typedef union {v4df data; double values[4];} m256d_union;
-        typedef union {v8si data; int32_t values[8];} m256i_union;
+        typedef union {v8sf data; v8sf gdata; float    values[8];} m256_union;
+        typedef union {v4df data; v4df gdata; double   values[4];} m256d_union;
+        typedef union {v8si data; v8si gdata; int32_t  values[8];} m256i_union;
 
-        typedef m256_union VEC;
+        typedef m256_union  VEC;
         typedef m256d_union DVEC;
         typedef m256i_union IVEC;
 
-        // Helper function for floor using __builtin_convertvector
         static inline v8sf vec_floor_ps(v8sf x) {
             v8si truncated = __builtin_convertvector(x, v8si);
             return __builtin_convertvector(truncated, v8sf);
@@ -245,36 +268,30 @@ static inline VEC ln_ps(const VEC x) {
     IVEC x_bits, exp_bits, unbiased_exp, mant_bits; VEC mant_vec, exp_float, exp_ln2, x_minus_one, ln_result; // Initialize the temporary vectors
 
     // Convert float vector to int vector for bit manipulation
-    x_bits.data = (typeof(x_bits.data))x.data;
+    x_bits.gdata = (typeof(x_bits.gdata))x.gdata;
 
     // frexp: Extract exponent and mantissa
-    exp_bits.data = (x_bits.data >> 23) & SET_IVEC(0xFF).data; // Extract exponent bits
-    unbiased_exp.data = exp_bits.data - exp_bias.data;       // Unbias exponent
+    exp_bits.gdata = (x_bits.gdata >> 23) & SET_IVEC(0xFF).gdata; // Extract exponent bits
+    unbiased_exp.gdata = exp_bits.gdata - exp_bias.gdata;       // Unbias exponent
 
     // Extract mantissa: clear exponent bits and set them to 0x3F800000 (1.0)
-    mant_bits.data = (x_bits.data & mant_mask.data) | set_1.data;
-    mant_vec.data = (typeof(mant_vec.data))mant_bits.data;
+    mant_bits.gdata = (x_bits.gdata & mant_mask.gdata) | set_1.gdata;
+    mant_vec.gdata = (typeof(mant_vec.gdata))mant_bits.gdata;
 
     // Compute e * ln(2) - convert integer exponent to float
-    #ifdef __AVX512F__
-        exp_float.data = _mm512_cvtepi32_ps(unbiased_exp.data);
-    #elif defined(__AVX__)
-        exp_float.data = _mm256_cvtepi32_ps(unbiased_exp.data);
-    #else
-        exp_float.data = __builtin_convertvector(unbiased_exp.data, typeof(exp_float.data));
-   #endif
-    exp_ln2.data = exp_float.data * ln2_vec.data;
+    exp_float.gdata = __builtin_convertvector(unbiased_exp.gdata, typeof(exp_float.gdata));
+    exp_ln2.gdata = exp_float.gdata * ln2_vec.gdata;
 
     // Horner's method for polynomial evaluation
     VEC ln_mant = c[5];
-    ln_mant.data = ln_mant.data * mant_vec.data + c[4].data;
-    ln_mant.data = ln_mant.data * mant_vec.data + c[3].data;
-    ln_mant.data = ln_mant.data * mant_vec.data + c[2].data;
-    ln_mant.data = ln_mant.data * mant_vec.data + c[1].data;
-    ln_mant.data = ln_mant.data * mant_vec.data + c[0].data;
+    ln_mant.gdata = ln_mant.gdata * mant_vec.gdata + c[4].gdata;
+    ln_mant.gdata = ln_mant.gdata * mant_vec.gdata + c[3].gdata;
+    ln_mant.gdata = ln_mant.gdata * mant_vec.gdata + c[2].gdata;
+    ln_mant.gdata = ln_mant.gdata * mant_vec.gdata + c[1].gdata;
+    ln_mant.gdata = ln_mant.gdata * mant_vec.gdata + c[0].gdata;
 
     // Combine results: ln(x) = e * ln(2) + ln(mantissa)
-    ln_result.data = exp_ln2.data + ln_mant.data;
+    ln_result.gdata = exp_ln2.gdata + ln_mant.gdata;
 
     return ln_result;
 }
