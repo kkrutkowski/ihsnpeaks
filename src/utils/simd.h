@@ -24,7 +24,7 @@
     typedef m512d_union DVEC;
     typedef m512i_union IVEC;
 
-    static inline v16sf vec_floor_ps(v16sf x) {
+    static inline v16sf vec_trunc_ps(v16sf x) {
         v16si truncated = __builtin_convertvector(x, v16si);
         return __builtin_convertvector(truncated, v16sf);
     }
@@ -50,7 +50,7 @@
         typedef m256d_union DVEC;
         typedef m256i_union IVEC;
 
-        static inline v8sf vec_floor_ps(v8sf x) {
+        static inline v8sf vec_trunc_ps(v8sf x) {
             v8si truncated = __builtin_convertvector(x, v8si);
             return __builtin_convertvector(truncated, v8sf);
         }
@@ -73,7 +73,7 @@
         typedef m256d_union DVEC;
         typedef m256i_union IVEC;
 
-        static inline v8sf vec_floor_ps(v8sf x) {
+        static inline v8sf vec_trunc_ps(v8sf x) {
             v8si truncated = __builtin_convertvector(x, v8si);
             return __builtin_convertvector(truncated, v8sf);
         }
@@ -204,7 +204,7 @@
             const v8sf AVX_SIGNMASK_PS = (v8sf){-0.0f, -0.0f, -0.0f, -0.0f, -0.0f, -0.0f, -0.0f, -0.0f};
 
             VEC sinangle;
-            sinangle.data = angle.data - vec_floor_ps(angle.data);
+            sinangle.data = angle.data - vec_trunc_ps(angle.data);
             const v8sf angle_orig = sinangle.data;
 
             // Use built-in comparison operators that return mask vectors
