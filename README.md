@@ -52,3 +52,5 @@ Will make the makefile choose the preferred installation method based on the ava
 5. [klib](https://github.com/attractivechaos/klib)
 6. [FastTransforms.jl](https://github.com/JuliaApproximation/FastTransforms.jl)
 7. [qfits](https://www.eso.org/sci/software/eclipse/qfits/html/index.html)
+8. [GNU Scientific Library](https://www.gnu.org/software/gsl/)
+9. [fast_convert](https://github.com/hermantb/fast_convert)
