@@ -908,4 +908,66 @@ double get_approx_z(double R, int N) {
 
 return z;}
 */
+
+
+// Implement the Mancova's probability based on Baluev (2007)'
+double lnI(double a, double b, double x) {
+    // Domain checks
+    if (x <= 0.0) return -INFINITY;
+    if (x >= 1.0) return 0.0;
+
+    // ln Beta(a,b)
+    double lnB = betaln(a, b);
+
+    // Use symmetry for better stability
+    if (x > 0.5) {
+        double xm = 1.0 - x;
+
+        double hyp = sf_hyperg_2F1(a + b, 1.0, b + 1.0, xm);
+        if (hyp <= 0.0) return -INFINITY;
+
+        double lnI_other = b * log(xm)
+                         - log(b)
+                         - betaln(b, a)
+                         + log(hyp);
+
+        // log(1 - exp(lnI_other))
+        if (lnI_other >= 0.0) return -INFINITY;
+        return log1p(-exp(lnI_other));
+    } else {
+        double hyp = sf_hyperg_2F1(a + b, 1.0, a + 1.0, x);
+        if (hyp <= 0.0) return -INFINITY;
+
+        return a * log(x)
+             - log(a)
+             - lnB
+             + log(hyp);
+    }
+}
+
+
+double lnFAP(int dK, int dH, int N, double R2) {
+
+    // For AoV-like periodograms;
+    // dK = 2*nterms + 1 (total degrees of freedom)
+    // dH = 1 (mean only)
+
+    int d  = dK - dH;
+    int Nk = N - dK;
+
+    double a = 0.5 * d;
+    double b = 0.5 * Nk;
+
+    if (R2 <= 0.0) return 0.0;
+    if (R2 >= 1.0) return -INFINITY;
+
+    // ln I(b, a, 1 - R2)
+    double result = lnI(b, a, 1.0 - R2);
+
+    // Match Python behavior: absolute value
+    if (result > 0.0) result = -result;
+
+    return result;
+}
+
 #endif
