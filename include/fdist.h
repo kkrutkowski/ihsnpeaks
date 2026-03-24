@@ -964,7 +964,7 @@ double lnFAP(int dK, int dH, int N, double R2) {
     // ln I(b, a, 1 - R2)
     double result = lnI(b, a, 1.0 - R2);
 
-    // Match Python behavior: absolute value
+    // absolute value
     if (result > 0.0) result = -result;
 
     return result;
