@@ -957,7 +957,6 @@ double lnFAP(int dK, int dH, double R2, int N) {
     double a = 0.5 * d;
     double b = 0.5 * Nk;
 
-
     // ln I(b, a, 1 - R2)
     double result = lnI(b, a, 1.0 - R2);
 
