@@ -40,7 +40,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     int prewhitening_iter = 0;
 
     //a temporary fix of the 'disappearing' r/p values - to be replaced
-    double *backup_r = calloc(params->npeaks, sizeof(double)); double *backup_p = calloc(params->npeaks, sizeof(double));
+    double *backup_r2 = calloc(params->npeaks, sizeof(double)); double *backup_p = calloc(params->npeaks, sizeof(double));
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n-1] * (double)(params->oversamplingFactor * params->nterms))); //number of significant digits required for the spectrum
     const float threshold = params->threshold;
@@ -94,11 +94,11 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
 
             //actual prewhitening happens here
-            get_r(buffer, prewhitening_freq, NULL, true);
-            //printf("%.3f\n", buffer->peaks[prewhitening_iter - 1].r); //ok
+            get_r2(buffer, prewhitening_freq, NULL, true);
+            //printf("%.3f\n", buffer->peaks[prewhitening_iter - 1].r2); //ok
 
             //temporary fix, to be replaced
-            backup_r[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].r;
+            backup_r2[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].r2;
             backup_p[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].p;
 
             double ysum = 0;
@@ -106,7 +106,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             float norm = (sqrtf(buffer->neff) / (float)(ysum));
             for (unsigned int i = 0; i < buffer->n; i++){buffer->dy[i] = buffer->y[i] * norm;}
 
-            if (buffer->peaks[prewhitening_iter - 1].r < params->r_threshold) {buffer->nPeaks -= 1; goto next;}
+            if (buffer->peaks[prewhitening_iter - 1].r2 < params->r2_threshold) {buffer->nPeaks -= 1; goto next;}
         }
 
     //memset(&buffer->peaks[prewhitening_iter], 0, params->npeaks * sizeof(peak_t));
@@ -159,7 +159,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             magnitudes[2] = 0;
             //if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPowerTmp(sabs(buffer->grids[t][i+1]), NeffInv);}}
             if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}}
-            else {magnitudes[2] = get_z(get_r(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);}
+            else {magnitudes[2] = lnFAP(2, 1, get_r2(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);}
             if (params->spectrum && params->mode < 5){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (params->spectrum && params->mode > 4){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
             if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, params->mode, freq, magnitudes[1], df);}
@@ -175,7 +175,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
             magnitudes[2] = 0;
             //if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPowerTmp(sabs(buffer->grids[t][i+1]), NeffInv);}}
             if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += sabs(buffer->grids[t][i+1]);}}
-            else {magnitudes[2] = get_z(get_r(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);}
+            else {magnitudes[2] = lnFAP(2, 1, get_r2(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);}
             if (params->spectrum && params->mode < 5){appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);}
             if (params->spectrum && params->mode > 4){appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);}
             if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]){append_peak(buffer, params->npeaks, params-> mode, freq, magnitudes[1], df);}
@@ -193,7 +193,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
         prewhitening_iter += 1;
         buffer->nPeaks = prewhitening_iter;
             //debugging prints for memory loss - do not remove
-            //for (int i = 0; i < buffer->nPeaks; i++){printf("%.3f\n", buffer->peaks[i].r);}
+            //for (int i = 0; i < buffer->nPeaks; i++){printf("%.3f\n", buffer->peaks[i].r2);}
             //printf("\n");
         goto prewhiten
     ;}
@@ -202,7 +202,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     //a temporary memory loss fix
     if (prewhitening_iter > 1){
         for (int i = 1; i <= prewhitening_iter; i++){
-            buffer->peaks[i-1].r = backup_r[i];
+            buffer->peaks[i-1].r2 = backup_r2[i];
             buffer->peaks[i-1].p = backup_p[i];
         };
         buffer->nPeaks = prewhitening_iter;
@@ -211,7 +211,7 @@ void process_target(char* in_file, buffer_t* buffer, parameters* params, const b
     if (!batch) {print_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
     else {append_peaks(buffer, params, n, stringBuff, in_file, params->mode);}
     if (params->spectrum){write_tsv(buffer, in_file);}
-    free(backup_r); free(backup_p); //temporary "fix", to be removed later
+    free(backup_r2); free(backup_p); //temporary "fix", to be removed later
     buffer->nPeaks = 0; //reset the data for buffer reuse
 }
 

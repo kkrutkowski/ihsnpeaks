@@ -56,7 +56,7 @@ static int column_width(double val, int precision) {
 void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode) {
     if (mode > 1){n += 1;}
     // Column indices: 0: f[1/d] (frequency), 1: log(p), 2: Amp, 3: R.
-    const char *hdr[4] = { "f[1/d]", "log(p)", "Amp", "R" };
+    const char *hdr[4] = { "f[1/d]", "log(p)", "Amp", "R2" };
     int hdrWidth[4]; int colWidth[4]; int i;
 
     // Set header widths (without any extra padding)
@@ -68,7 +68,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         double freq = buffer->peaks[i].freq;
         double logp = buffer->peaks[i].p * M_LOG10E; // equivalent to log10(p)
         double amp  = buffer->peaks[i].amp;
-        double r    = buffer->peaks[i].r;
+        double r    = buffer->peaks[i].r2;
         //printf("%.3f\n", r); // ??? - wrong here
         //if (r <= 1.0 && mode > 0) {r = get_r(buffer, buffer->peaks[i].freq, NULL, false);}
         int w;
@@ -149,7 +149,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
                 buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
                 // Test statistics (precision 3)
-                custom_ftoa(buffer->peaks[i].r, 3, stringBuff);
+                custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
                 len = (int)strlen(stringBuff);
                 pad = colWidth[3] - len;
                 if (pad > 0) {
@@ -214,7 +214,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
-                custom_ftoa(buffer->peaks[i].r, 3, stringBuff);
+                custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
                 i++;

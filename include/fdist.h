@@ -910,11 +910,8 @@ return z;}
 */
 
 
-// Implement the Mancova's probability based on Baluev (2007)'
+// Implement the Mancova's probability based on Baluev (2007)
 double lnI(double a, double b, double x) {
-    // Domain checks
-    if (x <= 0.0) return -INFINITY;
-    if (x >= 1.0) return 0.0;
 
     // ln Beta(a,b)
     double lnB = betaln(a, b);
@@ -927,8 +924,9 @@ double lnI(double a, double b, double x) {
         if (hyp <= 0.0) return -INFINITY;
 
         double lnI_other = b * log(xm)
+                         + a * log(x)    // <--- ADDED MISSING TERM
                          - log(b)
-                         - betaln(b, a)
+                         - lnB           // <--- Micro-optimized (Beta is symmetric)
                          + log(hyp);
 
         // log(1 - exp(lnI_other))
@@ -939,6 +937,7 @@ double lnI(double a, double b, double x) {
         if (hyp <= 0.0) return -INFINITY;
 
         return a * log(x)
+             + b * log(1.0 - x)          // <--- ADDED MISSING TERM
              - log(a)
              - lnB
              + log(hyp);
@@ -946,7 +945,7 @@ double lnI(double a, double b, double x) {
 }
 
 
-double lnFAP(int dK, int dH, int N, double R2) {
+double lnFAP(int dK, int dH, double R2, int N) {
 
     // For AoV-like periodograms;
     // dK = 2*nterms + 1 (total degrees of freedom)
@@ -958,14 +957,12 @@ double lnFAP(int dK, int dH, int N, double R2) {
     double a = 0.5 * d;
     double b = 0.5 * Nk;
 
-    if (R2 <= 0.0) return 0.0;
-    if (R2 >= 1.0) return -INFINITY;
 
     // ln I(b, a, 1 - R2)
     double result = lnI(b, a, 1.0 - R2);
 
-    // absolute value
-    if (result > 0.0) result = -result;
+    // Absolute value clamp (optional but harmless since result is strictly negative)
+    if (result < 0.0) result = -result;
 
     return result;
 }

@@ -12,7 +12,7 @@ typedef struct {
     double freq;
     float  p;
     float  amp;
-    float  r;
+    float  r2;
 } peak_t;
 
 typedef struct {
@@ -20,7 +20,7 @@ typedef struct {
     uint8_t loc_iter;
     uint32_t   len;
     uint32_t     n;
-    uint32_t     r;
+    uint32_t     r2;
     uint32_t terms;
     uint32_t memBlockSize;
     double neff;
@@ -69,7 +69,7 @@ typedef struct {
     char* outFile;
     float fmin;    float fmax;
     float threshold;
-    float r_threshold;
+    float r2_threshold;
     float oversamplingFactor;
     float epsilon;
     int npeaks;    int nterms;

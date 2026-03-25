@@ -74,10 +74,14 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     for (int j = 0; j < n; j++) {out[j] *= norm;} // Normalize
 }
 
-static inline float get_r(buffer_t *buffer, double freq, float* amp, bool prewhiten){
+static inline float get_r2(buffer_t *buffer, double freq, float* amp, bool prewhiten){
     double freq_tmp = 1024.0 * freq; //10-bit key
     double min = 0; double max = 0;
-    double ref = 0; double res = 0;
+
+    // Replaced ref/res with orthogonal projection accumulators
+    double Sxx = 0.0;
+    double Syy = 0.0;
+    double Sxy = 0.0;
 
     kvpair* input = (kvpair*)(buffer->buf[0]);
     kvpair* sorted = (kvpair*)(buffer->buf[1]);
@@ -97,38 +101,52 @@ static inline float get_r(buffer_t *buffer, double freq, float* amp, bool prewhi
 
     convolve(sorted, tmp, output, r, buffer->n);
 
-    double multiplier = 1.0 / (1.0 - corr(r));
-
     for (int i = 0; i < buffer->n; i++){
         if (amp){
             if (output[i] < min){min = output[i];}
             if (output[i] > max){max = output[i];}
         }
         if (prewhiten) {
-            buffer->y[sorted[i].parts.idx] -= output[i];// return 0;
+            buffer->y[sorted[i].parts.idx] -= output[i];
         }
-        output[i] = (output[i] - (corr(r) * (double)(sorted[i].parts.val))) * multiplier;
-        res += ((double)(sorted[i].parts.val) - output[i]) * ((double)(sorted[i].parts.val) - output[i]);
-        ref += ((double)(sorted[i].parts.val) + output[i]) * ((double)(sorted[i].parts.val) + output[i]);
+
+        output[i] = (output[i] - (corr(r) * (double)(sorted[i].parts.val)));
+
+        // Calculate true R^2 statistic components
+        double y_val = (double)(sorted[i].parts.val);
+        double smooth_val = output[i];
+
+        Sxx += smooth_val * smooth_val;
+        Syy += y_val * y_val;
+        Sxy += y_val * smooth_val;
     }
 
     if (amp){*amp = max - min;}
 
-return (ref / res);}
+    // Calculate final R^2 with clamping
+    float R2 = 0.0f;
+    if (Sxx > 0.0 && Syy > 0.0) {
+        R2 = (float)((Sxy * Sxy) / (Sxx * Syy));
+        if (R2 < 0.0f) R2 = 0.0f;
+        if (R2 > (1.0f - 1e-15f)) R2 = 1.0f - 1e-15f;
+    }
+
+    return R2;
+}
 
 
 static inline void binsearch_peak(peak_t *peak, buffer_t *buffer, double df){
-    double step = df; float R; double freq_tmp;
+    double step = df; float R2; double freq_tmp;
     for(int i = 0; i < 12; i++){
         step *= 0.5;
 
         freq_tmp = peak->freq - step;
-        R = get_r(buffer, freq_tmp, NULL, false);
-        if(R > peak->r){peak->r = R; peak->freq = freq_tmp;}
+        R2 = get_r2(buffer, freq_tmp, NULL, false);
+        if(R2 > peak->r2){peak->r2 = R2; peak->freq = freq_tmp;}
 
         freq_tmp = peak->freq + step;
-        R = get_r(buffer, freq_tmp, NULL, false);
-        if(R > peak->r){peak->r = R; peak->freq = freq_tmp;}
+        R2 = get_r2(buffer, freq_tmp, NULL, false);
+        if(R2 > peak->r2){peak->r2 = R2; peak->freq = freq_tmp;}
     }
 }
 
@@ -154,14 +172,14 @@ static inline void sortPeaks(peak_t *peaks, int length, buffer_t* buf, int mode,
             if(mode > 1 && mode < 4){
                 binsearch_peak(&peaks[i], buf, df);
             }
-            if (mode < 4){peaks[i].r = get_r(buf, peaks[i].freq, &peaks[i].amp, false);}
-            peaks[i].p = get_z(peaks[i].r, buf->n);
+            if (mode < 4){peaks[i].r2 = get_r2(buf, peaks[i].freq, &peaks[i].amp, false);}
+            peaks[i].p = lnFAP(2, 1, peaks[i].r2, buf->n);
         };
 
         for (i = 1; i < length; i++) {
             key = peaks[i];
             j = i - 1;
-            while (j >= 0 && peaks[j].r < key.r) {
+            while (j >= 0 && peaks[j].r2 < key.r2) {
                 peaks[j + 1] = peaks[j];
                 j = j - 1;
             }
