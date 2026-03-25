@@ -847,6 +847,57 @@ double sf_hyperg_2F1(double a, double b, double c, double x) {
     }
 }
 
+#define STOP 1.0e-8
+#define TINY 1.0e-30
+
+double incbeta(double a, double b, double x) {
+    if (x < 0.0 || x > 1.0) return 1.0/0.0;
+
+    /*The continued fraction converges nicely for x < (a+1)/(a+b+2)*/
+    if (x > (a+1.0)/(a+b+2.0)) {
+        return (1.0-incbeta(b,a,1.0-x)); /*Use the fact that beta is symmetrical.*/
+    }
+
+    /*Find the first part before the continued fraction.*/
+    const double lbeta_ab = gamln(a)+gamln(b)-gamln(a+b);
+    const double front = exp(log(x)*a+log(1.0-x)*b-lbeta_ab) / a;
+
+    /*Use Lentz's algorithm to evaluate the continued fraction.*/
+    double f = 1.0, c = 1.0, d = 0.0;
+
+    int i, m;
+    for (i = 0; i <= 200; ++i) {
+        m = i/2;
+
+        double numerator;
+        if (i == 0) {
+            numerator = 1.0; /*First numerator is 1.0.*/
+        } else if (i % 2 == 0) {
+            numerator = (m*(b-m)*x)/((a+2.0*m-1.0)*(a+2.0*m)); /*Even term.*/
+        } else {
+            numerator = -((a+m)*(a+b+m)*x)/((a+2.0*m)*(a+2.0*m+1)); /*Odd term.*/
+        }
+
+        /*Do an iteration of Lentz's algorithm.*/
+        d = 1.0 + numerator * d;
+        if (fabs(d) < TINY) d = TINY;
+        d = 1.0 / d;
+
+        c = 1.0 + numerator / c;
+        if (fabs(c) < TINY) c = TINY;
+
+        const double cd = c*d;
+        f *= cd;
+
+        /*Check for stop.*/
+        if (fabs(1.0-cd) < STOP) {
+            return front * (f-1.0);
+        }
+    }
+
+    return 1.0/0.0; /*Needed more loops, did not converge.*/
+}
+
 double logfdtrc(long double x, int ia, int ib) {
     // Check for domain errors
     if (ia < 1 || ib < 1 || x < 0.0) {fprintf(stderr, "fdtrc domain error: ia < 1, ib < 1, or x < 0\n"); return(0.0/0.0);}
@@ -910,58 +961,40 @@ return z;}
 */
 
 
-// Implement the Mancova's probability based on Baluev (2007)
-double lnI(double a, double b, double x) {
+double lnI(double a, double b, double x)
+{
+    if (x <= 0.0) return -INFINITY;  // ln(0)
+    if (x >= 1.0) return 0.0;        // ln(1)
 
-    // ln Beta(a,b)
+    const double p_cut = exp(-500.0);   // equivalent to -ln(p) = 100
+
+    // First try the stable incomplete-beta evaluation
+    double Ix = incbeta(a, b, x);
+
+    if (Ix > 0.0 && Ix > p_cut) {
+        return log(Ix);   // safe when -ln(p) < 100
+    }
+
+    // Tail case: use the hypergeometric approximation
     double lnB = betaln(a, b);
 
-    // Use symmetry for better stability
-    if (x > 0.5) {
-        double xm = 1.0 - x;
 
-        double hyp = sf_hyperg_2F1(a + b, 1.0, b + 1.0, xm);
+    double hyp = sf_hyperg_2F1(a + b, 1.0, a + 1.0, x);
         if (hyp <= 0.0) return -INFINITY;
 
-        double lnI_other = b * log(xm)
-                         + a * log(x)    // <--- ADDED MISSING TERM
-                         - log(b)
-                         - lnB           // <--- Micro-optimized (Beta is symmetric)
-                         + log(hyp);
-
-        // log(1 - exp(lnI_other))
-        if (lnI_other >= 0.0) return -INFINITY;
-        return log1p(-exp(lnI_other));
-    } else {
-        double hyp = sf_hyperg_2F1(a + b, 1.0, a + 1.0, x);
-        if (hyp <= 0.0) return -INFINITY;
-
-        return a * log(x)
-             + b * log(1.0 - x)          // <--- ADDED MISSING TERM
-             - log(a)
-             - lnB
-             + log(hyp);
-    }
-}
+        return a * log(x) + b * log1p(-x) - log(a) - lnB + log(hyp);}
 
 
-double lnFAP(int dK, int dH, double R2, int N) {
-
-    // For AoV-like periodograms;
-    // dK = 2*nterms + 1 (total degrees of freedom)
-    // dH = 1 (mean only)
-
+double lnFAP(int dK, int dH, double R2, int N)
+{
     int d  = dK - dH;
     int Nk = N - dK;
 
     double a = 0.5 * d;
     double b = 0.5 * Nk;
 
-    // ln I(b, a, 1 - R2)
-    double result = lnI(b, a, 1.0 - R2);
-
-    // Absolute value clamp (optional but harmless since result is strictly negative)
-    if (result < 0.0) result = -result;
+    // this is ln(I), so negate it to get -ln(p)
+    double result = -lnI(b, a, 1.0 - R2);
 
     return result;
 }
