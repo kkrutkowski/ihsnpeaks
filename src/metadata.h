@@ -1,29 +1,30 @@
 #ifndef METADATA_H
 #define METADATA_H
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <dirent.h>
-#include <string.h>
-#include <stdbool.h>
-#include <math.h>
 #include <complex.h>
-#include <unistd.h>
+#include <dirent.h>
 #include <errno.h>
-
 #include <fftw3.h>
 #include <klib/kvec.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "utils/common.h"
 
-static inline uint32_t intmax(int32_t a, int32_t b) {return (a > b) ? a : b;}
+static inline uint32_t intmax(int32_t a, int32_t b) { return (a > b) ? a : b; }
 uint32_t bitCeil(uint32_t n) {
     int exp;
     double mantissa = frexp((double)n, &exp);
 
     // If the number is a power of two, return it as is
-    if (mantissa == 0.5) {return n;}
+    if (mantissa == 0.5) {
+        return n;
+    }
     // Otherwise, return 2^exp
     return 1 << exp;
 }
@@ -54,38 +55,44 @@ void generate_plans(char *argv[]) {
         }
     }
     printf("Generating FFTW plans - it may take a few minuts.\n");
-    fftwf_complex* buffer = fftwf_alloc_complex(1 << 22);
+    fftwf_complex *buffer = fftwf_alloc_complex(1 << 22);
     fftwf_plan plan;
-    for (int i = 11; i < 23; i++){
-        printf("\rGenerating plan %i out of 12", i - 10); fflush(stdout);
-        if (i < FFTW_MEASURE_THRESHOLD) {plan = fftwf_plan_dft_1d(1<<i, buffer, buffer, FFTW_FORWARD, FFTW_PATIENT);}
-        else {plan = fftwf_plan_dft_1d(1<<i, buffer, buffer, FFTW_FORWARD, FFTW_MEASURE);}
+    for (int i = 11; i < 23; i++) {
+        printf("\rGenerating plan %i out of 12", i - 10);
+        fflush(stdout);
+        if (i < FFTW_MEASURE_THRESHOLD) {
+            plan = fftwf_plan_dft_1d(1 << i, buffer, buffer, FFTW_FORWARD, FFTW_PATIENT);
+        } else {
+            plan = fftwf_plan_dft_1d(1 << i, buffer, buffer, FFTW_FORWARD, FFTW_MEASURE);
+        }
     }
     int status = fftwf_export_wisdom_to_filename("/opt/ihsnpeaks/plans");
-    if (status == 1){printf("Plans successfully saved to /opt/ihsnpeaks/plans");}
-    else {printf("Error: Failed to save generated plans");}
+    if (status == 1) {
+        printf("Plans successfully saved to /opt/ihsnpeaks/plans");
+    } else {
+        printf("Error: Failed to save generated plans");
+    }
     fftwf_free(buffer);
     fftwf_destroy_plan(plan);
     printf("\n");
 }
 
 // Function to process the path and populate the target vector
-static bool process_path(parameters* params) {
+static bool process_path(parameters *params) {
     kv_init(params->targets);
     params->maxLen = 0;
 
     if (!is_directory(params->target)) {
-
         // Allocate and populate a target struct with the file path and params pointer
         target_t target;
         target.path = strdup(params->target);
-        kv_push(target_t, params->targets, target); // Store the target in the vector
+        kv_push(target_t, params->targets, target);  // Store the target in the vector
 
         // Use stat to get the file size
         struct stat file_stat;
         if (stat(params->target, &file_stat) != 0) {
             perror("stat");
-        exit(EXIT_FAILURE);
+            exit(EXIT_FAILURE);
         }
 
         params->maxSize = file_stat.st_size + 1;
@@ -108,8 +115,8 @@ static bool process_path(parameters* params) {
 
         params->maxSize = file_stat.st_size + 1;
         params->maxLen = newline_count;
-        //params->gridLen = intmax(1<<11, bitCeil(newline_count * params->gridRatio)); //to be modified (?)
-        params->gridLen = intmax(1<<11, bitCeil((int)powf((float)(newline_count), 0.74) * (uint64_t)(params->gridRatio)));
+        // params->gridLen = intmax(1<<11, bitCeil(newline_count * params->gridRatio)); //to be modified (?)
+        params->gridLen = intmax(1 << 11, bitCeil((int)powf((float)(newline_count), 0.74) * (uint64_t)(params->gridRatio)));
         params->plan = fftwf_plan_dft_1d(params->gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
         return true;
     } else {
@@ -164,21 +171,24 @@ static bool process_path(parameters* params) {
                 // Allocate and populate a target struct with the file path and params pointer
                 target_t target;
                 target.path = strdup(full_path);
-                kv_push(target_t, params->targets, target); // Store the target in the vector
+                kv_push(target_t, params->targets, target);  // Store the target in the vector
             }
         }
         closedir(dir);
-        //approximate an near-optimal transform size
+        // approximate an near-optimal transform size
         params->avgLen /= DEFAULT_MEASUREMENT_SIZE * kv_size(params->targets);
-        params->gridLen = intmax(1<<11, bitCeil((int)powf((float)(params->avgLen), 0.74) * (uint64_t)(params->gridRatio)));
+        params->gridLen = intmax(1 << 11, bitCeil((int)powf((float)(params->avgLen), 0.74) * (uint64_t)(params->gridRatio)));
         params->plan = fftwf_plan_dft_1d(params->gridLen, NULL, NULL, FFTW_FORWARD, FFTW_ESTIMATE);
     }
-return false;}
+    return false;
+}
 
 // Function to free all memory allocated in the kvec and destroy it
 static void free_targets(kvec_target_t *targets) {
-    for (size_t i = 0; i < kv_size(*targets); i++) {free(kv_A(*targets, i).path);}
+    for (size_t i = 0; i < kv_size(*targets); i++) {
+        free(kv_A(*targets, i).path);
+    }
     kv_destroy(*targets);
 }
 
-#endif // METADATA_H
+#endif  // METADATA_H

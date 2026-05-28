@@ -1,18 +1,17 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <complex.h>
 #include <float.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifndef FDIST_H
-#define FDIST_H
+#    define FDIST_H
 
-#define locEPS (1000.0 * DBL_EPSILON)
+#    define locEPS (1000.0 * DBL_EPSILON)
 
 // hyp2f1 to be implemented
 
-long double psi(long double xx)
-{
+long double psi(long double xx) {
     //                    Evaluation of the digamma function
     //
     //                          -----------
@@ -30,17 +29,12 @@ long double psi(long double xx)
     //    A.H. Morris (nswc).
 
     long double aug, den, dx0, sgn, upper, w, x, xmax1, xmx0, xsmall, z;
-    long double p1[7] = {0.895385022981970e-02, 0.477762828042627e+01,
-                    0.142441585084029e+03, 0.118645200713425e+04,
-                    0.363351846806499e+04, 0.413810161269013e+04,
-                    0.130560269827897e+04};
-    long double q1[6] = {0.448452573429826e+02, 0.520752771467162e+03,
-                    0.221000799247830e+04, 0.364127349079381e+04,
-                    0.190831076596300e+04, 0.691091682714533e-05};
-    long double p2[4] = {-0.212940445131011e+01, -0.701677227766759e+01,
-                    -0.448616543918019e+01, -0.648157123766197e+00};
-    long double q2[4] = {0.322703493791143e+02, 0.892920700481861e+02,
-                    0.546117738103215e+02, 0.777788548522962e+01};
+    long double p1[7] = {0.895385022981970e-02, 0.477762828042627e+01, 0.142441585084029e+03, 0.118645200713425e+04,
+                         0.363351846806499e+04, 0.413810161269013e+04, 0.130560269827897e+04};
+    long double q1[6] = {0.448452573429826e+02, 0.520752771467162e+03, 0.221000799247830e+04,
+                         0.364127349079381e+04, 0.190831076596300e+04, 0.691091682714533e-05};
+    long double p2[4] = {-0.212940445131011e+01, -0.701677227766759e+01, -0.448616543918019e+01, -0.648157123766197e+00};
+    long double q2[4] = {0.322703493791143e+02, 0.892920700481861e+02, 0.546117738103215e+02, 0.777788548522962e+01};
     int nq, i;
     dx0 = 1.461632144968362341262659542325721325;
     xmax1 = 4503599627370496.0;
@@ -53,7 +47,7 @@ long double psi(long double xx)
             if (x == 0.) {
                 return 0.0;
             }
-            aug = -1./x;
+            aug = -1. / x;
         } else {
             // 10
             w = -x;
@@ -67,24 +61,24 @@ long double psi(long double xx)
                 return 0.0;
             }
             w -= (int)w;
-            nq = (int)(w*4.0);
-            w = 4.*(w - 0.25*nq);
+            nq = (int)(w * 4.0);
+            w = 4. * (w - 0.25 * nq);
 
             if (nq % 2 == 1) {
                 w = 1. - w;
             }
-            z = (M_PI / 4.)*w;
+            z = (M_PI / 4.) * w;
 
             if ((nq / 2) % 2 == 1) {
                 sgn = -sgn;
             }
             if ((((nq + 1) / 2) % 2) == 1) {
-                aug = sgn * (tan(z)*4.);
+                aug = sgn * (tan(z) * 4.);
             } else {
                 if (z == 0.) {
                     return 0.0;
                 }
-                aug = sgn * (4./tan(z));
+                aug = sgn * (4. / tan(z));
             }
         }
         x = 1 - x;
@@ -93,11 +87,10 @@ long double psi(long double xx)
     if (x <= 3.0) {
         // 50
         den = x;
-        upper = p1[0]*x;
-        for (i = 0; i < 5; i++)
-        {
-            den = (den + q1[i])*x;
-            upper = (upper + p1[i+1])*x;
+        upper = p1[0] * x;
+        for (i = 0; i < 5; i++) {
+            den = (den + q1[i]) * x;
+            upper = (upper + p1[i + 1]) * x;
         }
         den = (upper + p1[6]) / (den + q1[5]);
         xmx0 = x - dx0;
@@ -105,22 +98,21 @@ long double psi(long double xx)
     } else {
         // 70
         if (x < xmax1) {
-            w = 1. / (x*x);
+            w = 1. / (x * x);
             den = w;
-            upper = p2[0]*w;
+            upper = p2[0] * w;
 
             for (i = 0; i < 3; i++) {
-                den = (den + q2[i])*w;
-                upper = (upper + p2[i+1])*w;
+                den = (den + q2[i]) * w;
+                upper = (upper + p2[i + 1]) * w;
             }
-            aug += upper / (den + q2[3]) - 0.5/x;
+            aug += upper / (den + q2[3]) - 0.5 / x;
         }
         return aug + log(x);
     }
 }
 
-long double alnrel(long double a)
-{
+long double alnrel(long double a) {
     //    Evaluation of the function ln(1 + a)
 
     long double p[3] = {-0.129418923021993e+01, 0.405303492862024e+00, -0.178874546012214e-01};
@@ -131,83 +123,54 @@ long double alnrel(long double a)
         return logl(1. + a);
     } else {
         t = a / (a + 2.);
-        t2 = t*t;
-        w = ((p[2]*t2 + p[1])*t2 + p[0])*t2 + 1.;
-        w /= ((q[2]*t2 + q[1])*t2 + q[0])*t2 + 1.;
-        return 2.0*t*w;
+        t2 = t * t;
+        w = ((p[2] * t2 + p[1]) * t2 + p[0]) * t2 + 1.;
+        w /= ((q[2] * t2 + q[1]) * t2 + q[0]) * t2 + 1.;
+        return 2.0 * t * w;
     }
 }
 
-long double gamln1(long double a)
-{
+long double gamln1(long double a) {
     //    Evaluation of ln(gamma(1 + a)) for -0.2 <= A <= 1.25
 
     long double bot, top, w, x;
 
-    const long double p[7] = { .577215664901533e+00,  .844203922187225e+00,
-                         -.168860593646662e+00, -.780427615533591e+00,
-                         -.402055799310489e+00, -.673562214325671e-01,
-                         -.271935708322958e-02};
-    const long double q[6] = {.288743195473681e+01, .312755088914843e+01,
-                         .156875193295039e+01, .361951990101499e+00,
-                         .325038868253937e-01, .667465618796164e-03};
-    const long double r[6] = {.422784335098467e+00, .848044614534529e+00,
-                         .565221050691933e+00, .156513060486551e+00,
-                         .170502484022650e-01, .497958207639485e-03};
-    const long double s[5] = {.124313399877507e+01, .548042109832463e+00,
-                         .101552187439830e+00, .713309612391000e-02,
-                         .116165475989616e-03};
+    const long double p[7] = {.577215664901533e+00,  .844203922187225e+00,  -.168860593646662e+00, -.780427615533591e+00,
+                              -.402055799310489e+00, -.673562214325671e-01, -.271935708322958e-02};
+    const long double q[6] = {.288743195473681e+01, .312755088914843e+01, .156875193295039e+01,
+                              .361951990101499e+00, .325038868253937e-01, .667465618796164e-03};
+    const long double r[6] = {.422784335098467e+00, .848044614534529e+00, .565221050691933e+00,
+                              .156513060486551e+00, .170502484022650e-01, .497958207639485e-03};
+    const long double s[5] = {.124313399877507e+01, .548042109832463e+00, .101552187439830e+00, .713309612391000e-02, .116165475989616e-03};
 
     if (a < 0.6) {
-        top = ((((((p[6]
-                   )*a+p[5]
-                  )*a+p[4]
-                 )*a+p[3]
-                )*a+p[2]
-               )*a+p[1]
-              )*a+p[0];
-        bot = ((((((q[5]
-                   )*a+q[4]
-                  )*a+q[3]
-                 )*a+q[2]
-                )*a+q[1]
-               )*a+q[0]
-              )*a+1.;
-        w = top/bot;
-        return -a*w;
+        top = ((((((p[6]) * a + p[5]) * a + p[4]) * a + p[3]) * a + p[2]) * a + p[1]) * a + p[0];
+        bot = ((((((q[5]) * a + q[4]) * a + q[3]) * a + q[2]) * a + q[1]) * a + q[0]) * a + 1.;
+        w = top / bot;
+        return -a * w;
     } else {
         x = (a - 0.5) - 0.5;
-        top = (((((r[5]
-                  )*x+r[4]
-                 )*x+r[3]
-                )*x+r[2]
-               )*x+r[1]
-              )*x+r[0];
-        bot = (((((s[4]
-                  )*x+s[3]
-                 )*x+s[2]
-                )*x+s[1]
-               )*x+s[0]
-              )*x+1.;
-        w = top/bot;
-        return x*w;
+        top = (((((r[5]) * x + r[4]) * x + r[3]) * x + r[2]) * x + r[1]) * x + r[0];
+        bot = (((((s[4]) * x + s[3]) * x + s[2]) * x + s[1]) * x + s[0]) * x + 1.;
+        w = top / bot;
+        return x * w;
     }
 }
 
-long double gamln(long double a)
-{
+long double gamln(long double a) {
     //    Evaluation of ln(gamma(a)) for positive a
 
     long double t, w, d = .418938533204673;
-    int i,n;
-    const long double c[6] = {.833333333333333e-01, -.277777777760991e-02,
-                         .793650666825390e-03, -.595202931351870e-03,
-                         .837308034031215e-03, -.165322962780713e-02};
+    int i, n;
+    const long double c[6] = {.833333333333333e-01,  -.277777777760991e-02, .793650666825390e-03,
+                              -.595202931351870e-03, .837308034031215e-03,  -.165322962780713e-02};
 
-    if (a <= 0.8) { return gamln1(a) - logl(a); }
+    if (a <= 0.8) {
+        return gamln1(a) - logl(a);
+    }
 
     if (a <= 2.25) {
-        t = (a-0.5) - 0.5;
+        t = (a - 0.5) - 0.5;
         return gamln1(t);
     }
 
@@ -215,20 +178,18 @@ long double gamln(long double a)
         n = (int)(a - 1.25);
         t = a;
         w = 1.0;
-        for (i = 0; i < n; i++)
-        {
+        for (i = 0; i < n; i++) {
             t -= 1.0;
             w *= t;
         }
-        return gamln1(t-1.) + logl(w);
+        return gamln1(t - 1.) + logl(w);
     }
-    t = pow(1/a, 2);
-    w = (((((c[5]*t+c[4])*t+c[3])*t+c[2])*t+c[1])*t+c[0])/a;
-    return (d + w) + (a-0.5)*(logl(a) - 1.);
+    t = pow(1 / a, 2);
+    w = (((((c[5] * t + c[4]) * t + c[3]) * t + c[2]) * t + c[1]) * t + c[0]) / a;
+    return (d + w) + (a - 0.5) * (logl(a) - 1.);
 }
 
-long double algdiv(long double a, long double b)
-{
+long double algdiv(long double a, long double b) {
     //         Computation of ln(gamma(b)/gamma(a+b)) when b >= 8
     //
     //                             --------
@@ -238,37 +199,31 @@ long double algdiv(long double a, long double b)
     //
 
     long double c, d, h, s11, s3, s5, s7, s9, t, u, v, w, x, x2;
-    long double carr[6] = {0.833333333333333e-01, -0.277777777760991e-02,
-                      0.793650666825390e-03, -0.595202931351870e-03,
-                      0.837308034031215e-03, -0.165322962780713e-02};
+    long double carr[6] = {0.833333333333333e-01,  -0.277777777760991e-02, 0.793650666825390e-03,
+                           -0.595202931351870e-03, 0.837308034031215e-03,  -0.165322962780713e-02};
 
     if (a > b) {
         h = b / a;
-        c = 1./(1. + h);
-        x = h/(1. + h);
+        c = 1. / (1. + h);
+        x = h / (1. + h);
         d = a + (b - 0.5);
     } else {
         h = a / b;
-        c = h/(1. + h);
-        x = 1./(1. + h);
+        c = h / (1. + h);
+        x = 1. / (1. + h);
         d = b + (a - 0.5);
     }
     // Set sn = (1 - x**n)/(1 - x)
-    x2 = x*x;
+    x2 = x * x;
     s3 = 1. + (x + x2);
-    s5 = 1. + (x + x2*s3);
-    s7 = 1. + (x + x2*s5);
-    s9 = 1. + (x + x2*s7);
-    s11 = 1. + (x + x2*s9);
+    s5 = 1. + (x + x2 * s3);
+    s7 = 1. + (x + x2 * s5);
+    s9 = 1. + (x + x2 * s7);
+    s11 = 1. + (x + x2 * s9);
 
     // Set w = del(b) - del(a + b)
     t = pow((1. / b), 2);
-    w = (((((carr[5]*s11
-            )*t + carr[4]*s9
-           )*t + carr[3]*s7
-          )*t + carr[2]*s5
-         )*t + carr[1]*s3
-        )*t + carr[0];
+    w = (((((carr[5] * s11) * t + carr[4] * s9) * t + carr[3] * s7) * t + carr[2] * s5) * t + carr[1] * s3) * t + carr[0];
     w *= c / b;
     // Combine the results
     u = d * alnrel(a / b);
@@ -276,50 +231,37 @@ long double algdiv(long double a, long double b)
     return (u > v ? (w - v) - u : (w - u) - v);
 }
 
-long double bcorr(long double a0, long double b0)
-{
+long double bcorr(long double a0, long double b0) {
     //    Evaluation of  del(a0) + del(b0) - del(a0 + b0)  where
     //    ln(gamma(a)) = (a - 0.5)*ln(a) - a + 0.5*ln(2*pi) + del(a).
     //    It is assumed that a0 >= 8 And b0 >= 8.
 
-    long double a,b,c,h,s11,s3,s5,s7,s9,t,w,x,x2;
-    long double carr[6] = {0.833333333333333e-01, -0.277777777760991e-02,
-                      0.793650666825390e-03, -0.595202931351870e-03,
-                      0.837308034031215e-03, -0.165322962780713e-02};
+    long double a, b, c, h, s11, s3, s5, s7, s9, t, w, x, x2;
+    long double carr[6] = {0.833333333333333e-01,  -0.277777777760991e-02, 0.793650666825390e-03,
+                           -0.595202931351870e-03, 0.837308034031215e-03,  -0.165322962780713e-02};
 
     a = fmin(a0, b0);
     b = fmax(a0, b0);
     h = a / b;
-    c = h/(1. + h);
-    x = 1./(1. + h);
-    x2 = x*x;
+    c = h / (1. + h);
+    x = 1. / (1. + h);
+    x2 = x * x;
     //  Set sn = (1 - x**n)/(1 - x)
     s3 = 1. + (x + x2);
-    s5 = 1. + (x + x2*s3);
-    s7 = 1. + (x + x2*s5);
-    s9 = 1. + (x + x2*s7);
-    s11 = 1. + (x + x2*s9);
+    s5 = 1. + (x + x2 * s3);
+    s7 = 1. + (x + x2 * s5);
+    s9 = 1. + (x + x2 * s7);
+    s11 = 1. + (x + x2 * s9);
     // Set w = del(b) - del(a + b)
     t = pow((1. / b), 2);
-    w = (((((carr[5]*s11
-            )*t + carr[4]*s9
-           )*t + carr[3]*s7
-          )*t + carr[2]*s5
-         )*t + carr[1]*s3
-        )*t + carr[0];
+    w = (((((carr[5] * s11) * t + carr[4] * s9) * t + carr[3] * s7) * t + carr[2] * s5) * t + carr[1] * s3) * t + carr[0];
     w *= c / b;
     // Compute  del(a) + w
     t = pow((1. / a), 2);
-    return ((((((carr[5])*t + carr[4]
-               )*t + carr[3]
-              )*t + carr[2]
-             )*t + carr[1]
-            )*t + carr[0]
-           )/a + w;
+    return ((((((carr[5]) * t + carr[4]) * t + carr[3]) * t + carr[2]) * t + carr[1]) * t + carr[0]) / a + w;
 }
 
-long double gsumln(long double a, long double b)
-{
+long double gsumln(long double a, long double b) {
     //     Evaluation of the function ln(gamma(a + b))
     //     for 1 <= A <= 2  And  1 <= B <= 2
 
@@ -334,11 +276,10 @@ long double gsumln(long double a, long double b)
         return gamln1(x) + alnrel(x);
     }
 
-    return gamln1(x - 1.) + logl(x*(1. + x));
+    return gamln1(x - 1.) + logl(x * (1. + x));
 }
 
-long double betaln(long double a0, long double b0)
-{
+long double betaln(long double a0, long double b0) {
     //    Evaluation of the logarithm of the beta function
 
     long double a, b, c, h, u, v, w, z;
@@ -351,20 +292,20 @@ long double betaln(long double a0, long double b0)
     if (a >= 8.0) {
         w = bcorr(a, b);
         h = a / b;
-        c = h/(1. + h);
-        u = -(a - 0.5)*logl(c);
-        v = b*alnrel(h);
+        c = h / (1. + h);
+        u = -(a - 0.5) * logl(c);
+        v = b * alnrel(h);
         if (u > v) {
-            return (((-0.5*logl(b)+e)+w)-v) - u;
+            return (((-0.5 * logl(b) + e) + w) - v) - u;
         } else {
-            return (((-0.5*logl(b)+e)+w)-u) - v;
+            return (((-0.5 * logl(b) + e) + w) - u) - v;
         }
     }
     if (a < 1) {
         if (b > 8) {
-            return gamln(a) + algdiv(a,b);
+            return gamln(a) + algdiv(a, b);
         } else {
-            return gamln(a) + (gamln(b) - gamln(a+b));
+            return gamln(a) + (gamln(b) - gamln(a + b));
         }
     }
 
@@ -385,7 +326,7 @@ long double betaln(long double a0, long double b0)
             for (i = 0; i < n; i++) {
                 a -= 1.0;
                 h = a / b;
-                w *= h/(1.+h);
+                w *= h / (1. + h);
             }
             w = logl(w);
             if (b >= 8.0) {
@@ -396,9 +337,9 @@ long double betaln(long double a0, long double b0)
             w = 1.0;
             for (i = 0; i < n; i++) {
                 a -= 1.0;
-                w *= a/(1. + (a/b));
+                w *= a / (1. + (a / b));
             }
-            return (logl(w) - n*logl(b)) + (gamln(a) + algdiv(a, b));
+            return (logl(w) - n * logl(b)) + (gamln(a) + algdiv(a, b));
         }
     }
     n = (int)(b - 1.);
@@ -409,7 +350,6 @@ long double betaln(long double a0, long double b0)
     }
     return w + logl(z) + (gamln(a) + gamln(b) - gsumln(a, b));
 }
-
 
 void sf_complex_log(double zr, double zi, double *log1_r, double *log1_i) {
     double complex z = zr + zi * I;
@@ -429,17 +369,9 @@ void sf_complex_logsin(double zr, double zi, double *lszr, double *lszi) {
 }
 
 /* coefficients for gamma=7, kmax=8  Lanczos method */
-static double lanczos_7_c[9] = {
-    0.99999999999980993227684700473478,
-    676.520368121885098567009190444019,
-    -1259.13921672240287047156078755283,
-    771.3234287776530788486528258894,
-    -176.61502916214059906584551354,
-    12.507343278686904814458936853,
-    -0.13857109526572011689554707,
-    9.984369578019570859563e-6,
-    1.50563273514931155834e-7
-};
+static double lanczos_7_c[9] = {0.99999999999980993227684700473478, 676.520368121885098567009190444019, -1259.13921672240287047156078755283,
+                                771.3234287776530788486528258894,   -176.61502916214059906584551354,    12.507343278686904814458936853,
+                                -0.13857109526572011689554707,      9.984369578019570859563e-6,         1.50563273514931155834e-7};
 
 double gsl_sf_angle_restrict_symm(double theta) {
     // synthetic extended precision constants
@@ -454,7 +386,7 @@ double gsl_sf_angle_restrict_symm(double theta) {
     if (r > M_PI) {
         r = (((r - 2 * P1) - 2 * P2) - 2 * P3);  // r-TwoPi
     } else if (r < -M_PI) {
-        r = (((r + 2 * P1) + 2 * P2) + 2 * P3); // r+TwoPi
+        r = (((r + 2 * P1) + 2 * P2) + 2 * P3);  // r+TwoPi
     }
 
     if (fabs(theta) > 0.0625 / DBL_EPSILON) {
@@ -470,7 +402,7 @@ void lngamma_lanczos_complex(double zr, double zi, double *yr, double *yi) {
     double logAg_r, logAg_i;
     double Ag_r, Ag_i;
 
-    zr -= 1.0; // Lanczos writes z! instead of Gamma(z)
+    zr -= 1.0;  // Lanczos writes z! instead of Gamma(z)
 
     Ag_r = lanczos_7_c[0];
     Ag_i = 0.0;
@@ -509,7 +441,7 @@ double hyperg_2F1_series(double a, double b, double c, double x) {
             return sum_pos - sum_neg;
         }
         del_prev = del;
-        del *= (a + k) * (b + k) * x / ((c + k) * (k + 1.0));  /* Gauss series */
+        del *= (a + k) * (b + k) * x / ((c + k) * (k + 1.0)); /* Gauss series */
 
         if (del > 0.0) {
             del_pos = del;
@@ -524,8 +456,7 @@ double hyperg_2F1_series(double a, double b, double c, double x) {
             sum_neg -= del;
         }
 
-        if (fabs(del_prev / (sum_pos - sum_neg)) < DBL_EPSILON &&
-            fabs(del / (sum_pos - sum_neg)) < DBL_EPSILON) {
+        if (fabs(del_prev / (sum_pos - sum_neg)) < DBL_EPSILON && fabs(del / (sum_pos - sum_neg)) < DBL_EPSILON) {
             break;
         }
 
@@ -547,13 +478,13 @@ double hyperg_2F1_luke(double a, double b, double c, double xin) {
     double F = 1.0;
     double prec;
 
-    double Bnm3 = 1.0;                                  /* B0 */
-    double Bnm2 = 1.0 + t1 * x;                         /* B1 */
-    double Bnm1 = 1.0 + t2 * x * (1.0 + t1 / 3.0 * x);  /* B2 */
+    double Bnm3 = 1.0;                                 /* B0 */
+    double Bnm2 = 1.0 + t1 * x;                        /* B1 */
+    double Bnm1 = 1.0 + t2 * x * (1.0 + t1 / 3.0 * x); /* B2 */
 
-    double Anm3 = 1.0;                                                      /* A0 */
-    double Anm2 = Bnm2 - t0 * x;                                            /* A1 */
-    double Anm1 = Bnm1 - t0 * (1.0 + t2 * x) * x + t0 * t1 * (c / (c + 1.0)) * x * x;   /* A2 */
+    double Anm3 = 1.0;                                                                /* A0 */
+    double Anm2 = Bnm2 - t0 * x;                                                      /* A1 */
+    double Anm1 = Bnm1 - t0 * (1.0 + t2 * x) * x + t0 * t1 * (c / (c + 1.0)) * x * x; /* A2 */
 
     while (1) {
         double npam1 = n + a - 1;
@@ -665,7 +596,7 @@ double hyperg_2F1_reflect(double a, double b, double c, double x) {
         } /* end F1 evaluation */
 
         /* Evaluate F2. */
-        if (1) { // Assume gamma functions are ok
+        if (1) {  // Assume gamma functions are ok
             const int maxiter = 2000;
             double psi_1 = -M_E;
             double psi_1pd = psi(1.0 + ad);
@@ -721,10 +652,10 @@ double hyperg_2F1_reflect(double a, double b, double c, double x) {
         double ln_gd = gamln(d);
         double ln_gmd = gamln(-d);
 
-        sgn1 = 1.0; // Assume positive signs
-        sgn2 = 1.0; // Assume positive signs
+        sgn1 = 1.0;  // Assume positive signs
+        sgn2 = 1.0;  // Assume positive signs
 
-        if (1) { // Assume gamma functions are ok
+        if (1) {  // Assume gamma functions are ok
             double ln_pre1_val = ln_gc + ln_gd - ln_g1ca - ln_g1cb;
             double ln_pre2_val = ln_gc + ln_gmd - ln_g2a - ln_g2b + d * log(1.0 - x);
 
@@ -785,7 +716,7 @@ double sf_hyperg_2F1(double a, double b, double c, double x) {
     }
 
     if (fabs(c - b) < locEPS || fabs(c - a) < locEPS) {
-        return pow_omx(x, d);  /* (1-x)^(c-a-b) */
+        return pow_omx(x, d); /* (1-x)^(c-a-b) */
     }
 
     if (a >= 0.0 && b >= 0.0 && c >= 0.0 && x >= 0.0 && x < 0.995) {
@@ -838,7 +769,7 @@ double sf_hyperg_2F1(double a, double b, double c, double x) {
 
         if (DBL_MAX * (fabs(ap), 1.0) * fabs(bp) * fabs(x) < 2.0 * fabs(c)) {
             // If c is large enough or x is small enough,
-            //we can attempt the series anyway.
+            // we can attempt the series anyway.
             return hyperg_2F1_series(a, b, c, x);
         }
 
@@ -847,35 +778,35 @@ double sf_hyperg_2F1(double a, double b, double c, double x) {
     }
 }
 
-#define STOP 1.0e-8
-#define TINY 1.0e-30
+#    define STOP 1.0e-8
+#    define TINY 1.0e-30
 
 double incbeta(double a, double b, double x) {
-    if (x < 0.0 || x > 1.0) return 1.0/0.0;
+    if (x < 0.0 || x > 1.0) return 1.0 / 0.0;
 
     /*The continued fraction converges nicely for x < (a+1)/(a+b+2)*/
-    if (x > (a+1.0)/(a+b+2.0)) {
-        return (1.0-incbeta(b,a,1.0-x)); /*Use the fact that beta is symmetrical.*/
+    if (x > (a + 1.0) / (a + b + 2.0)) {
+        return (1.0 - incbeta(b, a, 1.0 - x)); /*Use the fact that beta is symmetrical.*/
     }
 
     /*Find the first part before the continued fraction.*/
-    const double lbeta_ab = gamln(a)+gamln(b)-gamln(a+b);
-    const double front = exp(log(x)*a+log(1.0-x)*b-lbeta_ab) / a;
+    const double lbeta_ab = gamln(a) + gamln(b) - gamln(a + b);
+    const double front = exp(log(x) * a + log(1.0 - x) * b - lbeta_ab) / a;
 
     /*Use Lentz's algorithm to evaluate the continued fraction.*/
     double f = 1.0, c = 1.0, d = 0.0;
 
     int i, m;
     for (i = 0; i <= 200; ++i) {
-        m = i/2;
+        m = i / 2;
 
         double numerator;
         if (i == 0) {
             numerator = 1.0; /*First numerator is 1.0.*/
         } else if (i % 2 == 0) {
-            numerator = (m*(b-m)*x)/((a+2.0*m-1.0)*(a+2.0*m)); /*Even term.*/
+            numerator = (m * (b - m) * x) / ((a + 2.0 * m - 1.0) * (a + 2.0 * m)); /*Even term.*/
         } else {
-            numerator = -((a+m)*(a+b+m)*x)/((a+2.0*m)*(a+2.0*m+1)); /*Odd term.*/
+            numerator = -((a + m) * (a + b + m) * x) / ((a + 2.0 * m) * (a + 2.0 * m + 1)); /*Odd term.*/
         }
 
         /*Do an iteration of Lentz's algorithm.*/
@@ -886,29 +817,36 @@ double incbeta(double a, double b, double x) {
         c = 1.0 + numerator / c;
         if (fabs(c) < TINY) c = TINY;
 
-        const double cd = c*d;
+        const double cd = c * d;
         f *= cd;
 
         /*Check for stop.*/
-        if (fabs(1.0-cd) < STOP) {
-            return front * (f-1.0);
+        if (fabs(1.0 - cd) < STOP) {
+            return front * (f - 1.0);
         }
     }
 
-    return 1.0/0.0; /*Needed more loops, did not converge.*/
+    return 1.0 / 0.0; /*Needed more loops, did not converge.*/
 }
 
 double logfdtrc(long double x, int ia, int ib) {
     // Check for domain errors
-    if (ia < 1 || ib < 1 || x < 0.0) {fprintf(stderr, "fdtrc domain error: ia < 1, ib < 1, or x < 0\n"); return(0.0/0.0);}
+    if (ia < 1 || ib < 1 || x < 0.0) {
+        fprintf(stderr, "fdtrc domain error: ia < 1, ib < 1, or x < 0\n");
+        return (0.0 / 0.0);
+    }
 
     long double a = ia;
     long double b = ib;
     double w = b / (b + a * x);
 
     // Handle edge cases
-    if (w <= 0) {return -INFINITY;} // log(0) = -inf
-    if (w >= 1) {return 0.0;} // log(1) = 0
+    if (w <= 0) {
+        return -INFINITY;
+    }  // log(0) = -inf
+    if (w >= 1) {
+        return 0.0;
+    }  // log(1) = 0
 
     // Compute the hypergeometric function 1F1(0.5 * b + 0.5 * a, 0.5 * b + 1, w)
     double hyp2f1 = sf_hyperg_2F1(0.5 * b + 0.5 * a, 1.0, 0.5 * b + 1, w);
@@ -916,13 +854,17 @@ double logfdtrc(long double x, int ia, int ib) {
 
     // Combine terms for the final result
     double result = log(hyp2f1) + 0.5 * b * log(w) + 0.5 * a * log(1 - w) - log(0.5 * b) - ln_beta;
-return result;}
+    return result;
+}
 
-//Include the expected uncertainty of the expected value
-double get_z(double R, int N){
-    double result = -1.0 * logfdtrc(R, (2*N)-3, (2*N)-3);
-    if (result < 0.0){result = 0.0;}
-return result;}
+// Include the expected uncertainty of the expected value
+double get_z(double R, int N) {
+    double result = -1.0 * logfdtrc(R, (2 * N) - 3, (2 * N) - 3);
+    if (result < 0.0) {
+        result = 0.0;
+    }
+    return result;
+}
 
 // A broken approximation of z(R, N) using Stirling's formula for the Beta function
 // To be fixed (?)
@@ -960,34 +902,30 @@ double get_approx_z(double R, int N) {
 return z;}
 */
 
-
-double lnI(double a, double b, double x)
-{
+double lnI(double a, double b, double x) {
     if (x <= 0.0) return -INFINITY;  // ln(0)
     if (x >= 1.0) return 0.0;        // ln(1)
 
-    const double p_cut = exp(-500.0);   // equivalent to -ln(p) = 100
+    const double p_cut = exp(-500.0);  // equivalent to -ln(p) = 100
 
     // First try the stable incomplete-beta evaluation
     double Ix = incbeta(a, b, x);
 
     if (Ix > 0.0 && Ix > p_cut) {
-        return log(Ix);   // safe when -ln(p) < 100
+        return log(Ix);  // safe when -ln(p) < 100
     }
 
     // Tail case: use the hypergeometric approximation
     double lnB = betaln(a, b);
 
-
     double hyp = sf_hyperg_2F1(a + b, 1.0, a + 1.0, x);
-        if (hyp <= 0.0) return -INFINITY;
+    if (hyp <= 0.0) return -INFINITY;
 
-        return a * log(x) + b * log1p(-x) - log(a) - lnB + log(hyp);}
+    return a * log(x) + b * log1p(-x) - log(a) - lnB + log(hyp);
+}
 
-
-double lnFAP(int dK, int dH, double R2, int N)
-{
-    int d  = dK - dH;
+double lnFAP(int dK, int dH, double R2, int N) {
+    int d = dK - dH;
     int Nk = N - dK;
 
     double a = 0.5 * d;
