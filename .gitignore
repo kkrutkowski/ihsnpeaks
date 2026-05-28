@@ -1,1 +1,8 @@
 REASONIX.md
+REASONIX_BIG.md
+build/
+ihsnpeaks
+src/ihsnpeaks
+output.tsv
+.agents
+.codex

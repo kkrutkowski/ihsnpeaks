@@ -1,7 +1,6 @@
 #ifndef PROCESS_H
 #define PROCESS_H
 
-#include <complex.h>  // For C99 complex numbers
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -13,97 +12,153 @@
 #include "utils/readout.h"
 #include "utils/simd.h"
 #include "utils/strings.h"
-// #include "utils/convolution.h"
-
-#include <fftw3.h>  // Include FFTW3 header
 
 static inline float correctPowerTmp(float K, float nInv) {
-    VEC K_tmp;
+    VEC K_tmp = SET_VEC(0.0f);
     K_tmp.values[0] = K;
     K_tmp = correctPower(K_tmp, nInv);
     return K_tmp.values[0];
 }
 
-inline float sabs(complex float z) { return (creal(z) * creal(z)) + (cimag(z) * cimag(z)); }
+static inline uint32_t target_frequency_count(const parameters *params, double fstep) {
+    if (fstep <= 0.0 || params->fmax <= params->fmin) return 0;
+    return (uint32_t)floor(((double)params->fmax - (double)params->fmin) / fstep) + 1U;
+}
+
+static inline void fill_complex_input(buffer_t *buffer, double base_freq, double freq_factor) {
+    uint32_t i = 0;
+    for (; i < buffer->n; ++i) {
+        float phase = (float)(buffer->x[i] * base_freq * freq_factor);
+        buffer->inputReal[i] = buffer->wy[i] * cos2pif_tls(phase);
+        buffer->inputImag[i] = buffer->wy[i] * sin2pif_tls(phase);
+    }
+    for (; i < buffer->paddedLen; ++i) {
+        buffer->inputReal[i] = 0.0f;
+        buffer->inputImag[i] = 0.0f;
+    }
+}
+
+static inline void fill_twiddle_ladder(buffer_t *buffer, const parameters *params, double fstep, double freq_factor) {
+    for (uint32_t level = 0; level < params->ladderLevels; ++level) {
+        size_t offset = (size_t)level * (size_t)buffer->paddedLen;
+        double advance = nufft1_twiddle_ladder_advance((int)params->outputLen, (int)level);
+        uint32_t i = 0;
+        for (; i < buffer->n; ++i) {
+            float phase = (float)(buffer->x[i] * fstep * freq_factor * advance);
+            buffer->deltaReal[offset + i] = cos2pif_tls(phase);
+            buffer->deltaImag[offset + i] = sin2pif_tls(phase);
+        }
+        for (; i < buffer->paddedLen; ++i) {
+            buffer->deltaReal[offset + i] = 1.0f;
+            buffer->deltaImag[offset + i] = 0.0f;
+        }
+    }
+}
+
+static inline void reset_work_ladder(buffer_t *buffer, const parameters *params) {
+    for (uint32_t level = 0; level < params->ladderLevels; ++level) {
+        size_t offset = (size_t)level * (size_t)buffer->paddedLen;
+        memcpy(buffer->workReal + offset, buffer->inputReal, (size_t)buffer->paddedLen * sizeof(float));
+        memcpy(buffer->workImag + offset, buffer->inputImag, (size_t)buffer->paddedLen * sizeof(float));
+    }
+}
+
+static inline void advance_work_ladder(buffer_t *buffer, const parameters *params, size_t next_block) {
+    int level = nufft1_twiddle_ladder_carry_level(next_block, (int)params->ladderLevels);
+    if (level >= (int)params->ladderLevels) level = (int)params->ladderLevels - 1;
+    size_t offset = (size_t)level * (size_t)buffer->paddedLen;
+
+    uint32_t i = 0;
+    uint32_t n_vec = buffer->paddedLen - (buffer->paddedLen % VEC_LEN);
+    for (; i < n_vec; i += VEC_LEN) {
+        VEC wr = {.data = *(vecf_data *)(buffer->workReal + offset + i)};
+        VEC wi = {.data = *(vecf_data *)(buffer->workImag + offset + i)};
+        VEC dr = {.data = *(vecf_data *)(buffer->deltaReal + offset + i)};
+        VEC di = {.data = *(vecf_data *)(buffer->deltaImag + offset + i)};
+        *(vecf_data *)(buffer->workReal + offset + i) = wr.data * dr.data - wi.data * di.data;
+        *(vecf_data *)(buffer->workImag + offset + i) = wr.data * di.data + wi.data * dr.data;
+    }
+    for (; i < buffer->paddedLen; ++i) {
+        float wr = buffer->workReal[offset + i];
+        float wi = buffer->workImag[offset + i];
+        float dr = buffer->deltaReal[offset + i];
+        float di = buffer->deltaImag[offset + i];
+        buffer->workReal[offset + i] = wr * dr - wi * di;
+        buffer->workImag[offset + i] = wr * di + wi * dr;
+    }
+
+    for (int dst_level = level; dst_level > 0; --dst_level) {
+        size_t dst = (size_t)(dst_level - 1) * (size_t)buffer->paddedLen;
+        size_t src = (size_t)dst_level * (size_t)buffer->paddedLen;
+        memcpy(buffer->workReal + dst, buffer->workReal + src, (size_t)buffer->paddedLen * sizeof(float));
+        memcpy(buffer->workImag + dst, buffer->workImag + src, (size_t)buffer->paddedLen * sizeof(float));
+    }
+}
+
+static inline void accumulate_power(buffer_t *buffer, uint32_t base, uint32_t count) {
+    uint32_t i = 0;
+    uint32_t n_vec = count - (count % VEC_LEN);
+    for (; i < n_vec; i += VEC_LEN) {
+        VEC r = {.data = *(vecf_data *)(buffer->blockReal + i)};
+        VEC im = {.data = *(vecf_data *)(buffer->blockImag + i)};
+        VEC p = {.data = *(vecf_data *)(buffer->power + base + i)};
+        *(vecf_data *)(buffer->power + base + i) = p.data + r.data * r.data + im.data * im.data;
+    }
+    for (; i < count; ++i) {
+        buffer->power[base + i] += (buffer->blockReal[i] * buffer->blockReal[i]) + (buffer->blockImag[i] * buffer->blockImag[i]);
+    }
+}
+
+static inline void execute_nufft_sweep(buffer_t *buffer, parameters *params, double fstep, uint32_t nfreq) {
+    memset(buffer->power, 0, ((size_t)nfreq + 1U) * sizeof(float));
+    nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
+
+    size_t num_blocks = ((size_t)nfreq + (size_t)params->outputLen - 1U) / (size_t)params->outputLen;
+    for (int t = 0; t < buffer->terms; ++t) {
+        double freq_factor = (double)(t + 1);
+        fill_complex_input(buffer, params->fmin, freq_factor);
+        fill_twiddle_ladder(buffer, params, fstep, freq_factor);
+        reset_work_ladder(buffer, params);
+
+        for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            uint32_t base = (uint32_t)(block_idx * (size_t)params->outputLen);
+            uint32_t count = params->outputLen;
+            if (base + count > nfreq) count = nfreq - base;
+            nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, t + 1);
+            accumulate_power(buffer, base, count);
+            if (block_idx + 1U < num_blocks) {
+                advance_work_ladder(buffer, params, block_idx + 1U);
+            }
+        }
+    }
+}
 
 void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch) {
     read_dat(in_file, buffer);
-    preprocess_buffer(buffer, params->epsilon, params->mode);  // read the data from .dat file
-
-    /* //doesn't work for some reason - using direct indexing instead
-    if(params->mode > 0){ //prepare the values array for the F-test
-        volatile kvpair* tmp = (volatile kvpair*)(buffer->buf[0]);
-        for(int i = 0; i < buffer->n; i++){tmp[i].parts.val = buffer->y[i];}
-    }*/
+    preprocess_buffer(buffer, params->epsilon, params->mode);
 
     int prewhitening_iter = 0;
-
-    // a temporary fix of the 'disappearing' r/p values - to be replaced
     double *backup_r2 = calloc(params->npeaks, sizeof(double));
     double *backup_p = calloc(params->npeaks, sizeof(double));
 
-    const int n = 1 + (int)(log10(buffer->x[buffer->n - 1] *
-                                  (double)(params->oversamplingFactor * params->nterms)));  // number of significant digits required for the spectrum
+    const int n = 1 + (int)(log10(buffer->x[buffer->n - 1] * (double)(params->oversamplingFactor * params->nterms)));
     const float threshold = params->threshold;
-
-    double fmin = params->fmin;
     double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
-    double fspan = (double)(params->gridLen) * fstep;  // used to compute the scale of FFT grid
-    double fjump = fspan * (21.0 / 32.0);              // used to switch to next transform
-    double fmax = fmin + fjump;
-    double fmid = (fmax + fmin) * 0.5;  // used to compute the beginning of FFT grid
-    // uint32_t nsteps = (uint32_t)(params->gridLen);
-    uint32_t gridLen = params->gridLen;
+    double df = 1.0 / buffer->x[buffer->n - 1];
+    uint32_t nfreq = target_frequency_count(params, fstep);
+    if (nfreq > buffer->maxFreqCount) nfreq = buffer->maxFreqCount;
 
     if (!batch && params->debug) {
-        printf("\tNumber of target frequencies: %i\n\n", (int)((params->fmax - params->fmin) / fstep));
+        printf("\tNumber of target frequencies: %u\n\n", nfreq);
     }
 
-    // Single buffer to hold the converted strings
-    char stringBuff[32];  // Adjust size as needed
-
-    double invGridLen = 1.0 / (double)(gridLen);
-    double df = 1.0 / buffer->x[buffer->n - 1];
-    uint32_t shift = (gridLen * 43 / 64);
-
-    for (int t = 0; t < buffer->terms; t++) {
-#ifndef __AVX__
-        memset(buffer->weights[t], 0, params->maxLen * 16 * sizeof(float));
-#endif
-        for (uint32_t i = 0; i < buffer->n; i++) {
-            double freqFactor = (double)(t + 1);
-            double idx_double = buffer->x[i] * fspan * freqFactor;
-            uint32_t idx_tmp = (uint32_t)(idx_double);
-            buffer->gdist[t][i] = idx_double - (double)idx_tmp;
-            buffer->gidx[t][i] = idx_tmp % gridLen;
-#ifndef __AVX__
-            if (buffer->gdist[t][i] < 0.01) {
-                buffer->weights[t][16 * i] = 1;
-            } else if (buffer->gdist[t][i] > 0.99) {
-                buffer->weights[t][(16 * i) + 1] = 1;
-            } else {
-                float dst = -7.0 - buffer->gdist[t][i];
-                for (uint32_t j = 0; j < 16; j++) {
-                    buffer->weights[t][(16 * i) + j] = 3.0f * sinf(dst * M_PI) * sinf(dst * M_PI * 0.33333333f) / (dst * dst * M_PI * M_PI);
-                    dst += 1.0;
-                }
-            }
-#endif
-        }
-    }
+    char stringBuff[32];
 
 prewhiten:
     if (prewhitening_iter > 0) {
-        fmin = params->fmin;
-        fmax = fmin + fjump;
-        fmid = (fmax + fmin) * 0.5;
         double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
-
-        // actual prewhitening happens here
         get_r2(buffer, prewhitening_freq, NULL, true);
-        // printf("%.3f\n", buffer->peaks[prewhitening_iter - 1].r2); //ok
 
-        // temporary fix, to be replaced
         backup_r2[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].r2;
         backup_p[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].p;
 
@@ -113,7 +168,7 @@ prewhiten:
         }
         float norm = (sqrtf(buffer->neff) / (float)(ysum));
         for (unsigned int i = 0; i < buffer->n; i++) {
-            buffer->dy[i] = buffer->y[i] * norm;
+            buffer->wy[i] = buffer->y[i] * norm;
         }
 
         if (buffer->peaks[prewhitening_iter - 1].r2 < params->r2_threshold) {
@@ -122,155 +177,46 @@ prewhiten:
         }
     }
 
-    // memset(&buffer->peaks[prewhitening_iter], 0, params->npeaks * sizeof(peak_t));
     buffer->nPeaks = prewhitening_iter;
+    execute_nufft_sweep(buffer, params, fstep, nfreq);
 
-    while (fmin < params->fmax) {
-        double freq = 0;
-
-        // compute the RZTs here
-        for (int t = 0; t < buffer->terms; t++) {  // compute the NFFTs required for the data
-            memset(buffer->grids[t], 0, buffer->memBlockSize);
-            double freqFactor = (double)(t + 1);  // printf("%.2f\n", freqFactor);
-            for (uint32_t i = 0; i < buffer->n; i++) {
-                fftwf_complex val = cexp(-2.0 * M_PI * freqFactor * I * fmid * buffer->x[i]) * buffer->dy[i];  // cexp takes ~ 15% of the compute time
-                if (buffer->gdist[t][i] < 0.01) {
-                    buffer->grids[t][buffer->gidx[t][i]] += val;
-                } else if (buffer->gdist[t][i] > 0.99) {
-                    buffer->grids[t][buffer->gidx[t][i + 1]] += val;
-                } else {
-#ifdef __AVX512F__
-                    VEC weights = generateWeights(buffer->gdist[t][i]);
-                    for (uint32_t j = 0; j < 16; j++) {
-                        buffer->grids[t][buffer->gidx[t][i] + j] += val * weights.data[j];
-                    }
-#else
-#    ifdef __AVX__
-                    VEC weights[2];
-                    generateWeights(buffer->gdist[t][i], &weights[0], &weights[1]);
-                    for (uint32_t j = 0; j < 8; j++) {
-                        buffer->grids[t][buffer->gidx[t][i] + j] += val * weights[0].data[j];
-                        buffer->grids[t][buffer->gidx[t][i] + 8 + j] += val * weights[1].data[j];
-                    }
-#    else
-                    for (uint32_t j = 0; j < 16; j++) {
-                        buffer->grids[t][buffer->gidx[t][i] + j] += val * buffer->weights[t][(i * 16) + j];
-                    }
-#    endif  // __AVX__
-#endif      // __AVX512F__
-                }
-            }
-            for (uint32_t j = 0; j < 16; j++) {
-                buffer->grids[t][j] += buffer->grids[t][j + gridLen];
-            }
-
-            if (params->mode < 5) {
-                fftwf_execute_dft(params->plan, buffer->grids[t], buffer->grids[t]);
-            }
-        }
-
-        float NeffInv = 1.0 / buffer->neff;
-        VEC corrBuff[VEC_LEN];
-
-        // Inteppret the results - first half
-        float magnitudes[3] = {0};
-        for (int t = 0; t < buffer->terms; t++) {
-            magnitudes[0] += sabs(buffer->grids[t][shift]);
-            magnitudes[1] += sabs(buffer->grids[t][shift + 1]);
-        }
-        //{magnitudes[0] += correctPowerTmp(sabs(buffer->grids[t][shift]), NeffInv) ; magnitudes[1] += correctPowerTmp(sabs(buffer->grids[t][shift+1]),
-        //NeffInv);}
-
-        for (uint32_t i = shift; i < gridLen; i++) {  // negative half
-            freq = fmin + ((double)((i)-shift) * invGridLen * fspan);
-            if (freq > params->fmax) {
-                goto end;
-            }
-            magnitudes[2] = 0;
-            // if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPowerTmp(sabs(buffer->grids[t][i+1]), NeffInv);}}
-            if (params->mode < 5) {
-                for (int t = 0; t < buffer->terms; t++) {
-                    magnitudes[2] += sabs(buffer->grids[t][i + 1]);
-                }
-            } else {
-                magnitudes[2] = lnFAP(2, 1, get_r2(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);
-            }
-            if (params->spectrum && params->mode < 5) {
-                appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);
-            }
-            if (params->spectrum && params->mode > 4) {
-                appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);
-            }
-            if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]) {
-                append_peak(buffer, params->npeaks, params->mode, freq, magnitudes[1], df);
-            }
-            magnitudes[0] = magnitudes[1];
-            magnitudes[1] = magnitudes[2];  // reuse the results in the next iteration
-        }
-
-        // for(int t = 0; t < buffer->terms; t++){magnitudes[1] += correctPowerTmp(sabs(buffer->grids[t][0]), NeffInv);}
-        for (int t = 0; t < buffer->terms; t++) {
-            magnitudes[1] += sabs(buffer->grids[t][0]);
-        }
-        if (params->debug && params->spectrum) {
-            buffer->spectrum = sdscat(buffer->spectrum, "break\n");
-        }
-
-        for (uint32_t i = 0; i <= gridLen * 21 / 64; i++) {  // positive half
-            freq = fmid + ((double)(i)*invGridLen * fspan);
-            if (freq > params->fmax) {
-                goto end;
-            }
-            magnitudes[2] = 0;
-            // if(params->mode < 5){for(int t = 0; t < buffer->terms; t++){magnitudes[2] += correctPowerTmp(sabs(buffer->grids[t][i+1]), NeffInv);}}
-            if (params->mode < 5) {
-                for (int t = 0; t < buffer->terms; t++) {
-                    magnitudes[2] += sabs(buffer->grids[t][i + 1]);
-                }
-            } else {
-                magnitudes[2] = lnFAP(2, 1, get_r2(buffer, freq + (invGridLen * fspan), NULL, false), buffer->n);
-            }
-            if (params->spectrum && params->mode < 5) {
-                appendFreq(freq, correct_ihs_res(magnitudes[1], params->nterms), n, &buffer->spectrum, &stringBuff[0]);
-            }
-            if (params->spectrum && params->mode > 4) {
-                appendFreq(freq, magnitudes[1], n, &buffer->spectrum, &stringBuff[0]);
-            }
-            if (magnitudes[1] > threshold && magnitudes[1] > magnitudes[0] && magnitudes[1] > magnitudes[2]) {
-                append_peak(buffer, params->npeaks, params->mode, freq, magnitudes[1], df);
-            }
-            magnitudes[0] = magnitudes[1];
-            magnitudes[1] = magnitudes[2];  // reuse the results in the next iteration
-        }
-
-        // increase frequency
-        fmin += fjump;
-        fmid += fjump;
-        fmax += fjump;
-        if (params->debug && params->spectrum) {
-            buffer->spectrum = sdscat(buffer->spectrum, "break\n");
+    if (params->spectrum) {
+        for (uint32_t i = 0; i < nfreq; ++i) {
+            double freq = (double)params->fmin + ((double)i * fstep);
+            float magnitude = params->mode < 5 ? correct_ihs_res(buffer->power[i], params->nterms) : lnFAP(2, 1, get_r2(buffer, freq, NULL, false), buffer->n);
+            appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);
         }
     }
-end:
+
+    for (uint32_t i = 1; i + 1 < nfreq; ++i) {
+        double freq = (double)params->fmin + ((double)i * fstep);
+        float magnitude = buffer->power[i];
+        float left = buffer->power[i - 1];
+        float right = buffer->power[i + 1];
+        if (params->mode > 4) {
+            magnitude = lnFAP(2, 1, get_r2(buffer, freq, NULL, false), buffer->n);
+            left = lnFAP(2, 1, get_r2(buffer, freq - fstep, NULL, false), buffer->n);
+            right = lnFAP(2, 1, get_r2(buffer, freq + fstep, NULL, false), buffer->n);
+        }
+        if (magnitude > threshold && magnitude > left && magnitude > right) {
+            append_peak(buffer, params->npeaks, params->mode, freq, magnitude, df);
+        }
+    }
 
     sortPeaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params->mode, df, params->nterms);
 
     if (params->prewhiten && prewhitening_iter < buffer->nPeaks) {
         prewhitening_iter += 1;
         buffer->nPeaks = prewhitening_iter;
-        // debugging prints for memory loss - do not remove
-        // for (int i = 0; i < buffer->nPeaks; i++){printf("%.3f\n", buffer->peaks[i].r2);}
-        // printf("\n");
         goto prewhiten;
     }
 
 next:
-    // a temporary memory loss fix
     if (prewhitening_iter > 1) {
         for (int i = 1; i <= prewhitening_iter; i++) {
             buffer->peaks[i - 1].r2 = backup_r2[i];
             buffer->peaks[i - 1].p = backup_p[i];
-        };
+        }
         buffer->nPeaks = prewhitening_iter;
     }
 
@@ -283,32 +229,29 @@ next:
         write_tsv(buffer, in_file);
     }
     free(backup_r2);
-    free(backup_p);      // temporary "fix", to be removed later
-    buffer->nPeaks = 0;  // reset the data for buffer reuse
+    free(backup_p);
+    buffer->nPeaks = 0;
 }
 
 void process_targets(void *data, long i, int thread_id) {
     parameters *params = (parameters *)data;
 
-    int permile;
-    permile = kv_size(params->targets) / 1000;
+    int permile = kv_size(params->targets) / 1000;
     if (permile == 0) {
         permile += 1;
     }
     pthread_mutex_lock(&params->counter_mutex);
     params->iter_count += 1;
-    pthread_mutex_unlock(&params->counter_mutex);
-    if (params->iter_count % permile == 0 || params->iter_count == kv_size(params->targets) - 1) {
-        float progress = (float)(params->iter_count + 1) * 100.0 / (float)(kv_size(params->targets) - 1);
+    int current_iter = params->iter_count;
+    if (current_iter % permile == 0 || current_iter == kv_size(params->targets)) {
+        float progress = (float)(current_iter) * 100.0f / (float)kv_size(params->targets);
         printf("Computation in progress: %.1f%% complete\r", progress);
         fflush(stdout);
     }
+    pthread_mutex_unlock(&params->counter_mutex);
     if (!params->buffers[thread_id]->allocated) {
         alloc_buffer(params->buffers[thread_id], params);
-        // printf("Allocating buffer for thread %i\n", thread_id); //ok
     }
-    // printf("Processing iteration %ld on thread %d\t%s\n", i, thread_id, kv_A(params->targets, i).path); //ok
-    //  Process the data for this iteration
     process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true);
 }
 

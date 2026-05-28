@@ -28,6 +28,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.nterms = 3;
     params.defaultGridRatio = 128;
     params.gridRatio = 128;
+    params.gridMode = NUFFT1_PSWF43;
     params.mode = 2;
     params.r2_threshold = 0.05;
 
@@ -50,7 +51,11 @@ void print_parameters(parameters *params) {
     printf("\tIDLE: %s\n", params->idle ? "true" : "false");
     printf("\tLargest file's length: %i\n", params->maxLen);
     printf("\tRead buffer size: %i\n", params->maxSize);
-    printf("\tFFT grid length: %i\n", params->gridLen);
+    printf("\tNuFFT grid: pswf%i\n", params->gridMode);
+    printf("\tNuFFT plan length: %i\n", params->gridLen);
+    printf("\tNuFFT output block length: %i\n", params->outputLen);
+    printf("\tNuFFT twiddle ladder levels: %i\n", params->ladderLevels);
+    printf("\tMaximum target frequencies: %i\n", params->maxFreqCount);
     printf("\tNumber of worker threads available: %i\n", params->jobs);
     if (!params->isFile) {
         printf("\n");
@@ -66,7 +71,9 @@ void alloc_buffers(parameters *params) {
 
 // Free allocated memory for parameters
 void free_parameters(parameters *params) {
-    fftwf_destroy_plan(params->plan);
+    nufft1_free_plan(params->nufftPlan);
+    free(params->nufftTwiddleReal);
+    free(params->nufftTwiddleImag);
     free(params->target);  // Free the allocated string
     free_targets(&params->targets);
     for (int i = 0; i < params->nbuffers; i++) {
@@ -80,7 +87,7 @@ void free_parameters(parameters *params) {
 }
 
 void print_help(char **argv) {
-    printf("Usage: %s target fmax [options]\n", argv[1]);
+    printf("Usage: %s target fmax [options]\n", argv[0]);
     printf("\n");
     printf("Positional arguments:\n");
     printf("  target                   Path containing .dat file(s) (file or directory)\n");
@@ -94,6 +101,7 @@ void print_help(char **argv) {
     printf("  -d, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
     printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:2)\n");
+    printf("  -g, --grid                NuFFT grid/backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
@@ -104,6 +112,18 @@ void print_help(char **argv) {
     printf("  -h, --help                Display this help message and exit\n");
     printf("Example:\n");
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
+}
+
+static bool parse_grid_mode(const char *arg, nufft1_mode *mode) {
+    if (strcmp(arg, "43") == 0 || strcmp(arg, "pswf43") == 0) {
+        *mode = NUFFT1_PSWF43;
+        return true;
+    }
+    if (strcmp(arg, "21") == 0 || strcmp(arg, "pswf21") == 0) {
+        *mode = NUFFT1_PSWF21;
+        return true;
+    }
+    return false;
 }
 
 // Function to parse command-line arguments into a parameters struct
@@ -119,6 +139,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"oversampling", ko_required_argument, 'o'},
                                       {"epsilon", ko_required_argument, 'e'},
                                       {"mode", ko_required_argument, 'm'},
+                                      {"grid", ko_required_argument, 'g'},
                                       {"jobs", ko_required_argument, 'j'},
                                       {"spectrum", ko_no_argument, 's'},
                                       {"corrected", ko_no_argument, 'c'},  // apply the logarithmic correction, not fully implemented
@@ -136,7 +157,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2;  // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:sich\xfb\xfc\xfd\xfe", longopts)) != -1) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:g:sich\xfb\xfc\xfd\xfe", longopts)) != -1) {
         // printf("argument: %c", c);
         switch (c) {
             case 'o':
@@ -162,6 +183,12 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'm':
                 params.mode = atoi(opt.arg);
+                break;
+            case 'g':
+                if (!parse_grid_mode(opt.arg, &params.gridMode)) {
+                    fprintf(stderr, "Invalid grid '%s'. Expected 43, pswf43, 21, or pswf21.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
                 break;
             case 's':
                 params.spectrum = true;

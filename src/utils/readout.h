@@ -1,11 +1,9 @@
 #ifndef READOUT_H
 #define READOUT_H
 
-#include <complex.h>
 #include <errno.h>
 #include <fast_convert.h>
 #include <fcntl.h>
-#include <fftw3.h>
 #include <sds.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,6 +33,10 @@ static inline void free_buffer(buffer_t* buffer) {
         free(buffer->dy);
         buffer->dy = NULL;
     }
+    if (buffer->wy) {
+        free(buffer->wy);
+        buffer->wy = NULL;
+    }
     if (buffer->pidx) {
         free(buffer->pidx);
         buffer->pidx = NULL;
@@ -43,18 +45,34 @@ static inline void free_buffer(buffer_t* buffer) {
         free(buffer->readBuf);
         buffer->readBuf = NULL;
     }
-    if (buffer->grids) {
-        for (int i = 0; i < buffer->terms; i++) {
-            if (buffer->grids[i]) {
-                fftwf_free(buffer->grids[i]);
-                buffer->grids[i] = NULL;
-            }
-        }
-    }
-    if (buffer->grids) {
-        free(buffer->grids);
-        buffer->grids = NULL;
-    }
+    nufft1_free_workspace(buffer->nufftWorkspace);
+    buffer->nufftWorkspace = NULL;
+    free(buffer->power);
+    buffer->power = NULL;
+    free(buffer->blockReal);
+    buffer->blockReal = NULL;
+    free(buffer->blockImag);
+    buffer->blockImag = NULL;
+    free(buffer->inputReal);
+    buffer->inputReal = NULL;
+    free(buffer->inputImag);
+    buffer->inputImag = NULL;
+    free(buffer->workReal);
+    buffer->workReal = NULL;
+    free(buffer->workImag);
+    buffer->workImag = NULL;
+    free(buffer->deltaReal);
+    buffer->deltaReal = NULL;
+    free(buffer->deltaImag);
+    buffer->deltaImag = NULL;
+    free(buffer->fftReal);
+    buffer->fftReal = NULL;
+    free(buffer->fftImag);
+    buffer->fftImag = NULL;
+    free(buffer->cobraReal);
+    buffer->cobraReal = NULL;
+    free(buffer->cobraImag);
+    buffer->cobraImag = NULL;
     if (buffer->peaks) {
         free(buffer->peaks);
         buffer->peaks = NULL;
@@ -62,28 +80,6 @@ static inline void free_buffer(buffer_t* buffer) {
 
     sdsfree(buffer->outBuf);
     sdsfree(buffer->spectrum);
-
-    for (int i = 0; i < buffer->terms; i++) {
-        if (buffer->gidx && buffer->gidx[i]) {
-            free(buffer->gidx[i]);
-            buffer->gidx[i] = NULL;
-        }
-    }
-    if (buffer->gidx) {
-        free(buffer->gidx);
-        buffer->gidx = NULL;
-    }
-
-    for (int i = 0; i < buffer->terms; i++) {
-        if (buffer->gdist && buffer->gdist[i]) {
-            free(buffer->gdist[i]);
-            buffer->gdist[i] = NULL;
-        }
-    }
-    if (buffer->gdist) {
-        free(buffer->gdist);
-        buffer->gdist = NULL;
-    }
 
     if (buffer->buf) {
         for (int i = 0; i < 3; i++) {
@@ -97,25 +93,14 @@ static inline void free_buffer(buffer_t* buffer) {
             buffer->buf = NULL;
         }
     }
-#ifndef __AVX__
-    for (int i = 0; i < buffer->terms; i++) {
-        if (buffer->weights && buffer->weights[i]) {
-            free(buffer->weights[i]);
-            buffer->weights[i] = NULL;
-        }
-    }
-    if (buffer->weights) {
-        free(buffer->weights);
-        buffer->weights = NULL;
-    }
-#endif
 }
 
 static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
-    buffer->memBlockSize = (params->gridLen + 16) * sizeof(fftwf_complex);
     buffer->len = params->maxLen;
     buffer->allocated = true;
     buffer->terms = params->nterms;
+    buffer->maxFreqCount = params->maxFreqCount;
+    buffer->paddedLen = (uint32_t)(((size_t)params->maxLen + (size_t)VEC_LEN - 1U) & ~((size_t)VEC_LEN - 1U));
     buffer->spectrum = sdsempty();
     buffer->outBuf = sdsempty();
     if (!buffer->x) {
@@ -130,6 +115,10 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->dy = aligned_alloc(64, round_buffer(params->maxLen * sizeof(float)));
     }
     if (!buffer->dy) goto error;
+    if (!buffer->wy) {
+        buffer->wy = aligned_alloc(64, round_buffer(params->maxLen * sizeof(float)));
+    }
+    if (!buffer->wy) goto error;
     if (!buffer->pidx) {
         buffer->pidx = (size_t*)malloc(1024 * sizeof(size_t));
     }
@@ -138,16 +127,63 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->readBuf = aligned_alloc(64, round_buffer(params->maxSize));
     }
     if (!buffer->readBuf) goto error;
-    if (!buffer->grids) {
-        buffer->grids = calloc(params->nterms, sizeof(complex float*));
+    if (!buffer->power) {
+        buffer->power = aligned_alloc(64, round_buffer(((size_t)params->maxFreqCount + 2U) * sizeof(float)));
     }
-    for (int i = 0; i < buffer->terms; i++) {
-        buffer->grids[i] = (fftwf_complex*)fftwf_malloc(buffer->memBlockSize);
+    if (!buffer->power) goto error;
+    if (!buffer->blockReal) {
+        buffer->blockReal = aligned_alloc(64, round_buffer((size_t)params->outputLen * sizeof(float)));
     }
-    if (!buffer->grids)
-        goto error;
-    else
-        buffer->nGrids = params->nterms;
+    if (!buffer->blockReal) goto error;
+    if (!buffer->blockImag) {
+        buffer->blockImag = aligned_alloc(64, round_buffer((size_t)params->outputLen * sizeof(float)));
+    }
+    if (!buffer->blockImag) goto error;
+    if (!buffer->inputReal) {
+        buffer->inputReal = aligned_alloc(64, round_buffer((size_t)buffer->paddedLen * sizeof(float)));
+    }
+    if (!buffer->inputReal) goto error;
+    if (!buffer->inputImag) {
+        buffer->inputImag = aligned_alloc(64, round_buffer((size_t)buffer->paddedLen * sizeof(float)));
+    }
+    if (!buffer->inputImag) goto error;
+    size_t ladder_len = (size_t)params->ladderLevels * (size_t)buffer->paddedLen;
+    if (!buffer->workReal) {
+        buffer->workReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
+    }
+    if (!buffer->workReal) goto error;
+    if (!buffer->workImag) {
+        buffer->workImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
+    }
+    if (!buffer->workImag) goto error;
+    if (!buffer->deltaReal) {
+        buffer->deltaReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
+    }
+    if (!buffer->deltaReal) goto error;
+    if (!buffer->deltaImag) {
+        buffer->deltaImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
+    }
+    if (!buffer->deltaImag) goto error;
+    if (!buffer->fftReal) {
+        buffer->fftReal = aligned_alloc(64, round_buffer(params->nufftExternalSizes.fft_len * sizeof(float)));
+    }
+    if (!buffer->fftReal) goto error;
+    if (!buffer->fftImag) {
+        buffer->fftImag = aligned_alloc(64, round_buffer(params->nufftExternalSizes.fft_len * sizeof(float)));
+    }
+    if (!buffer->fftImag) goto error;
+    if (!buffer->cobraReal) {
+        buffer->cobraReal = aligned_alloc(64, round_buffer(params->nufftExternalSizes.cobra_len * sizeof(float)));
+    }
+    if (!buffer->cobraReal) goto error;
+    if (!buffer->cobraImag) {
+        buffer->cobraImag = aligned_alloc(64, round_buffer(params->nufftExternalSizes.cobra_len * sizeof(float)));
+    }
+    if (!buffer->cobraImag) goto error;
+    if (!buffer->nufftWorkspace) {
+        buffer->nufftWorkspace = nufft1_create_workspace(params->nufftPlan, buffer->fftReal, buffer->fftImag, buffer->cobraReal, buffer->cobraImag);
+    }
+    if (!buffer->nufftWorkspace) goto error;
     if (params->prewhiten) {
         if (!buffer->peaks) {
             buffer->peaks = calloc(2 * params->npeaks, sizeof(peak_t));
@@ -160,40 +196,12 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->nPeaks = 0;
     }
     if (!buffer->peaks) goto error;
-
-    if (!buffer->gidx) {
-        buffer->gidx = calloc(params->nterms, sizeof(uint32_t**));
-    }  //
-    if (!buffer->gidx) goto error;
-    for (int i = 0; i < buffer->terms; i++) {
-        buffer->gidx[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(uint32_t)));
-        if (!buffer->gidx[i]) goto error;
-    }
-
-    if (!buffer->gdist) {
-        buffer->gdist = calloc(params->nterms, sizeof(float*));
-    }  //
-    if (!buffer->gdist) goto error;
-    for (int i = 0; i < buffer->terms; i++) {
-        buffer->gdist[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(float)));
-        if (!buffer->gdist[i]) goto error;
-    }
-    if (params->mode > 0 && !buffer->buf) {
+    if ((params->mode > 0 || params->prewhiten) && !buffer->buf) {
         buffer->buf = calloc(3, sizeof(void*));
         for (int i = 0; i < 3; i++) {
             buffer->buf[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(uint64_t)));
         }
     }
-#ifndef __AVX__
-    if (!buffer->weights) {
-        buffer->weights = calloc(params->nterms, sizeof(float*));
-    }  //
-    if (!buffer->weights) goto error;
-    for (int i = 0; i < buffer->terms; i++) {
-        buffer->weights[i] = aligned_alloc(64, round_buffer(16 * params->maxLen * sizeof(float)));
-        if (!buffer->weights[i]) goto error;
-    }
-#endif
     return 0;
 
 error:
@@ -283,37 +291,29 @@ static inline void linregw_buffer(buffer_t* buffer) {
 
 static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode) {
     linregw_buffer(buffer);
-
-    // adjust the weights
-    for (uint32_t i = 0; i < buffer->n; i++) {
-        buffer->dy[i] *= buffer->dy[i];
-        buffer->dy[i] += epsilon;
-        buffer->dy[i] = 1.0 / buffer->dy[i];
+    if (mode > 0) {
+        linreg_buffer(buffer);
     }
 
     double wsum = 0;
     double wsqsum = 0;
 
     for (uint32_t i = 0; i < buffer->n; i++) {
-        wsum += fabs(buffer->dy[i]);
-        wsqsum += buffer->dy[i] * buffer->dy[i];
+        float weight = 1.0f / ((buffer->dy[i] * buffer->dy[i]) + (float)epsilon);
+        buffer->wy[i] = weight;
+        wsum += fabs(buffer->wy[i]);
+        wsqsum += buffer->wy[i] * buffer->wy[i];
     }
     buffer->neff = ((wsum * wsum) / wsqsum) - 2.0;
-    wsum = 0;  // -2 for linear regression
-    // float buffer->neffInv = 1 / buffer->neff;
-    // printf("%f\n", buffer->neff); // ok
+    wsum = 0;
     for (uint32_t i = 0; i < buffer->n; i++) {
-        buffer->dy[i] *= buffer->y[i];
-        wsum += fabs(buffer->dy[i]);
-    }                                  // ok
+        buffer->wy[i] *= buffer->y[i];
+        wsum += fabs(buffer->wy[i]);
+    }  // ok
     wsum = sqrt(buffer->neff) / wsum;  // sqrt because of square later
     for (uint32_t i = 0; i < buffer->n; i++) {
-        buffer->dy[i] *= wsum;
+        buffer->wy[i] *= wsum;
     }  // correct result
-
-    if (mode > 0) {
-        linreg_buffer(buffer);
-    }
 }
 
 static inline void read_dat(const char* in_file, buffer_t* buffer) {

@@ -1,0 +1,5 @@
+#define F_ALPHA 0.20
+#define F_PSWF21_BETA 2.5
+#define F_PSWF21_GAMMA 10.0
+#define F_PSWF43_BETA 4.5
+#define F_PSWF43_GAMMA 20.0

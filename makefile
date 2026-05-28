@@ -1,211 +1,151 @@
-.PHONY: check_compiler download fftw clean native all #mimalloc
+.PHONY: all native check_compiler install clean
 
-# Define the minimum required versions for C23 support
+CC ?= cc
+AR ?= ar
+
 GCC_MIN_VERSION := 14
 CLANG_MIN_VERSION := 19
 ICX_MIN_VERSION := 2025
 
-# Get the directory where the Makefile is located
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+BUILD_DIR := $(MAKEFILE_DIR)build/native
+NUFFT_SRC := $(MAKEFILE_DIR)src/nufft/nufft1.c
+NUFFT_HDR := $(MAKEFILE_DIR)src/nufft/nufft1.h
+NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
+SCALING_GEN := $(BUILD_DIR)/scaling_gen
+SCALING_HEADER := $(BUILD_DIR)/scaling.h
 
-# Default CFLAGS.
-CFLAGS := -D_GNU_SOURCE -DMI_OVERRIDE=1 -static -march=native -flto -fno-sanitize=all -Wl,--gc-sections -lm -L$(MAKEFILE_DIR)/lib -lfftw3f -I$(MAKEFILE_DIR)/include
-FFTW_CONFIGURE_FLAGS := --quiet --enable-single --disable-fortran
-FFTW_COMPILER_FLAGS := -march=native -fno-sanitize=all
-# --enable-neon
+CFLAGS_BASE := -D_GNU_SOURCE -DMI_OVERRIDE=1 -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR)
+LDFLAGS_BASE := -Wl,--gc-sections
+LDLIBS := -lm
 
-# Check if CC is set and points to a valid executable
-ifeq ($(shell which $(CC) >/dev/null 2>&1 && echo 1 || echo 0), 0)
-    $(error Invalid compiler: '$(CC)' is not a valid executable)
+CC_RESOLVED := $(shell readlink -f $(shell command -v $(CC) 2>/dev/null) 2>/dev/null || command -v $(CC) 2>/dev/null)
+CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n 1)
+
+# x86-64 feature-level detection is intentionally retained as build metadata
+# for future multi-dispatch/release selection. The current source build still
+# uses -march=native while the PSWF NuFFT transition settles.
+UNAME_M := $(shell uname -m 2>/dev/null)
+CPU_FLAGS := $(shell lscpu 2>/dev/null | grep -oP 'Flags:\s*\K.*' | head -n 1)
+ifeq ($(strip $(CPU_FLAGS)),)
+    CPU_FLAGS := $(shell grep -m1 -E '^(flags|Features)[[:space:]]*:' /proc/cpuinfo 2>/dev/null | cut -d: -f2)
 endif
 
-# Determine the compiler and its version
-# (Assumes CC is already set externally, e.g. via environment or command line)
-CC := $(CC)
-CC_VERSION := $(shell $(CC) --version | head -n 1)
+FEATURES_X86_64 := sse sse2 lm cmov cx8 fpu fxsr mmx syscall
+FEATURES_X86_64_V2 := cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3
+FEATURES_X86_64_V2_AVX := avx xsave
+FEATURES_X86_64_V3 := avx2 fma bmi1 bmi2 f16c abm movbe
+FEATURES_X86_64_V4 := avx512f avx512bw avx512cd avx512dq avx512vl
 
-# Debug: Print CC and CC_VERSION
-# $(info CC is set to: $(CC))
-# $(info CC_VERSION is: $(CC_VERSION))
+missing_features = $(filter-out $(CPU_FLAGS),$(1))
+has_features = $(if $(strip $(call missing_features,$(1))),0,1)
 
-# Resolve 'cc' to the actual compiler
-ifeq ($(notdir $(CC)),cc)
-    CC_RESOLVED := $(shell readlink -f $(shell which $(CC)))
-    $(info Resolved 'cc' to: $(CC_RESOLVED))
-else
-    CC_RESOLVED := $(CC)
+X86_64_SUPPORTED := 0
+X86_64_V2_SUPPORTED := 0
+X86_64_V2_AVX_SUPPORTED := 0
+X86_64_V3_SUPPORTED := 0
+X86_64_V4_SUPPORTED := 0
+X86_DISPATCH_LEVEL := generic
+X86_DISPATCH_VERSION := 0
+
+ifneq ($(filter x86_64 amd64,$(UNAME_M)),)
+    X86_64_SUPPORTED := $(call has_features,$(FEATURES_X86_64))
+    ifeq ($(X86_64_SUPPORTED),1)
+        X86_DISPATCH_LEVEL := x86-64
+        X86_DISPATCH_VERSION := 1
+    endif
+    ifeq ($(call has_features,$(FEATURES_X86_64) $(FEATURES_X86_64_V2)),1)
+        X86_64_V2_SUPPORTED := 1
+        X86_DISPATCH_LEVEL := x86-64-v2
+        X86_DISPATCH_VERSION := 2
+    endif
+    ifeq ($(call has_features,$(FEATURES_X86_64) $(FEATURES_X86_64_V2) $(FEATURES_X86_64_V2_AVX)),1)
+        X86_64_V2_AVX_SUPPORTED := 1
+        X86_DISPATCH_LEVEL := x86-64-v2+avx
+        X86_DISPATCH_VERSION := avx
+    endif
+    ifeq ($(call has_features,$(FEATURES_X86_64) $(FEATURES_X86_64_V2) $(FEATURES_X86_64_V2_AVX) $(FEATURES_X86_64_V3)),1)
+        X86_64_V3_SUPPORTED := 1
+        X86_DISPATCH_LEVEL := x86-64-v3
+        X86_DISPATCH_VERSION := 3
+    endif
+    ifeq ($(call has_features,$(FEATURES_X86_64) $(FEATURES_X86_64_V2) $(FEATURES_X86_64_V2_AVX) $(FEATURES_X86_64_V3) $(FEATURES_X86_64_V4)),1)
+        X86_64_V4_SUPPORTED := 1
+        X86_DISPATCH_LEVEL := x86-64-v4
+        X86_DISPATCH_VERSION := 4
+    endif
 endif
 
-# Extract the version number based on the compiler type
-ifneq ($(findstring gcc, $(CC_RESOLVED)),)
+ifneq ($(findstring gcc,$(CC_RESOLVED)),)
     CC_TYPE := gcc
     CC_VERSION_NUMBER := $(shell $(CC) -dumpversion)
     MIN_VERSION := $(GCC_MIN_VERSION)
-    CFLAGS += -Ofast
-else ifneq ($(findstring clang, $(CC_RESOLVED)),)
+    OPTFLAGS := -Ofast
+else ifneq ($(findstring clang,$(CC_RESOLVED)),)
     CC_TYPE := clang
-    # Expect version string like "clang version 15.0.0 ..."
     CC_VERSION_NUMBER := $(shell $(CC) --version | grep -oP '(?<=clang version )\d+\.\d+\.\d+' | head -n 1)
     MIN_VERSION := $(CLANG_MIN_VERSION)
-    CFLAGS += -Wno-nan-infinity-disabled  -O3
-else ifneq ($(findstring icx, $(CC_RESOLVED)),)
+    OPTFLAGS := -O3 -Wno-nan-infinity-disabled
+else ifneq ($(findstring icx,$(CC_RESOLVED)),)
     CC_TYPE := icx
-    # Expect version string like "icx version 2025.1.0 ..." (for example)
     CC_VERSION_NUMBER := $(shell $(CC) --version | grep -oP '(?<=icx version )\d+\.\d+\.\d+' | head -n 1)
     MIN_VERSION := $(ICX_MIN_VERSION)
-    CFLAGS += -Wno-nan-infinity-disabled -O3
+    OPTFLAGS := -O3 -Wno-nan-infinity-disabled
 else
-    $(error Unsupported compiler: $(CC))
+    CC_TYPE := unknown
+    CC_VERSION_NUMBER := 0
+    MIN_VERSION := 0
+    OPTFLAGS := -O3
 endif
 
-# Extract the major version (the first number before the first dot)
 CC_MAJOR_VERSION := $(firstword $(subst ., ,$(CC_VERSION_NUMBER)))
-
-# Debug: Print CC_TYPE, CC_VERSION_NUMBER, and CC_MAJOR_VERSION
-$(info Compiler type: $(CC_TYPE))
-$(info Compiler version: $(CC_VERSION_NUMBER))
-$(info Compiler major version: $(CC_MAJOR_VERSION))
-$(info Flags passed to the compiler: $(CFLAGS))
-
-# Features organized by microarchitecture versions
-FEATURES_V1 := sse sse2 lm cmov cx8 fpu fxsr mmx syscall
-FEATURES_V2 := avx cx16 lahf_lm popcnt sse4_1 sse4_2 ssse3 
-FEATURES_V3 := avx2 fma bmi1 bmi2 f16c abm movbe xsave
-FEATURES_V4 := avx512f avx512bw avx512cd avx512dq avx512vl
-
-# Combine all features into a single list
-FEATURES := $(FEATURES_V1) $(FEATURES_V2) $(FEATURES_V3) $(FEATURES_V4)
-
-# Get CPU flags using lscpu
-CPU_FLAGS := $(shell lscpu | grep -oP 'Flags:\s*\K.*')
-
-# Loop through each feature and check if it’s supported.
-$(foreach feature, $(FEATURES), \
-    $(if $(filter $(feature),$(CPU_FLAGS)), \
-        $(info $(shell echo $(feature) | tr 'a-z' 'A-Z') is supported, enabling $(shell echo $(feature) | tr 'a-z' 'A-Z')), \
-        $(info $(shell echo $(feature) | tr 'a-z' 'A-Z') is not supported, disabling $(shell echo $(feature) | tr 'a-z' 'A-Z')) \
-    ) \
-)
-
-# Initialize version to 0 (generic build)
-version := 0
-
-# Loop over version groups in descending order.
-$(foreach ver,4 3 2 1, \
-    $(if $(strip $(foreach f, $(FEATURES_V$(ver)), $(filter $(f),$(CPU_FLAGS)))), \
-         $(if $(filter 0,$(version)), $(eval version := $(ver))) \
-    ) \
-)
-
-ifeq ($(version),0)
-  FFTW_CONFIGURE_FLAGS += --enable-generic-simd128 --enable-generic-simd256
-else ifeq ($(version),1)
-   FFTW_CONFIGURE_FLAGS += --enable-sse --enable-sse2
-else ifeq ($(version),2)
-  FFTW_CONFIGURE_FLAGS += --enable-avx
-else ifeq ($(version),3)
-  FFTW_CONFIGURE_FLAGS += --enable-avx --enable-avx2 --enable-fma
-else ifeq ($(version),4)
-  FFTW_CONFIGURE_FLAGS += --enable-avx2 --enable-avx512
-else
-  $(error Unknown version: $(version))
+ifeq ($(CC_MAJOR_VERSION),)
+    CC_MAJOR_VERSION := 0
 endif
 
-
-#----------------------------------------------------------------------
-# Set the C standard flag based on compiler version:
-#
-# If the compiler's major version is less than the required minimum
-# for C23, then use C11 (gnu11); otherwise, use C23 (gnu23).
-#----------------------------------------------------------------------
 ifeq ($(shell test $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) && echo true || echo false),true)
-    $(info Warning: $(CC_TYPE)-$(CC_VERSION_NUMBER) does not fully support C23. Falling back to gnu11.)
-    CFLAGS += -std=gnu11
+    STDFLAG := -std=gnu11
 else
-    CFLAGS += -std=gnu23
+    STDFLAG := -std=gnu23
 endif
 
+CFLAGS := $(STDFLAG) $(OPTFLAGS) $(CFLAGS_BASE)
 
-#----------------------------------------------------------------------
-# Targets
-#----------------------------------------------------------------------
+all: native
 
-
-#----------------------------------------------------------------------
-# The "all" target runs different prerequisites depending on the version.
-# If version is 0, run download.
-# Otherwise, run fftw, native, and clean.
-#----------------------------------------------------------------------
-ifeq ($(version),0)
-all: fftw native clean
-else
-all: download
-endif
-
-# Target to check the compiler version.
-# In the case where the compiler version is below the C23 requirement,
-# a warning is printed, but the build continues (using gnu11).
 check_compiler:
-	@echo "Checking compiler version..."
-	@if [ -z "$(CC)" ]; then \
-	    echo "Error: CC is not set."; \
-	    exit 1; \
-	fi
-	@if [ "$(CC_TYPE)" = "gcc" ]; then \
-	    echo "Detected GCC $(CC_VERSION_NUMBER)"; \
-	elif [ "$(CC_TYPE)" = "clang" ]; then \
-	    echo "Detected Clang $(CC_VERSION_NUMBER)"; \
-	elif [ "$(CC_TYPE)" = "icx" ]; then \
-	    echo "Detected ICX $(CC_VERSION_NUMBER)"; \
-	else \
-	    echo "Warning: $(CC_TYPE)-$(CC_VERSION_NUMBER) doesn't support C23. Falling back to C11 (gnu11)."; \
-	fi
-	@if [ $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) ]; then \
-	    echo "Warning: $(CC_TYPE)-$(CC_VERSION_NUMBER) doesn't fully support C23. Using C11 standard (-std=gnu11) instead."; \
-	else \
-	    echo "Compiler check passed: $(CC_TYPE)-$(CC_VERSION_NUMBER) supports C23."; \
-	fi
-download:
-	@case "$(version)" in \
-		0) echo "No installation candidate found. Please run 'make native' to build the executable from the source";; \
-		1) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks_x86-64-v1 -O $(MAKEFILE_DIR)ihsnpeaks ;; \
-		2) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks_x86-64-avx -O $(MAKEFILE_DIR)ihsnpeaks ;; \
-		3) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks-x86-64-v3 -O $(MAKEFILE_DIR)ihsnpeaks ;; \
-		4) wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/ihsnpeaks-x86-64-v4 -O $(MAKEFILE_DIR)ihsnpeaks ;; \
-		*) echo "Error: Unknown version." && exit 1;; \
-	esac
-	@chmod +x $(MAKEFILE_DIR)/ihsnpeaks
+	@echo "Compiler: $(CC_VERSION)"
+	@echo "C standard: $(STDFLAG)"
+	@echo "Host machine: $(UNAME_M)"
+	@echo "x86 dispatch level: $(X86_DISPATCH_LEVEL)"
+	@echo "x86 candidates: x86-64=$(X86_64_SUPPORTED) x86-64-v2=$(X86_64_V2_SUPPORTED) x86-64-v2+avx=$(X86_64_V2_AVX_SUPPORTED) x86-64-v3=$(X86_64_V3_SUPPORTED) x86-64-v4=$(X86_64_V4_SUPPORTED)"
+	@echo "CFLAGS: $(CFLAGS)"
 
-install:
-	@if [ -x ./ihsnpeaks ]; then \
-		if [ "$$(id -u)" -ne 0 ]; then \
-			echo "Error: 'make install' must be run as root."; \
-			exit 1; \
-		fi; \
-		cp ./ihsnpeaks /usr/local/bin/ihsnpeaks; \
-		/usr/local/bin/ihsnpeaks generate; \
-	else \
-		echo "Error: executable not found."; \
-		echo "Please run 'make download' or 'make native' to build it first."; \
+$(BUILD_DIR):
+	@mkdir -p $@
+
+$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
+
+$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) | $(BUILD_DIR)
+	$(CC) -std=gnu11 -O3 -ffast-math -Wall -Wextra -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native $< $(NUFFT_OBJ) $(LDLIBS) -o $@
+
+$(SCALING_HEADER): $(SCALING_GEN)
+	$(SCALING_GEN) $@
+
+native: $(NUFFT_OBJ) $(SCALING_HEADER)
+	@echo "Compiling ihsnpeaks with PSWF NuFFT"
+	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
+	strip -s ihsnpeaks
+	@echo "Compilation complete"
+
+install: native
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Error: 'make install' must be run as root."; \
 		exit 1; \
 	fi
+	cp ./ihsnpeaks /usr/local/bin/ihsnpeaks
 
-fftw:
-	@mkdir -p $(MAKEFILE_DIR)/lib
-	@wget https://github.com/kkrutkowski/ihsnpeaks/releases/download/beta-1.1.0/fftw-3.3.10_debloated.tar.xz -O /tmp/fftw-3.3.10_ihsnpeaks.tar.xz
-	@tar --warning=no-unknown-keyword -xf /tmp/fftw-3.3.10_ihsnpeaks.tar.xz -C /tmp
-	@echo "Configuring FFTW. It may take some time."
-	@cd /tmp/fftw-3.3.10 && \
-		sh ./configure $(FFTW_CONFIGURE_FLAGS) CC="$(CC)" && \
-		echo "Building FFTW" && \
-		$(MAKE) -j8
-	@mv /tmp/fftw-3.3.10/.libs/libfftw3f.a $(MAKEFILE_DIR)lib/libfftw3f.a
-	@echo "$(MAKEFILE_DIR)lib/libfftw3f.a built successfully"
-native:
-	@echo "Compiling the application"
-	@$(CC) $(MAKEFILE_DIR)src/main.c $(CFLAGS) -o ihsnpeaks
-	@strip -s ihsnpeaks
-	@echo "Compilation complete"
 clean:
 	@echo "Cleaning up..."
-	@rm -rf /tmp/fftw-3.3.10 /tmp/fftw-3.3.10_ihsnpeaks.tar.xz || true
+	@rm -rf $(MAKEFILE_DIR)build

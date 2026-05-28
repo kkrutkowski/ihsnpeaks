@@ -1,6 +1,4 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
-#define FFTW_MEASURE_THRESHOLD 19
-
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L  // If C23 is not available
 #    define constexpr const
 #endif
@@ -62,12 +60,6 @@ int main(int argc, char *argv[]) {
         print_help(argv);
         return 1;
     }
-    if (access("/opt/ihsnpeaks/plans", F_OK) == 0) {
-        fftwf_import_wisdom_from_filename("/opt/ihsnpeaks/plans");
-    } else {
-        printf("Warning: precomputed plans not found.\n Consider running 'sudo %s generate' for optimal performance.\n", argv[0]);
-    }
-
     parameters params = read_parameters(argc, argv);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
 

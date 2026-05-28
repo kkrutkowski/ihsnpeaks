@@ -47,7 +47,7 @@ static inline void write_tsv(buffer_t *buffer, char *in_file) {
     char *dot = strrchr(out_file, '.');     // Find the last dot in the file name
     if (dot) {
         *dot = '\0';
-    }                          // Remove the existing extension
+    }  // Remove the existing extension
     strcat(out_file, ".tsv");  // Append the new extension
 
     // Write the formatted string to the new .tsv file

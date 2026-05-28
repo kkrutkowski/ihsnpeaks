@@ -1,11 +1,12 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#include <complex.h>
-#include <fftw3.h>
 #include <klib/kvec.h>
+#include <pthread.h>
 #include <sds.h>
 #include <stdint.h>
+
+#include "../nufft/nufft1.h"
 
 typedef struct {
     double freq;
@@ -31,19 +32,30 @@ typedef struct {
     double* x;
     float* y;
     float* dy;
+    float* wy;
 
     size_t* pidx;  // phase indices for counting sort
 
     void** buf;
 
     float magnitude;
-    uint32_t gridSize;
-    uint32_t nGrids;
+    uint32_t maxFreqCount;
+    uint32_t paddedLen;
 
-    complex float** grids;  // used to compute the FFT
-    uint32_t** gidx;        // grid indices for NFFT
-    float** gdist;
-    float** weights;
+    float* power;
+    float* blockReal;
+    float* blockImag;
+    float* inputReal;
+    float* inputImag;
+    float* workReal;
+    float* workImag;
+    float* deltaReal;
+    float* deltaImag;
+    float* fftReal;
+    float* fftImag;
+    float* cobraReal;
+    float* cobraImag;
+    nufft1_workspace* nufftWorkspace;
 
     sds spectrum;
     sds outBuf;
@@ -87,17 +99,22 @@ typedef struct {
     pthread_mutex_t counter_mutex;
     int iter_count;
 
-    fftwf_plan plan;
-
     // Variables used to estimate optimal hyperparameters from metadata
     uint32_t gridRatio;
     uint32_t defaultGridRatio;
-    // uint32_t blockSize;       //size of the FFT plan applied
-    // uint32_t bufferSize;      //size of the FFT buffer
     uint32_t maxSize;  // number of bytes in the longest time series of the processed batch
     uint32_t maxLen;   // number of measurements in the longest time series of the processed batch
-    uint32_t gridLen;  // length of the FFT grid used in transform
-    uint64_t avgLen;   // average number of measurements per time series in the batch
+    uint32_t gridLen;  // length of the NuFFT block plan
+    uint32_t outputLen;
+    uint32_t maxFreqCount;
+    uint32_t ladderLevels;
+    uint64_t avgLen;  // average number of measurements per time series in the batch
+    double maxTimeSpan;
+    nufft1_mode gridMode;
+    nufft1_external_sizes nufftExternalSizes;
+    nufft1_plan* nufftPlan;
+    float* nufftTwiddleReal;
+    float* nufftTwiddleImag;
 
     kvec_target_t targets;
 
