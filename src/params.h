@@ -108,7 +108,7 @@ void print_help(char **argv) {
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -d, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
-    printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:2)\n");
+    printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-6, default:2)\n");
     printf("  -g, --g, --grid           Periodogram method: ihs (default); aov/aovmh/aobmhw/chi/chi2/fastchi2 are not implemented yet\n");
     printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbas|gba, optionally [alpha] (default: gbls[0.025])\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
@@ -267,7 +267,14 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.jobs = atoi(opt.arg);
                 break;
             case 'm':
-                params.mode = atoi(opt.arg);
+                errno = 0;
+                char *mode_end = NULL;
+                long parsed_mode = strtol(opt.arg, &mode_end, 10);
+                if (errno != 0 || mode_end == opt.arg || *mode_end != '\0' || parsed_mode < 0 || parsed_mode > 6) {
+                    fprintf(stderr, "Invalid mode '%s'. Expected an integer from 0 to 6.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                params.mode = (int)parsed_mode;
                 break;
             case 'g':
                 if (!parse_periodogram_method(opt.arg, &params.periodogramMethod)) {

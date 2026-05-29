@@ -2,6 +2,7 @@
 #define COMMON_H
 
 #include <klib/kvec.h>
+#include <math.h>
 #include <pthread.h>
 #include <sds.h>
 #include <stdbool.h>
@@ -44,6 +45,27 @@ static inline const char* periodogram_method_name(periodogram_method method) {
 static inline const char* gb_eval_name(gb_eval_mode mode) { return mode == GB_EVAL_GBAS ? "gbas" : "gbls"; }
 
 static inline const char* gb_stat_label(gb_eval_mode mode) { return mode == GB_EVAL_GBAS ? "T" : "R2"; }
+
+static inline bool mode_uses_direct_gb_grid(int mode) { return mode >= 5; }
+
+static inline bool mode_defers_peak_evaluation(int mode) { return mode < 3 || mode == 5; }
+
+static inline bool mode_refines_retained_peaks(int mode) { return mode == 2 || mode == 3 || mode == 5; }
+
+static inline bool mode_eagerly_refines_peaks(int mode) { return mode == 4 || mode == 6; }
+
+static inline int gb_convolution_radius(uint32_t n, float gbAlpha) {
+    int r = (int)ceil(0.5 * sqrt((2.0 * (double)n) + 1.0) + ((double)n * 0.25 * (double)gbAlpha));
+    r >>= 1;
+    if (r < 1) r = 1;
+    return r;
+}
+
+static inline double gb_direct_frequency_step(uint32_t n, double time_span, float oversamplingFactor, float gbAlpha) {
+    if (n == 0 || time_span <= 0.0 || oversamplingFactor <= 0.0f) return 0.0;
+    int r = gb_convolution_radius(n, gbAlpha);
+    return (12.0 * (double)r) / ((double)n * (double)oversamplingFactor * time_span);
+}
 
 typedef struct {
     double freq;

@@ -384,12 +384,13 @@ static inline void read_dat(const char* in_file, buffer_t* buffer) {
     buffer->n = idx;
 }
 
-static inline void append_peak(buffer_t* buff, const int maxPeaks, const int mode, const double freq, const float magnitude, double df, gb_eval_mode evalMode) {
+static inline void append_peak(buffer_t* buff, const int maxPeaks, const int mode, const double freq, const float magnitude, double df, gb_eval_mode evalMode,
+                               float gbAlpha) {
     peak_t appended = {0};  // peak_t tmp;
     appended.freq = freq;
     appended.p = magnitude;
     int idx = buff->nPeaks;
-    if (mode < 3) {
+    if (mode_defers_peak_evaluation(mode)) {
         while (idx > 0 && magnitude > buff->peaks[idx - 1].p) {
             idx--;
         }
@@ -403,10 +404,10 @@ static inline void append_peak(buffer_t* buff, const int maxPeaks, const int mod
             buff->peaks[idx] = appended;
         }
     } else {
-        if (mode > 3) {
-            binsearch_peak(&appended, buff, df, evalMode);
+        if (mode_eagerly_refines_peaks(mode)) {
+            binsearch_peak(&appended, buff, df, evalMode, gbAlpha);
         }
-        float stat = get_gb_stat(buff, appended.freq, &appended.amp, evalMode);
+        float stat = get_gb_stat(buff, appended.freq, &appended.amp, evalMode, gbAlpha);
         appended.r2 = stat;
         while (idx > 0 && stat > buff->peaks[idx - 1].r2) {
             idx--;

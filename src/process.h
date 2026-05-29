@@ -143,7 +143,9 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n - 1] * (double)(params->oversamplingFactor * params->nterms)));
     const float threshold = params->threshold;
-    double fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
+    double fstep = mode_uses_direct_gb_grid(params->mode)
+                       ? gb_direct_frequency_step(buffer->n, buffer->x[buffer->n - 1], params->oversamplingFactor, params->gbAlpha)
+                       : 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
     double df = 1.0 / buffer->x[buffer->n - 1];
     uint32_t nfreq = target_frequency_count(params, fstep);
     if (nfreq > buffer->maxFreqCount) nfreq = buffer->maxFreqCount;
@@ -157,7 +159,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
 prewhiten:
     if (prewhitening_iter > 0) {
         double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
-        float prewhiten_r2 = get_r2(buffer, prewhitening_freq, NULL, true);
+        float prewhiten_r2 = get_r2(buffer, prewhitening_freq, NULL, true, params->gbAlpha);
 
         backup_r2[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].r2;
         backup_p[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].p;
@@ -179,13 +181,15 @@ prewhiten:
     }
 
     buffer->nPeaks = prewhitening_iter;
-    execute_nufft_sweep(buffer, params, fstep, nfreq);
+    if (!mode_uses_direct_gb_grid(params->mode)) {
+        execute_nufft_sweep(buffer, params, fstep, nfreq);
+    }
 
     if (params->spectrum) {
         for (uint32_t i = 0; i < nfreq; ++i) {
             double freq = (double)params->fmin + ((double)i * fstep);
-            float magnitude =
-                params->mode < 5 ? correct_ihs_res(buffer->power[i], params->nterms) : get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode);
+            float magnitude = mode_uses_direct_gb_grid(params->mode) ? get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha)
+                                                                     : correct_ihs_res(buffer->power[i], params->nterms);
             appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);
         }
     }
@@ -195,17 +199,17 @@ prewhiten:
         float magnitude = buffer->power[i];
         float left = buffer->power[i - 1];
         float right = buffer->power[i + 1];
-        if (params->mode > 4) {
-            magnitude = get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode);
-            left = get_gb_likelihood(buffer, freq - fstep, NULL, NULL, params->gbEvalMode);
-            right = get_gb_likelihood(buffer, freq + fstep, NULL, NULL, params->gbEvalMode);
+        if (mode_uses_direct_gb_grid(params->mode)) {
+            magnitude = get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha);
+            left = get_gb_likelihood(buffer, freq - fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
+            right = get_gb_likelihood(buffer, freq + fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
         }
         if (magnitude > threshold && magnitude > left && magnitude > right) {
-            append_peak(buffer, params->npeaks, params->mode, freq, magnitude, df, params->gbEvalMode);
+            append_peak(buffer, params->npeaks, params->mode, freq, magnitude, df, params->gbEvalMode, params->gbAlpha);
         }
     }
 
-    sortPeaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params->mode, df, params->nterms, params->gbEvalMode);
+    sortPeaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params->mode, df, params->nterms, params->gbEvalMode, params->gbAlpha);
 
     if (params->prewhiten && prewhitening_iter < buffer->nPeaks) {
         prewhitening_iter += 1;

@@ -100,7 +100,7 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     }  // Normalize
 }
 
-static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewhiten) {
+static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewhiten, float gbAlpha) {
     double freq_tmp = 1024.0 * freq;  // 10-bit key
     double min = 0;
     double max = 0;
@@ -126,11 +126,7 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
     }
 
     csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);  // sort the pairs by phase
-    int r = (int)(ceil(0.5 * sqrt((2.0 * (double)(buffer->n)) + 1.0)));
-    r = r >> 1;
-    if (r == 0) {
-        r = 1;
-    }  // for 4 convolutions
+    int r = gb_convolution_radius(buffer->n, gbAlpha);
 
     convolve(sorted, tmp, output, r, buffer->n);
 
@@ -173,7 +169,7 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
     return R2;
 }
 
-static inline float get_gbas_t(buffer_t* buffer, double freq, float* amp) {
+static inline float get_gbas_t(buffer_t* buffer, double freq, float* amp, float gbAlpha) {
     double freq_tmp = 1024.0 * freq;  // 10-bit key
     double min = 0;
     double max = 0;
@@ -193,11 +189,7 @@ static inline float get_gbas_t(buffer_t* buffer, double freq, float* amp) {
     }
 
     csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);  // sort the pairs by phase
-    int r = (int)(ceil(0.5 * sqrt((2.0 * (double)(buffer->n)) + 1.0)));
-    r = r >> 1;
-    if (r == 0) {
-        r = 1;
-    }  // for 4 convolutions
+    int r = gb_convolution_radius(buffer->n, gbAlpha);
 
     convolve(sorted, tmp, output, r, buffer->n);
 
@@ -226,23 +218,23 @@ static inline float get_gbas_t(buffer_t* buffer, double freq, float* amp) {
     return (float)(ref / res);
 }
 
-static inline float get_gb_stat(buffer_t* buffer, double freq, float* amp, gb_eval_mode evalMode) {
-    return evalMode == GB_EVAL_GBAS ? get_gbas_t(buffer, freq, amp) : get_r2(buffer, freq, amp, false);
+static inline float get_gb_stat(buffer_t* buffer, double freq, float* amp, gb_eval_mode evalMode, float gbAlpha) {
+    return evalMode == GB_EVAL_GBAS ? get_gbas_t(buffer, freq, amp, gbAlpha) : get_r2(buffer, freq, amp, false, gbAlpha);
 }
 
 static inline float get_gb_likelihood_from_stat(float stat, int n, gb_eval_mode evalMode) {
     return evalMode == GB_EVAL_GBAS ? (float)get_z(stat, n) : (float)lnFAP(2, 1, stat, n);
 }
 
-static inline float get_gb_likelihood(buffer_t* buffer, double freq, float* amp, float* stat, gb_eval_mode evalMode) {
-    float value = get_gb_stat(buffer, freq, amp, evalMode);
+static inline float get_gb_likelihood(buffer_t* buffer, double freq, float* amp, float* stat, gb_eval_mode evalMode, float gbAlpha) {
+    float value = get_gb_stat(buffer, freq, amp, evalMode, gbAlpha);
     if (stat) {
         *stat = value;
     }
     return get_gb_likelihood_from_stat(value, buffer->n, evalMode);
 }
 
-static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df, gb_eval_mode evalMode) {
+static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df, gb_eval_mode evalMode, float gbAlpha) {
     double step = df;
     float stat;
     double freq_tmp;
@@ -250,14 +242,14 @@ static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df, gb_
         step *= 0.5;
 
         freq_tmp = peak->freq - step;
-        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode);
+        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode, gbAlpha);
         if (stat > peak->r2) {
             peak->r2 = stat;
             peak->freq = freq_tmp;
         }
 
         freq_tmp = peak->freq + step;
-        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode);
+        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode, gbAlpha);
         if (stat > peak->r2) {
             peak->r2 = stat;
             peak->freq = freq_tmp;
@@ -277,7 +269,7 @@ static inline double correct_ihs_res(const double sum, const int n) {
     return sum - logl(logSum);  // asymptotic formula for possible overflow cases may be useful
 }
 
-static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode, double df, int n, gb_eval_mode evalMode) {
+static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode, double df, int n, gb_eval_mode evalMode, float gbAlpha) {
     int i, j;
     peak_t key;
 
@@ -287,11 +279,11 @@ static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode,
         }  // Erlang's logarithmic correction'
     } else {
         for (i = 0; i < length; i++) {
-            if (mode > 1 && mode < 4) {
-                binsearch_peak(&peaks[i], buf, df, evalMode);
+            if (mode_refines_retained_peaks(mode)) {
+                binsearch_peak(&peaks[i], buf, df, evalMode, gbAlpha);
             }
-            if (mode < 4) {
-                peaks[i].r2 = get_gb_stat(buf, peaks[i].freq, &peaks[i].amp, evalMode);
+            if (mode < 4 || mode == 5) {
+                peaks[i].r2 = get_gb_stat(buf, peaks[i].freq, &peaks[i].amp, evalMode, gbAlpha);
             }
             peaks[i].p = get_gb_likelihood_from_stat(peaks[i].r2, buf->n, evalMode);
         };

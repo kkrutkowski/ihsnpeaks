@@ -67,7 +67,14 @@ static void inspect_dat_file(const char *path, uint32_t *line_count, double *tim
 
 static uint32_t estimate_frequency_count(const parameters *params, double time_span) {
     if (time_span <= 0.0 || params->fmax <= params->fmin) return 1;
-    double count = ((double)params->fmax - (double)params->fmin) * (double)params->nterms * (double)params->oversamplingFactor * time_span * 0.5;
+    double count;
+    if (mode_uses_direct_gb_grid(params->mode)) {
+        double fstep = gb_direct_frequency_step(params->maxLen, time_span, params->oversamplingFactor, params->gbAlpha);
+        if (fstep <= 0.0) return 1;
+        count = ((double)params->fmax - (double)params->fmin) / fstep;
+    } else {
+        count = ((double)params->fmax - (double)params->fmin) * (double)params->nterms * (double)params->oversamplingFactor * time_span * 0.5;
+    }
     if (count > (double)UINT32_MAX - 2.0) return UINT32_MAX - 1U;
     return (uint32_t)floor(count) + 1U;
 }
