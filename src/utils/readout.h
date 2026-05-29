@@ -127,10 +127,11 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->readBuf = aligned_alloc(64, round_buffer(params->maxSize));
     }
     if (!buffer->readBuf) goto error;
-    if (!buffer->power) {
+    bool needs_power_grid = !periodogram_uses_aov(params->periodogramMethod) || params->spectrum;
+    if (needs_power_grid && !buffer->power) {
         buffer->power = aligned_alloc(64, round_buffer(((size_t)params->maxFreqCount + 2U) * sizeof(float)));
     }
-    if (!buffer->power) goto error;
+    if (needs_power_grid && !buffer->power) goto error;
     if (!buffer->blockReal) {
         buffer->blockReal = aligned_alloc(64, round_buffer((size_t)params->outputLen * sizeof(float)));
     }
@@ -305,12 +306,16 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode)
         wsqsum += buffer->wy[i] * buffer->wy[i];
     }
     buffer->neff = ((wsum * wsum) / wsqsum) - 2.0;
-    wsum = 0;
+    double wysum = 0.0;
+    double wysqsum = 0.0;
     for (uint32_t i = 0; i < buffer->n; i++) {
         buffer->wy[i] *= buffer->y[i];
-        wsum += fabs(buffer->wy[i]);
+        wysum += fabs(buffer->wy[i]);
+        wysqsum += buffer->wy[i] * buffer->wy[i];
     }  // ok
-    wsum = sqrt(buffer->neff) / wsum;  // sqrt because of square later
+    buffer->amp_neff = wysqsum > 0.0 ? ((wysum * wysum) / wysqsum) - 2.0 : 0.0;
+    double norm_neff = buffer->amp_neff > 0.0 ? buffer->amp_neff : buffer->neff;
+    wsum = wysum > 0.0 ? sqrt(norm_neff) / wysum : 0.0;  // sqrt because of square later
     for (uint32_t i = 0; i < buffer->n; i++) {
         buffer->wy[i] *= wsum;
     }  // correct result

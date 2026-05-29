@@ -73,10 +73,6 @@ int main(int argc, char *argv[]) {
     if (params.debug) {
         print_parameters(&params);
     }
-    if (params.mode < 5 && params.nterms > 1) {
-        params.threshold = correct_threshold(params.threshold, params.nterms);
-    }
-
     // Output results
     // for (size_t i = 0; i < kv_size(params.targets); i++) {printf("File: %s\n", kv_A(params.targets, i).path);}
     // printf("File: %s\n", kv_A(params.targets, kv_size(params.targets)-1).path);
@@ -110,7 +106,9 @@ int main(int argc, char *argv[]) {
             perror("Failed to create the output file");
             return 1;
         }
-        if (params.mode < 1) {
+        if (periodogram_uses_aov(params.periodogramMethod)) {
+            fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP), R2]\n");
+        } else if (params.mode < 1) {
             fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP)]\n");
         } else {
             fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, amp, %s]\n", gb_stat_label(params.gbEvalMode));

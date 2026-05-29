@@ -71,8 +71,10 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     if (mode > 1) {
         n += 1;
     }
+    bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     // Column indices: 0: f[1/d] (frequency), 1: log(p), 2: Amp, 3: R.
     const char *hdr[4] = {"f[1/d]", "log(p)", "Amp", gb_stat_label(evalMode)};
+    if (use_aov) hdr[2] = "R2";
     int hdrWidth[4];
     int colWidth[4];
     int i;
@@ -88,7 +90,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
         double freq = buffer->peaks[i].freq;
         double logp = buffer->peaks[i].p * M_LOG10E;  // equivalent to log10(p)
-        double amp = buffer->peaks[i].amp;
+        double amp = use_aov ? buffer->peaks[i].r2 : buffer->peaks[i].amp;
         double r = buffer->peaks[i].r2;
         // printf("%.3f\n", r); // ??? - wrong here
         // if (r <= 1.0 && mode > 0) {r = get_r(buffer, buffer->peaks[i].freq, NULL, false);}
@@ -118,8 +120,8 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     {
         char temp[64];  // temporary buffer for spaces
         int pad;
-        int HdrCols = 4;
-        if (mode == 0) {
+        int HdrCols = use_aov ? 3 : 4;
+        if (mode == 0 && !use_aov) {
             HdrCols = 2;
         }
         for (i = 0; i < HdrCols; i++) {
@@ -130,14 +132,11 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
                 buffer->outBuf = sdscat(buffer->outBuf, temp);
             }
             buffer->outBuf = sdscat(buffer->outBuf, hdr[i]);
-            if (i < 3)
+            if (i + 1 < HdrCols)
                 buffer->outBuf = sdscat(buffer->outBuf, "\t");
             else
                 buffer->outBuf = sdscat(buffer->outBuf, "\n");
         }
-    }
-    if (mode == 0) {
-        buffer->outBuf = sdscat(buffer->outBuf, "\n");
     }
     // Second pass: print each peak row with proper padding.
     {
@@ -168,7 +167,17 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
             buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
-            if (mode > 0) {
+            if (use_aov) {
+                custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
+                len = (int)strlen(stringBuff);
+                pad = colWidth[2] - len;
+                if (pad > 0) {
+                    memset(temp, ' ', pad);
+                    temp[pad] = '\0';
+                    buffer->outBuf = sdscat(buffer->outBuf, temp);
+                }
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+            } else if (mode > 0) {
                 // Amplitude (precision 3)
                 custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
                 len = (int)strlen(stringBuff);
@@ -217,6 +226,7 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
 
 void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
     (void)evalMode;
+    bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     int i = 0;
     if (buffer->nPeaks > 0) {
         // Append file information to the output buffer
@@ -231,7 +241,21 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
         // buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
         // Append each peak's information to the output buffer
-        if (mode == 0) {
+        if (use_aov) {
+            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
+                custom_dtoa(buffer->peaks[i].freq, n + (mode > 1 ? 1 : 0), stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
+                i++;
+            }
+        } else if (mode == 0) {
             while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
                 // Convert frequency to string using custom_ftoa
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);

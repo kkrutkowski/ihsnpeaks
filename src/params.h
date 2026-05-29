@@ -108,9 +108,16 @@ void print_help(char **argv) {
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -d, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
-    printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-6, default:2)\n");
-    printf("  -g, --g, --grid           Periodogram method: ihs (default); aov/aovmh/aobmhw/chi/chi2/fastchi2 are not implemented yet\n");
-    printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbas|gba, optionally [alpha] (default: gbls[0.025])\n");
+    printf("  -m, --mode                Peak evaluation mode (0-6, default:2):\n");
+    printf("                            0 NuFFT-based grid only\n");
+    printf("                            1 reevaluate up to n strongest above-threshold grid peaks\n");
+    printf("                            2 like 1, plus binary search maximum refinement\n");
+    printf("                            3 evaluate all local peaks, then binary-search the n strongest\n");
+    printf("                            4 evaluate and binary-search every local peak\n");
+    printf("                            5 like 2, but use a dense direct evaluation grid\n");
+    printf("                            6 like 4, but dense direct evaluation replaces the NuFFT grid\n");
+    printf("  -g, --g, --grid           Periodogram method: ihs (default) or aov/aovmh/aobmhw/chi/chi2/fastchi2\n");
+    printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbas|gba, optionally [alpha in 0..1] (default: gbls[0.025])\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
@@ -185,7 +192,15 @@ static bool parse_gb_eval(const char *arg, gb_eval_mode *mode, float *gbAlpha) {
         errno = 0;
         char *parse_end = NULL;
         float parsed_alpha = strtof(open + 1, &parse_end);
-        if (errno != 0 || parse_end != close || !isfinite(parsed_alpha) || parsed_alpha < 0.0f) return false;
+        if (errno != 0 || parse_end != close || !isfinite(parsed_alpha)) return false;
+        if (parsed_alpha < 0.0f) {
+            fprintf(stderr, "Warning: Gaussian blur alpha %.6g is below 0.0; clamping to 0.0.\n", parsed_alpha);
+            parsed_alpha = 0.0f;
+        }
+        if (parsed_alpha > 1.0f) {
+            fprintf(stderr, "Warning: Gaussian blur alpha %.6g is above 1.0; clamping to 1.0.\n", parsed_alpha);
+            parsed_alpha = 1.0f;
+        }
         *gbAlpha = parsed_alpha;
     }
 
@@ -281,10 +296,6 @@ static parameters read_parameters(int argc, char *argv[]) {
                     fprintf(stderr, "Invalid periodogram method '%s'. Expected ihs, aov, aovmh, aobmhw, chi, chi2, or fastchi2.\n", opt.arg);
                     exit(EXIT_FAILURE);
                 }
-                if (params.periodogramMethod != PERIODOGRAM_IHS) {
-                    fprintf(stderr, "Least-squares periodogram method '%s' is not implemented yet.\n", opt.arg);
-                    exit(EXIT_FAILURE);
-                }
                 break;
             case 's':
                 params.spectrum = true;
@@ -336,7 +347,7 @@ static parameters read_parameters(int argc, char *argv[]) {
 }
 
 // Invert correct_ihs_res using the false position (regula falsi) method.
-double correct_threshold(const double threshold, const int n) {
+static inline double correct_ihs_threshold(const double threshold, const int n) {
     const double tol = 1e-5;
     const int max_iter = 10;
     double low = 0, high = (threshold > 1.0 ? threshold : 1.0), x;
@@ -353,6 +364,30 @@ double correct_threshold(const double threshold, const int n) {
             low = x;
     }
     return x;
+}
+
+static inline double correct_aov_threshold(const double threshold, const int degree, const int n_eff) {
+    if (n_eff <= (2 * degree) + 1) return INFINITY;
+    double low = 0.0;
+    double high = 1.0 - 1.0e-12;
+    for (int i = 0; i < 80; ++i) {
+        double mid = 0.5 * (low + high);
+        double value = lnFAP((2 * degree) + 1, 2 * degree, mid, n_eff);
+        if (!double_is_finite_bits(value) || value >= threshold) {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    return high;
+}
+
+static inline double correct_threshold(const parameters *params, const buffer_t *buffer) {
+    if (periodogram_uses_aov(params->periodogramMethod)) {
+        return correct_aov_threshold(params->threshold, params->nterms, periodogram_effective_n(buffer));
+    }
+    if (mode_uses_direct_gb_grid(params->mode)) return params->threshold;
+    return correct_ihs_threshold(params->threshold, params->nterms);
 }
 
 #endif  // PARAMS_H

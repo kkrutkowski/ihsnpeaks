@@ -22,6 +22,32 @@ typedef enum {
 
 typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAS } gb_eval_mode;
 
+static inline bool float_is_nan_bits(float value) {
+    union {
+        float f;
+        uint32_t u;
+    } bits = {value};
+    return (bits.u & UINT32_C(0x7fffffff)) > UINT32_C(0x7f800000);
+}
+
+static inline bool float_is_finite_bits(float value) {
+    union {
+        float f;
+        uint32_t u;
+    } bits = {value};
+    return (bits.u & UINT32_C(0x7f800000)) != UINT32_C(0x7f800000);
+}
+
+static inline bool double_is_finite_bits(double value) {
+    union {
+        double f;
+        uint64_t u;
+    } bits = {value};
+    return (bits.u & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000);
+}
+
+static inline bool periodogram_uses_aov(periodogram_method method) { return method != PERIODOGRAM_IHS; }
+
 static inline const char* periodogram_method_name(periodogram_method method) {
     switch (method) {
         case PERIODOGRAM_AOV:
@@ -54,6 +80,8 @@ static inline bool mode_refines_retained_peaks(int mode) { return mode == 2 || m
 
 static inline bool mode_eagerly_refines_peaks(int mode) { return mode == 4 || mode == 6; }
 
+static inline bool mode_evaluates_all_local_peaks(int mode) { return mode == 3 || mode == 4 || mode == 6; }
+
 static inline int gb_convolution_radius(uint32_t n, float gbAlpha) {
     int r = (int)ceil(0.5 * sqrt((2.0 * (double)n) + 1.0) + ((double)n * 0.25 * (double)gbAlpha));
     r >>= 1;
@@ -83,6 +111,7 @@ typedef struct {
     uint32_t terms;
     uint32_t memBlockSize;
     double neff;
+    double amp_neff;
 
     peak_t* peaks;
     uint32_t nPeaks;
@@ -119,6 +148,14 @@ typedef struct {
     sds spectrum;
     sds outBuf;
 } buffer_t;
+
+static inline int periodogram_effective_n(const buffer_t* buffer) {
+    if (!buffer || buffer->neff <= 0.0) return 0;
+    double n_eff = floor(buffer->neff);
+    if (n_eff < 1.0) return 0;
+    if (n_eff > (double)INT32_MAX) return INT32_MAX;
+    return (int)n_eff;
+}
 
 typedef union {
     uint64_t data;  // The raw 64-bit representation

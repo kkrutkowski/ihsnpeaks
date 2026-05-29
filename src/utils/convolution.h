@@ -16,7 +16,16 @@ static inline double corr(int r) {
     return (((2 * L * L) + 1) / (3 * L * L * L));
 }
 
+static inline double clamp_gbls_scale(double scale) {
+    if (scale < 1.0) return 1.0;
+    if (scale > 4.0) return 4.0;
+    return scale;
+}
+
 static inline int32_t wrapidx(int32_t idx, int32_t n) {
+    while (idx < 0) {
+        idx += n;
+    }
     while (idx >= n) {
         idx -= n;
     }
@@ -56,7 +65,7 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     double norm = 1.0 / ((2 * r + 1) * (2 * r + 1) * (2 * r + 1) * (2 * r + 1));
 
     for (int i = 0; i <= 3; i++) {
-        float val = 0.0f;
+        double val = 0.0;
         int idx_hi = r;
         int idx_lo = n - r;
         if (i % 2 == 0) {
@@ -77,7 +86,7 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
                 idx_lo += 1;
             }
         } else {
-            for (int j = n - (r); j <= n + (r); j++) {
+            for (int j = n - (r); j < n + (r); j++) {
                 val += temp[wrapidx(j, n)];
             }
             for (int j = 0; j < n; j++) {
@@ -130,20 +139,13 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
 
     convolve(sorted, tmp, output, r, buffer->n);
 
+    double correction = corr(r);
     for (int i = 0; i < buffer->n; i++) {
+        output[i] = (output[i] - (correction * (double)(sorted[i].parts.val)));
         if (amp) {
-            if (output[i] < min) {
-                min = output[i];
-            }
-            if (output[i] > max) {
-                max = output[i];
-            }
+            if (i == 0 || output[i] < min) min = output[i];
+            if (i == 0 || output[i] > max) max = output[i];
         }
-        if (prewhiten) {
-            buffer->y[sorted[i].parts.idx] -= output[i];
-        }
-
-        output[i] = (output[i] - (corr(r) * (double)(sorted[i].parts.val)));
 
         // Calculate true R^2 statistic components
         double y_val = (double)(sorted[i].parts.val);
@@ -154,16 +156,23 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
         Sxy += y_val * smooth_val;
     }
 
-    if (amp) {
-        *amp = max - min;
-    }
-
     // Calculate final R^2 with clamping
     float R2 = 0.0f;
+    double scale = 0.0;
     if (Sxx > 0.0 && Syy > 0.0) {
-        R2 = (float)((Sxy * Sxy) / (Sxx * Syy));
+        scale = clamp_gbls_scale(Sxy / Sxx);
+        double explained = ((2.0 * scale * Sxy) - (scale * scale * Sxx)) / Syy;
+        R2 = (float)explained;
         if (R2 < 0.0f) R2 = 0.0f;
         if (R2 > (1.0f - 1e-15f)) R2 = 1.0f - 1e-15f;
+    }
+    if (amp) {
+        *amp = (float)(fabs(scale) * (max - min));
+    }
+    if (prewhiten) {
+        for (int i = 0; i < buffer->n; i++) {
+            buffer->y[sorted[i].parts.idx] -= (float)(scale * output[i]);
+        }
     }
 
     return R2;

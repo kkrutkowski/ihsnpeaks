@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean
+.PHONY: all native check_compiler install clean format
 
 CC ?= cc
 AR ?= ar
@@ -166,3 +166,11 @@ install: native
 clean:
 	@echo "Cleaning up..."
 	@rm -rf $(MAKEFILE_DIR)build
+format:
+	clang-format -i ./src/*.c
+	clang-format -i ./src/*.h
+	clang-format -i ./src/utils/*.h
+	clang-format -i ./src/nufft/*.c
+	clang-format -i ./src/nufft/*.h
+	clang-format -i ./include/*.h
+	clang-format -i ./include/klib/*.h

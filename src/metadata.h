@@ -84,7 +84,8 @@ static int pswf_backend(nufft1_mode mode) { return mode == NUFFT1_PSWF21 ? 2 : 1
 static void initialize_nufft_plan(parameters *params) {
     double beta = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_BETA : F_PSWF43_BETA;
     double gamma = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_GAMMA : F_PSWF43_GAMMA;
-    int base_len = nufft1_optimize_plan_size((int)params->maxFreqCount, (int)params->maxLen, 0, F_ALPHA, beta, gamma, pswf_backend(params->gridMode));
+    int plan_degree = periodogram_uses_aov(params->periodogramMethod) ? params->nterms : 0;
+    int base_len = nufft1_optimize_plan_size((int)params->maxFreqCount, (int)params->maxLen, plan_degree, F_ALPHA, beta, gamma, pswf_backend(params->gridMode));
     if (params->gridMode == NUFFT1_PSWF43) {
         base_len = nufft1_pswf43_plan_len_from_base(base_len);
     }
@@ -105,7 +106,8 @@ static void initialize_nufft_plan(parameters *params) {
         fprintf(stderr, "Failed to allocate shared NuFFT twiddles\n");
         exit(EXIT_FAILURE);
     }
-    params->nufftPlan = nufft1_initialize_shared((int)params->maxLen, (int)params->gridLen, params->nterms, params->gridMode, params->nufftTwiddleReal,
+    int nufft_factors = periodogram_uses_aov(params->periodogramMethod) ? 2 * params->nterms : params->nterms;
+    params->nufftPlan = nufft1_initialize_shared((int)params->maxLen, (int)params->gridLen, nufft_factors, params->gridMode, params->nufftTwiddleReal,
                                                  params->nufftTwiddleImag);
     if (!params->nufftPlan) {
         fprintf(stderr, "Failed to initialize shared NuFFT plan\n");
