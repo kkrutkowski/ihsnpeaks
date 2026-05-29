@@ -18,6 +18,9 @@ static inline double corr(int r) {
 }
 
 static inline double clamp_gbls_scale(double scale) {
+    if (scale <= 0.0) {
+        return 0.0;
+    }
     double range = 4.0;
 
     // Brute-force approach. Not used since sharp edges negatively affect final interpolation step.
