@@ -17,7 +17,7 @@ static inline double corr(int r) {
 }
 
 static inline double clamp_gbls_scale(double scale) {
-    if (scale < 1.0) return 1.0;
+    if (scale < 0.25) return 0.25;
     if (scale > 4.0) return 4.0;
     return scale;
 }
