@@ -173,24 +173,93 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
     return R2;
 }
 
-static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df) {
+static inline float get_gbas_t(buffer_t* buffer, double freq, float* amp) {
+    double freq_tmp = 1024.0 * freq;  // 10-bit key
+    double min = 0;
+    double max = 0;
+    double ref = 0;
+    double res = 0;
+
+    kvpair* input = (kvpair*)(buffer->buf[0]);
+    kvpair* sorted = (kvpair*)(buffer->buf[1]);
+    double* tmp = (double*)(buffer->buf[0]);
+    double* output = (double*)(buffer->buf[2]);
+    uint64_t** sort_in = (uint64_t**)(&buffer->buf[0]);
+    uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
+
+    for (int i = 0; i < buffer->n; i++) {
+        input[i].parts.key = ((uint16_t)(buffer->x[i] * freq_tmp)) & 0b0000001111111111;  // get rid of the 6 most significant bits
+        input[i].parts.val = buffer->y[i];
+    }
+
+    csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);  // sort the pairs by phase
+    int r = (int)(ceil(0.5 * sqrt((2.0 * (double)(buffer->n)) + 1.0)));
+    r = r >> 1;
+    if (r == 0) {
+        r = 1;
+    }  // for 4 convolutions
+
+    convolve(sorted, tmp, output, r, buffer->n);
+
+    double correction = corr(r);
+    double multiplier = 1.0 / (1.0 - correction);
+
+    for (int i = 0; i < buffer->n; i++) {
+        if (amp) {
+            if (output[i] < min) {
+                min = output[i];
+            }
+            if (output[i] > max) {
+                max = output[i];
+            }
+        }
+
+        output[i] = (output[i] - (correction * (double)(sorted[i].parts.val))) * multiplier;
+        res += ((double)(sorted[i].parts.val) - output[i]) * ((double)(sorted[i].parts.val) - output[i]);
+        ref += ((double)(sorted[i].parts.val) + output[i]) * ((double)(sorted[i].parts.val) + output[i]);
+    }
+
+    if (amp) {
+        *amp = max - min;
+    }
+
+    return (float)(ref / res);
+}
+
+static inline float get_gb_stat(buffer_t* buffer, double freq, float* amp, gb_eval_mode evalMode) {
+    return evalMode == GB_EVAL_GBAS ? get_gbas_t(buffer, freq, amp) : get_r2(buffer, freq, amp, false);
+}
+
+static inline float get_gb_likelihood_from_stat(float stat, int n, gb_eval_mode evalMode) {
+    return evalMode == GB_EVAL_GBAS ? (float)get_z(stat, n) : (float)lnFAP(2, 1, stat, n);
+}
+
+static inline float get_gb_likelihood(buffer_t* buffer, double freq, float* amp, float* stat, gb_eval_mode evalMode) {
+    float value = get_gb_stat(buffer, freq, amp, evalMode);
+    if (stat) {
+        *stat = value;
+    }
+    return get_gb_likelihood_from_stat(value, buffer->n, evalMode);
+}
+
+static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df, gb_eval_mode evalMode) {
     double step = df;
-    float R2;
+    float stat;
     double freq_tmp;
     for (int i = 0; i < 12; i++) {
         step *= 0.5;
 
         freq_tmp = peak->freq - step;
-        R2 = get_r2(buffer, freq_tmp, NULL, false);
-        if (R2 > peak->r2) {
-            peak->r2 = R2;
+        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode);
+        if (stat > peak->r2) {
+            peak->r2 = stat;
             peak->freq = freq_tmp;
         }
 
         freq_tmp = peak->freq + step;
-        R2 = get_r2(buffer, freq_tmp, NULL, false);
-        if (R2 > peak->r2) {
-            peak->r2 = R2;
+        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode);
+        if (stat > peak->r2) {
+            peak->r2 = stat;
             peak->freq = freq_tmp;
         }
     }
@@ -208,7 +277,7 @@ static inline double correct_ihs_res(const double sum, const int n) {
     return sum - logl(logSum);  // asymptotic formula for possible overflow cases may be useful
 }
 
-static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode, double df, int n) {
+static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode, double df, int n, gb_eval_mode evalMode) {
     int i, j;
     peak_t key;
 
@@ -219,12 +288,12 @@ static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode,
     } else {
         for (i = 0; i < length; i++) {
             if (mode > 1 && mode < 4) {
-                binsearch_peak(&peaks[i], buf, df);
+                binsearch_peak(&peaks[i], buf, df, evalMode);
             }
             if (mode < 4) {
-                peaks[i].r2 = get_r2(buf, peaks[i].freq, &peaks[i].amp, false);
+                peaks[i].r2 = get_gb_stat(buf, peaks[i].freq, &peaks[i].amp, evalMode);
             }
-            peaks[i].p = lnFAP(2, 1, peaks[i].r2, buf->n);
+            peaks[i].p = get_gb_likelihood_from_stat(peaks[i].r2, buf->n, evalMode);
         };
 
         for (i = 1; i < length; i++) {

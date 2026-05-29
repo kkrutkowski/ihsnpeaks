@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
         if (params.mode < 1) {
             fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP)]\n");
         } else {
-            fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, amp, R]\n");
+            fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, amp, %s]\n", gb_stat_label(params.gbEvalMode));
         }
         fclose(outputFile);
 

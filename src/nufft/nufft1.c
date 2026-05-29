@@ -24,6 +24,7 @@
 #define VECF_LEN (VEC_BYTES / 4)
 typedef float VECF __attribute__((vector_size(VEC_BYTES)));
 typedef uint32_t VECF_INT __attribute__((vector_size(VEC_BYTES)));
+typedef int32_t VECF_SINT __attribute__((vector_size(VEC_BYTES)));
 
 #define LOAD_VEC(ptr) (*(const VECF *)(ptr))
 #define STORE_VEC(ptr, val) (*(VECF *)(ptr) = (val))
@@ -94,9 +95,34 @@ static inline float cos2pif_tls(float x) {
 }
 
 static inline VECF vecf_exp_tls(VECF v) {
-    VECF r;
-    for (int i = 0; i < VECF_LEN; ++i) r[i] = expf(v[i]);
-    return r;
+    VECF y = v * ((VECF){} + 1.4426950408889634f);
+    VECF_SINT i = __builtin_convertvector(y, VECF_SINT);
+    VECF i_f = __builtin_convertvector(i, VECF);
+    VECF f = y - i_f;
+
+    VECF_SINT is_neg = f < (VECF){};
+    i = i + is_neg;
+    f = f - __builtin_convertvector(is_neg, VECF);
+
+    VECF p = f * 0.0f + 0.0018964611454333f;
+    p = p * f + ((VECF){} + 0.0089428289841091f);
+    p = p * f + ((VECF){} + 0.0558662463045207f);
+    p = p * f + ((VECF){} + 0.2401397110907695f);
+    p = p * f + ((VECF){} + 0.6931547524751674f);
+    p = p * f + ((VECF){} + 0.9999998931108267f);
+
+    union {
+        VECF_SINT i;
+        VECF f;
+    } bitcast;
+    bitcast.i = (i + ((VECF_SINT){} + 127)) << 23;
+    return p * bitcast.f;
+}
+
+static inline float expf_remez_tls(float x) {
+    VECF v = (VECF){};
+    v[0] = x;
+    return vecf_exp_tls(v)[0];
 }
 
 /* -------------------------------------------------------------------------
@@ -525,7 +551,7 @@ static inline float pswf0(float z, nufft1_mode mode) {
     float z2 = z * z;
     float poly = coeffs[degree];
     for (int i = degree - 1; i >= 0; --i) poly = fmaf(poly, z2, coeffs[i]);
-    return expf(-0.5f * c * z2) * poly;
+    return expf_remez_tls(-0.5f * c * z2) * poly;
 }
 
 static void pswf0_batch(const float *__restrict z_arr, float *__restrict out_arr, int n, nufft1_mode mode) {

@@ -384,7 +384,7 @@ static inline void read_dat(const char* in_file, buffer_t* buffer) {
     buffer->n = idx;
 }
 
-static inline void append_peak(buffer_t* buff, const int maxPeaks, const int mode, const double freq, const float magnitude, double df) {
+static inline void append_peak(buffer_t* buff, const int maxPeaks, const int mode, const double freq, const float magnitude, double df, gb_eval_mode evalMode) {
     peak_t appended = {0};  // peak_t tmp;
     appended.freq = freq;
     appended.p = magnitude;
@@ -404,11 +404,11 @@ static inline void append_peak(buffer_t* buff, const int maxPeaks, const int mod
         }
     } else {
         if (mode > 3) {
-            binsearch_peak(&appended, buff, df);
+            binsearch_peak(&appended, buff, df, evalMode);
         }
-        float R2 = get_r2(buff, appended.freq, &appended.amp, false);  // reevaluate peaks using F-test
-        appended.r2 = R2;
-        while (idx > 0 && R2 > buff->peaks[idx - 1].r2) {
+        float stat = get_gb_stat(buff, appended.freq, &appended.amp, evalMode);
+        appended.r2 = stat;
+        while (idx > 0 && stat > buff->peaks[idx - 1].r2) {
             idx--;
         }
         if (buff->nPeaks < maxPeaks) {

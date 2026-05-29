@@ -67,12 +67,12 @@ static int column_width(double val, int precision) {
     return 3 + precision + intPartWidth;
 }
 
-void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode) {
+void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
     if (mode > 1) {
         n += 1;
     }
     // Column indices: 0: f[1/d] (frequency), 1: log(p), 2: Amp, 3: R.
-    const char *hdr[4] = {"f[1/d]", "log(p)", "Amp", "R2"};
+    const char *hdr[4] = {"f[1/d]", "log(p)", "Amp", gb_stat_label(evalMode)};
     int hdrWidth[4];
     int colWidth[4];
     int i;
@@ -215,7 +215,8 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
     pthread_mutex_unlock(&params->mutex);
 }
 
-void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode) {
+void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
+    (void)evalMode;
     int i = 0;
     if (buffer->nPeaks > 0) {
         // Append file information to the output buffer

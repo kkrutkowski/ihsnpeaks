@@ -1,7 +1,9 @@
 #ifndef PARAMS_H
 #define PARAMS_H
 
+#include <errno.h>
 #include <klib/ketopt.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,6 +26,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.threshold = 10.0 * M_LN10;
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
+    params.gbAlpha = 0.025f;
     params.npeaks = 10;
     params.nterms = 3;
     params.defaultGridRatio = 128;
@@ -31,6 +34,8 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.gridMode = NUFFT1_PSWF43;
     params.mode = 2;
     params.r2_threshold = 0.05;
+    params.periodogramMethod = PERIODOGRAM_IHS;
+    params.gbEvalMode = GB_EVAL_GBLS;
 
     return params;
 }
@@ -43,6 +48,9 @@ void print_parameters(parameters *params) {
     printf("\tOversampling Factor: %.2f\n", params->oversamplingFactor);
     printf("\tDetection threshold: %.2f\n", params->threshold * M_LOG10E);
     printf("\tExpected systemic variation: %.1e\n", params->epsilon);
+    printf("\tPeriodogram method: %s\n", periodogram_method_name(params->periodogramMethod));
+    printf("\tGaussian blur evaluation: %s\n", gb_eval_name(params->gbEvalMode));
+    printf("\tGaussian blur alpha: %.6g\n", params->gbAlpha);
     printf("\tNpeaks: %d\n", params->npeaks);
     printf("\tNterms: %d\n", params->nterms);
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
@@ -101,7 +109,11 @@ void print_help(char **argv) {
     printf("  -d, --terms               Set the number of harmonics used for computation (default: 3)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
     printf("  -m, --mode                Fraction of frequencies reevaluated with F-test (0-5, default:2)\n");
-    printf("  -g, --grid                NuFFT grid/backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
+    printf("  -g, --g, --grid           Periodogram method: ihs (default); aov/aovmh/aobmhw/chi/chi2/fastchi2 are not implemented yet\n");
+    printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbas|gba, optionally [alpha] (default: gbls[0.025])\n");
+    printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
+    printf("      --nfft, --nufft, --nufft1\n");
+    printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
     printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
@@ -114,7 +126,7 @@ void print_help(char **argv) {
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
 }
 
-static bool parse_grid_mode(const char *arg, nufft1_mode *mode) {
+static bool parse_nufft_mode(const char *arg, nufft1_mode *mode) {
     if (strcmp(arg, "43") == 0 || strcmp(arg, "pswf43") == 0) {
         *mode = NUFFT1_PSWF43;
         return true;
@@ -126,9 +138,73 @@ static bool parse_grid_mode(const char *arg, nufft1_mode *mode) {
     return false;
 }
 
+static bool parse_periodogram_method(const char *arg, periodogram_method *method) {
+    if (strcmp(arg, "ihs") == 0) {
+        *method = PERIODOGRAM_IHS;
+        return true;
+    }
+    if (strcmp(arg, "aov") == 0) {
+        *method = PERIODOGRAM_AOV;
+        return true;
+    }
+    if (strcmp(arg, "aovmh") == 0) {
+        *method = PERIODOGRAM_AOVMH;
+        return true;
+    }
+    if (strcmp(arg, "aobmhw") == 0) {
+        *method = PERIODOGRAM_AOBMHW;
+        return true;
+    }
+    if (strcmp(arg, "chi") == 0) {
+        *method = PERIODOGRAM_CHI;
+        return true;
+    }
+    if (strcmp(arg, "chi2") == 0) {
+        *method = PERIODOGRAM_CHI2;
+        return true;
+    }
+    if (strcmp(arg, "fastchi2") == 0) {
+        *method = PERIODOGRAM_FASTCHI2;
+        return true;
+    }
+    return false;
+}
+
+static bool parse_gb_eval(const char *arg, gb_eval_mode *mode, float *gbAlpha) {
+    const char *open = strchr(arg, '[');
+    const char *name_end = open ? open : arg + strlen(arg);
+    size_t name_len = (size_t)(name_end - arg);
+    char name[16];
+    if (name_len == 0 || name_len >= sizeof(name)) return false;
+    memcpy(name, arg, name_len);
+    name[name_len] = '\0';
+
+    if (open) {
+        const char *close = strchr(open + 1, ']');
+        if (!close || close[1] != '\0') return false;
+        errno = 0;
+        char *parse_end = NULL;
+        float parsed_alpha = strtof(open + 1, &parse_end);
+        if (errno != 0 || parse_end != close || !isfinite(parsed_alpha) || parsed_alpha < 0.0f) return false;
+        *gbAlpha = parsed_alpha;
+    }
+
+    if (strcmp(name, "gbls") == 0 || strcmp(name, "gbl") == 0) {
+        *mode = GB_EVAL_GBLS;
+        return true;
+    }
+    if (strcmp(name, "gbas") == 0 || strcmp(name, "gba") == 0) {
+        *mode = GB_EVAL_GBAS;
+        return true;
+    }
+    return false;
+}
+
 // Function to parse command-line arguments into a parameters struct
 static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
+
+    enum { OPT_EPSILON = 0xF9, OPT_NUFFT = 0xFA, OPT_PREWHITEN = 0xFB, OPT_DEBUG = 0xFC, OPT_STRIP = 0xFD, OPT_PACK = 0xFE };
 
     // Define long options
     static ko_longopt_t longopts[] = {// impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
@@ -137,19 +213,25 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"threshold", ko_required_argument, 't'},
                                       {"fmin", ko_required_argument, 'f'},
                                       {"oversampling", ko_required_argument, 'o'},
-                                      {"epsilon", ko_required_argument, 'e'},
+                                      {"epsilon", ko_required_argument, OPT_EPSILON},
+                                      {"eval", ko_required_argument, 'e'},
+                                      {"evaluate", ko_required_argument, 'e'},
                                       {"mode", ko_required_argument, 'm'},
+                                      {"g", ko_required_argument, 'g'},
                                       {"grid", ko_required_argument, 'g'},
+                                      {"nfft", ko_required_argument, OPT_NUFFT},
+                                      {"nufft", ko_required_argument, OPT_NUFFT},
+                                      {"nufft1", ko_required_argument, OPT_NUFFT},
                                       {"jobs", ko_required_argument, 'j'},
                                       {"spectrum", ko_no_argument, 's'},
                                       {"corrected", ko_no_argument, 'c'},  // apply the logarithmic correction, not fully implemented
                                       {"idle", ko_no_argument, 'i'},
                                       {"help", ko_no_argument, 'h'},
-                                      {"prewhiten", ko_no_argument, '\xfb'},
-                                      {"debug", ko_no_argument, '\xfc'},
+                                      {"prewhiten", ko_no_argument, OPT_PREWHITEN},
+                                      {"debug", ko_no_argument, OPT_DEBUG},
                                       // Negative cases, corresponding to long arguments only;
-                                      {"strip", ko_no_argument, '\xfd'},
-                                      {"pack", ko_no_argument, '\xfe'},
+                                      {"strip", ko_no_argument, OPT_STRIP},
+                                      {"pack", ko_no_argument, OPT_PACK},
                                       {NULL, 0, 0}};
 
     // Initialize ketopt, skipping the first two positional arguments
@@ -157,7 +239,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2;  // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:g:sich\xfb\xfc\xfd\xfe", longopts)) != -1) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:g:sich", longopts)) != -1) {
         // printf("argument: %c", c);
         switch (c) {
             case 'o':
@@ -176,7 +258,10 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.fmin = atof(opt.arg);
                 break;
             case 'e':
-                params.epsilon = atof(opt.arg);
+                if (!parse_gb_eval(opt.arg, &params.gbEvalMode, &params.gbAlpha)) {
+                    fprintf(stderr, "Invalid evaluation '%s'. Expected gbls, gbl, gbas, or gba with optional [alpha].\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
                 break;
             case 'j':
                 params.jobs = atoi(opt.arg);
@@ -185,19 +270,32 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.mode = atoi(opt.arg);
                 break;
             case 'g':
-                if (!parse_grid_mode(opt.arg, &params.gridMode)) {
-                    fprintf(stderr, "Invalid grid '%s'. Expected 43, pswf43, 21, or pswf21.\n", opt.arg);
+                if (!parse_periodogram_method(opt.arg, &params.periodogramMethod)) {
+                    fprintf(stderr, "Invalid periodogram method '%s'. Expected ihs, aov, aovmh, aobmhw, chi, chi2, or fastchi2.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                if (params.periodogramMethod != PERIODOGRAM_IHS) {
+                    fprintf(stderr, "Least-squares periodogram method '%s' is not implemented yet.\n", opt.arg);
                     exit(EXIT_FAILURE);
                 }
                 break;
             case 's':
                 params.spectrum = true;
                 break;
-            case '\xfb':
+            case OPT_EPSILON:
+                params.epsilon = atof(opt.arg);
+                break;
+            case OPT_NUFFT:
+                if (!parse_nufft_mode(opt.arg, &params.gridMode)) {
+                    fprintf(stderr, "Invalid NuFFT backend '%s'. Expected 43, pswf43, 21, or pswf21.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                break;
+            case OPT_PREWHITEN:
                 params.prewhiten = true;
                 // printf("Prewhitening\n");
                 break;
-            case '\xfc':
+            case OPT_DEBUG:
                 params.debug = true;
                 break;
             case 'i':
@@ -210,11 +308,11 @@ static parameters read_parameters(int argc, char *argv[]) {
                 print_help(argv);
                 exit(0);
                 break;
-            case '\xfe':
+            case OPT_PACK:
                 print_help(argv);
                 exit(0);
                 break;
-            case '\xfd':
+            case OPT_STRIP:
                 print_help(argv);
                 exit(0);
                 break;

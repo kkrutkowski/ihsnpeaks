@@ -3,6 +3,12 @@
 CC ?= cc
 AR ?= ar
 
+ifeq ($(origin CC),default)
+ifneq ($(origin cc),undefined)
+    CC := $(cc)
+endif
+endif
+
 GCC_MIN_VERSION := 14
 CLANG_MIN_VERSION := 19
 ICX_MIN_VERSION := 2025
@@ -15,7 +21,7 @@ NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
 
-CFLAGS_BASE := -D_GNU_SOURCE -DMI_OVERRIDE=1 -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR)
+CFLAGS_BASE := -D_GNU_SOURCE -DMI_OVERRIDE=1 -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -static
 LDFLAGS_BASE := -Wl,--gc-sections
 LDLIBS := -lm
 
@@ -114,6 +120,7 @@ CFLAGS := $(STDFLAG) $(OPTFLAGS) $(CFLAGS_BASE)
 all: native
 
 check_compiler:
+	@echo "Compiler command: $(CC)"
 	@echo "Compiler: $(CC_VERSION)"
 	@echo "C standard: $(STDFLAG)"
 	@echo "Host machine: $(UNAME_M)"
@@ -128,7 +135,7 @@ $(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
 
 $(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) | $(BUILD_DIR)
-	$(CC) -std=gnu11 -O3 -ffast-math -Wall -Wextra -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native $< $(NUFFT_OBJ) $(LDLIBS) -o $@
+	$(CC) -std=gnu11 -O3 -ffast-math -Wall -Wextra -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
 
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@
