@@ -21,7 +21,16 @@ NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
 
-CFLAGS_BASE := -D_GNU_SOURCE -DMI_OVERRIDE=1 -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -static
+HAS_MIMALLOC := $(shell printf '#include <mimalloc/mimalloc.h>\n' | $(CC) -x c -E - >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(HAS_MIMALLOC),1)
+    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=1 -DMI_OVERRIDE=1
+    ALLOCATOR_NAME := mimalloc
+else
+    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
+    ALLOCATOR_NAME := system
+endif
+
+CFLAGS_BASE := -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -static
 LDFLAGS_BASE := -Wl,--gc-sections
 LDLIBS := -lm
 
@@ -124,6 +133,7 @@ check_compiler:
 	@echo "Compiler: $(CC_VERSION)"
 	@echo "C standard: $(STDFLAG)"
 	@echo "Host machine: $(UNAME_M)"
+	@echo "Allocator: $(ALLOCATOR_NAME)"
 	@echo "x86 dispatch level: $(X86_DISPATCH_LEVEL)"
 	@echo "x86 candidates: x86-64=$(X86_64_SUPPORTED) x86-64-v2=$(X86_64_V2_SUPPORTED) x86-64-v2+avx=$(X86_64_V2_AVX_SUPPORTED) x86-64-v3=$(X86_64_V3_SUPPORTED) x86-64-v4=$(X86_64_V4_SUPPORTED)"
 	@echo "CFLAGS: $(CFLAGS)"

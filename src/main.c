@@ -39,7 +39,14 @@ void *aligned_alloc_fallback(size_t alignment, size_t size) {
 }
 
 #include <klib/kthread.h>
-#include <mimalloc/mimalloc.h>
+
+#ifndef HAS_MIMALLOC
+#    define HAS_MIMALLOC 0
+#endif
+
+#if HAS_MIMALLOC
+#    include <mimalloc/mimalloc.h>
+#endif
 
 #include "metadata.h"
 #include "params.h"
