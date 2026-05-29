@@ -1,6 +1,7 @@
 #ifndef FTEST_H
 
 #    include <fdist.h>
+#    include <math.h>
 #    include <stddef.h>
 #    include <stdint.h>
 #    include <stdio.h>
@@ -17,9 +18,16 @@ static inline double corr(int r) {
 }
 
 static inline double clamp_gbls_scale(double scale) {
-    if (scale < 0.25) return 0.25;
-    if (scale > 4.0) return 4.0;
-    return scale;
+    double range = 4.0;
+
+    // Brute-force approach. Not used since sharp edges negatively affect final interpolation step.
+    // if (scale < 1.0 / range) return 1.0 / range; if (scale > range) return range;
+    // return scale;
+
+    // let's use tanh() here instead
+    double logrange = log2(range);
+    double arg = log2(scale) / logrange;
+    return pow(2.0, tanh(arg) * logrange);
 }
 
 static inline int32_t wrapidx(int32_t idx, int32_t n) {
