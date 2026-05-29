@@ -15,24 +15,61 @@ ICX_MIN_VERSION := 2025
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 BUILD_DIR := $(MAKEFILE_DIR)build/native
+MIMALLOC_COMPAT_DIR := $(BUILD_DIR)/compat
+MIMALLOC_COMPAT_HEADER := $(MIMALLOC_COMPAT_DIR)/mimalloc/mimalloc.h
 NUFFT_SRC := $(MAKEFILE_DIR)src/nufft/nufft1.c
 NUFFT_HDR := $(MAKEFILE_DIR)src/nufft/nufft1.h
 NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
 
-HAS_MIMALLOC := $(shell printf '#include <mimalloc/mimalloc.h>\n' | $(CC) -x c -E - >/dev/null 2>&1 && echo 1 || echo 0)
-ifeq ($(HAS_MIMALLOC),1)
-    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=1 -DMI_OVERRIDE=1
-    ALLOCATOR_NAME := mimalloc
+MIMALLOC_NESTED_HEADER := $(shell printf '#include <mimalloc/mimalloc.h>\n' | $(CC) -x c -E - >/dev/null 2>&1 && echo 1 || echo 0)
+MIMALLOC_FLAT_HEADER := $(shell printf '#include <mimalloc.h>\n' | $(CC) -x c -E - >/dev/null 2>&1 && echo 1 || echo 0)
+MIMALLOC_STATIC_LINK := $(shell printf '#include <mimalloc.h>\nint main(void){void *p=mi_malloc(16); mi_free(p); return 0;}\n' | $(CC) -x c - -static -lmimalloc -o /tmp/ihsnpeaks_mimalloc_static_probe >/dev/null 2>&1 && echo 1 || echo 0)
+MIMALLOC_DYNAMIC_LINK := $(shell printf '#include <mimalloc.h>\nint main(void){void *p=mi_malloc(16); mi_free(p); return 0;}\n' | $(CC) -x c - -lmimalloc -o /tmp/ihsnpeaks_mimalloc_dynamic_probe >/dev/null 2>&1 && echo 1 || echo 0)
+
+HAS_MIMALLOC_HEADER := 0
+MIMALLOC_HEADER_CFLAGS :=
+MIMALLOC_HEADER_DEP :=
+ifeq ($(MIMALLOC_NESTED_HEADER),1)
+    HAS_MIMALLOC_HEADER := 1
 else
-    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
+    ifeq ($(MIMALLOC_FLAT_HEADER),1)
+        HAS_MIMALLOC_HEADER := 1
+        MIMALLOC_HEADER_CFLAGS := -I$(MIMALLOC_COMPAT_DIR)
+        MIMALLOC_HEADER_DEP := $(MIMALLOC_COMPAT_HEADER)
+    endif
+endif
+
+HAS_MIMALLOC := 0
+ALLOCATOR_LDLIBS :=
+STATIC_LDFLAGS := -static
+ifeq ($(HAS_MIMALLOC_HEADER),1)
+    ifeq ($(MIMALLOC_STATIC_LINK),1)
+        HAS_MIMALLOC := 1
+        ALLOCATOR_LDLIBS := -lmimalloc
+        ALLOCATOR_NAME := mimalloc static
+    else ifeq ($(MIMALLOC_DYNAMIC_LINK),1)
+        HAS_MIMALLOC := 1
+        ALLOCATOR_LDLIBS := -lmimalloc
+        STATIC_LDFLAGS :=
+        ALLOCATOR_NAME := mimalloc dynamic
+    else
+        ALLOCATOR_NAME := system
+    endif
+else
     ALLOCATOR_NAME := system
 endif
 
-CFLAGS_BASE := -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -static
+ifeq ($(HAS_MIMALLOC),1)
+    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=1 -DMI_OVERRIDE=1 $(MIMALLOC_HEADER_CFLAGS)
+else
+    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
+endif
+
+CFLAGS_BASE := -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR)
 LDFLAGS_BASE := -Wl,--gc-sections
-LDLIBS := -lm
+LDLIBS := -lm $(ALLOCATOR_LDLIBS)
 
 CC_RESOLVED := $(shell readlink -f $(shell command -v $(CC) 2>/dev/null) 2>/dev/null || command -v $(CC) 2>/dev/null)
 CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n 1)
@@ -141,6 +178,10 @@ check_compiler:
 $(BUILD_DIR):
 	@mkdir -p $@
 
+$(MIMALLOC_COMPAT_HEADER): | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	@printf '#include <mimalloc.h>\n' > $@
+
 $(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
 
@@ -150,9 +191,9 @@ $(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) | $
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@
 
-native: $(NUFFT_OBJ) $(SCALING_HEADER)
+native: $(NUFFT_OBJ) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP)
 	@echo "Compiling ihsnpeaks with PSWF NuFFT"
-	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
+	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(STATIC_LDFLAGS) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
 	strip -s ihsnpeaks
 	@echo "Compilation complete"
 
