@@ -2,6 +2,7 @@
 
 CC ?= cc
 AR ?= ar
+MIMALLOC ?= 0
 
 ifeq ($(origin CC),default)
 ifneq ($(origin cc),undefined)
@@ -14,31 +15,48 @@ CLANG_MIN_VERSION := 19
 ICX_MIN_VERSION := 2025
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-BUILD_DIR := $(MAKEFILE_DIR)build/native
+ALLOCATOR_BUILD := system
+ifeq ($(MIMALLOC),1)
+    ALLOCATOR_BUILD := mimalloc
+endif
+BUILD_DIR := $(MAKEFILE_DIR)build/native/$(ALLOCATOR_BUILD)
 MIMALLOC_COMPAT_DIR := $(BUILD_DIR)/compat
 MIMALLOC_COMPAT_HEADER := $(MIMALLOC_COMPAT_DIR)/mimalloc/mimalloc.h
+MIMALLOC_OVERRIDE_HEADER := $(MIMALLOC_COMPAT_DIR)/ihsnpeaks-mimalloc-override.h
 NUFFT_SRC := $(MAKEFILE_DIR)src/nufft/nufft1.c
 NUFFT_HDR := $(MAKEFILE_DIR)src/nufft/nufft1.h
 NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
 
-MIMALLOC_NESTED_HEADER := $(shell printf '#include <mimalloc/mimalloc.h>\n' | $(CC) -x c -E - >/dev/null 2>&1 && echo 1 || echo 0)
-MIMALLOC_FLAT_HEADER := $(shell printf '#include <mimalloc.h>\n' | $(CC) -x c -E - >/dev/null 2>&1 && echo 1 || echo 0)
-MIMALLOC_STATIC_LINK := $(shell printf '#include <mimalloc.h>\nint main(void){void *p=mi_malloc(16); mi_free(p); return 0;}\n' | $(CC) -x c - -static -lmimalloc -o /tmp/ihsnpeaks_mimalloc_static_probe >/dev/null 2>&1 && echo 1 || echo 0)
-MIMALLOC_DYNAMIC_LINK := $(shell printf '#include <mimalloc.h>\nint main(void){void *p=mi_malloc(16); mi_free(p); return 0;}\n' | $(CC) -x c - -lmimalloc -o /tmp/ihsnpeaks_mimalloc_dynamic_probe >/dev/null 2>&1 && echo 1 || echo 0)
+ifeq ($(MIMALLOC),1)
+MIMALLOC_HEADER_PATH := $(shell for d in /usr/local/include /usr/include "$$HOME/include"; do [ -d "$$d" ] || continue; p=$$(find "$$d" -maxdepth 3 -type f -name mimalloc.h -print -quit 2>/dev/null); if [ -n "$$p" ]; then printf '%s\n' "$$p"; break; fi; done)
+MIMALLOC_STATIC_LIB := $(shell for d in /usr/local/lib /usr/lib "$$HOME/lib"; do [ -d "$$d" ] || continue; p=$$(find "$$d" -maxdepth 4 -type f -name libmimalloc.a -print -quit 2>/dev/null); if [ -n "$$p" ]; then printf '%s\n' "$$p"; break; fi; done)
+MIMALLOC_DYNAMIC_LIB := $(shell for d in /usr/local/lib /usr/lib "$$HOME/lib"; do [ -d "$$d" ] || continue; p=$$(find "$$d" -maxdepth 4 -type f -name libmimalloc.so -print -quit 2>/dev/null); [ -n "$$p" ] || p=$$(find "$$d" -maxdepth 4 -type l -name libmimalloc.so -print -quit 2>/dev/null); [ -n "$$p" ] || p=$$(find "$$d" -maxdepth 4 -type f -name 'libmimalloc.so.*' -print -quit 2>/dev/null); [ -n "$$p" ] || p=$$(find "$$d" -maxdepth 4 -type l -name 'libmimalloc.so.*' -print -quit 2>/dev/null); if [ -n "$$p" ]; then printf '%s\n' "$$p"; break; fi; done)
+MIMALLOC_HEADER_DIR := $(shell h='$(MIMALLOC_HEADER_PATH)'; if [ -n "$$h" ]; then if [ "$$h" != "$${h%/mimalloc/mimalloc.h}" ]; then printf '%s\n' "$${h%/mimalloc/mimalloc.h}"; elif [ "$$h" != "$${h%/mimalloc.h}" ]; then printf '%s\n' "$${h%/mimalloc.h}"; fi; fi)
+MIMALLOC_HEADER_STYLE := $(shell h='$(MIMALLOC_HEADER_PATH)'; if [ -n "$$h" ]; then if [ "$$h" != "$${h%/mimalloc/mimalloc.h}" ]; then printf nested; elif [ "$$h" != "$${h%/mimalloc.h}" ]; then printf flat; fi; fi)
+MIMALLOC_DYNAMIC_LIB_DIR := $(dir $(MIMALLOC_DYNAMIC_LIB))
 
 HAS_MIMALLOC_HEADER := 0
 MIMALLOC_HEADER_CFLAGS :=
 MIMALLOC_HEADER_DEP :=
-ifeq ($(MIMALLOC_NESTED_HEADER),1)
+ifeq ($(MIMALLOC_HEADER_STYLE),nested)
     HAS_MIMALLOC_HEADER := 1
-else
-    ifeq ($(MIMALLOC_FLAT_HEADER),1)
-        HAS_MIMALLOC_HEADER := 1
-        MIMALLOC_HEADER_CFLAGS := -I$(MIMALLOC_COMPAT_DIR)
-        MIMALLOC_HEADER_DEP := $(MIMALLOC_COMPAT_HEADER)
-    endif
+    MIMALLOC_HEADER_CFLAGS := -I$(MIMALLOC_HEADER_DIR)
+    MIMALLOC_HEADER_DEP := $(MIMALLOC_OVERRIDE_HEADER)
+else ifeq ($(MIMALLOC_HEADER_STYLE),flat)
+    HAS_MIMALLOC_HEADER := 1
+    MIMALLOC_HEADER_CFLAGS := -I$(MIMALLOC_COMPAT_DIR) -I$(MIMALLOC_HEADER_DIR)
+    MIMALLOC_HEADER_DEP := $(MIMALLOC_COMPAT_HEADER) $(MIMALLOC_OVERRIDE_HEADER)
+endif
+
+MIMALLOC_STATIC_LINK := 0
+ifneq ($(strip $(MIMALLOC_STATIC_LIB)),)
+    MIMALLOC_STATIC_LINK := $(shell printf '#include <mimalloc.h>\nint main(void){void *p=mi_malloc(16); mi_free(p); return 0;}\n' | $(CC) $(MIMALLOC_HEADER_CFLAGS) -x c - -x none -static $(MIMALLOC_STATIC_LIB) -o /tmp/ihsnpeaks_mimalloc_static_probe >/dev/null 2>&1 && echo 1 || echo 0)
+endif
+MIMALLOC_DYNAMIC_LINK := 0
+ifneq ($(strip $(MIMALLOC_DYNAMIC_LIB)),)
+    MIMALLOC_DYNAMIC_LINK := $(shell printf '#include <mimalloc.h>\nint main(void){void *p=mi_malloc(16); mi_free(p); return 0;}\n' | $(CC) $(MIMALLOC_HEADER_CFLAGS) -x c - -x none -L$(MIMALLOC_DYNAMIC_LIB_DIR) -lmimalloc -o /tmp/ihsnpeaks_mimalloc_dynamic_probe >/dev/null 2>&1 && echo 1 || echo 0)
 endif
 
 HAS_MIMALLOC := 0
@@ -47,11 +65,11 @@ STATIC_LDFLAGS := -static
 ifeq ($(HAS_MIMALLOC_HEADER),1)
     ifeq ($(MIMALLOC_STATIC_LINK),1)
         HAS_MIMALLOC := 1
-        ALLOCATOR_LDLIBS := -lmimalloc
+        ALLOCATOR_LDLIBS := $(MIMALLOC_STATIC_LIB)
         ALLOCATOR_NAME := mimalloc static
     else ifeq ($(MIMALLOC_DYNAMIC_LINK),1)
         HAS_MIMALLOC := 1
-        ALLOCATOR_LDLIBS := -lmimalloc
+        ALLOCATOR_LDLIBS := -L$(MIMALLOC_DYNAMIC_LIB_DIR) -lmimalloc
         STATIC_LDFLAGS :=
         ALLOCATOR_NAME := mimalloc dynamic
     else
@@ -60,9 +78,18 @@ ifeq ($(HAS_MIMALLOC_HEADER),1)
 else
     ALLOCATOR_NAME := system
 endif
+else
+HAS_MIMALLOC_HEADER := 0
+MIMALLOC_HEADER_CFLAGS :=
+MIMALLOC_HEADER_DEP :=
+HAS_MIMALLOC := 0
+ALLOCATOR_LDLIBS :=
+STATIC_LDFLAGS := -static
+ALLOCATOR_NAME := system
+endif
 
 ifeq ($(HAS_MIMALLOC),1)
-    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=1 -DMI_OVERRIDE=1 $(MIMALLOC_HEADER_CFLAGS)
+    ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=1 $(MIMALLOC_HEADER_CFLAGS) -include $(MIMALLOC_OVERRIDE_HEADER)
 else
     ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
 endif
@@ -182,7 +209,11 @@ $(MIMALLOC_COMPAT_HEADER): | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@printf '#include <mimalloc.h>\n' > $@
 
-$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) | $(BUILD_DIR)
+$(MIMALLOC_OVERRIDE_HEADER): $(MIMALLOC_COMPAT_HEADER) | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	@printf '#ifndef IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#define IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#include <mimalloc/mimalloc.h>\n#define malloc(n) mi_malloc(n)\n#define calloc(c,n) mi_calloc(c,n)\n#define realloc(p,n) mi_realloc(p,n)\n#define free(p) mi_free(p)\n#define strdup(s) mi_strdup(s)\n#define strndup(s,n) mi_strndup(s,n)\n#define realpath(f,n) mi_realpath(f,n)\n#define aligned_alloc(a,n) mi_aligned_alloc(a,n)\n#define posix_memalign(p,a,n) mi_posix_memalign(p,a,n)\n#define reallocarray(p,c,n) mi_reallocarray(p,c,n)\n#endif\n' > $@
+
+$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(MIMALLOC_HEADER_DEP) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
 
 $(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) | $(BUILD_DIR)
