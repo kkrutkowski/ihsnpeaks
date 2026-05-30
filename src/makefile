@@ -1,8 +1,13 @@
 .PHONY: debug native clean
 
 CC ?= gcc
+MIMALLOC ?= 0
 ROOT := ..
-BUILD_DIR := $(ROOT)/build/native
+ALLOCATOR_BUILD := system
+ifeq ($(MIMALLOC),1)
+    ALLOCATOR_BUILD := mimalloc
+endif
+BUILD_DIR := $(ROOT)/build/native/$(ALLOCATOR_BUILD)
 NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
 

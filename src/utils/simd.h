@@ -4,6 +4,8 @@
 #include <math.h>
 #include <stdint.h>
 
+#include "trig.h"
+
 #ifndef VEC_BYTES
 #    ifdef __AVX512F__
 #        define VEC_BYTES 64
@@ -43,104 +45,6 @@ typedef union {
 #define SET_VEC(val) ((VEC){.data = (vecf_data){} + (float)(val)})
 #define SET_DVEC(val) ((DVEC){.data = (vecd_data){} + (double)(val)})
 #define SET_IVEC(val) ((IVEC){.data = (veci_data){} + (int32_t)(val)})
-
-static inline VEC vec_blend(const veci_data mask, const VEC when_true, const VEC when_false) {
-    union {
-        vecf_data f;
-        veci_data i;
-    } t = {.f = when_true.data}, f = {.f = when_false.data}, out;
-    out.i = f.i ^ (mask & (f.i ^ t.i));
-    return (VEC){.data = out.f};
-}
-
-static inline VEC vec_trunc_ps(const VEC x) {
-    IVEC truncated;
-    truncated.data = __builtin_convertvector(x.data, veci_data);
-    return (VEC){.data = __builtin_convertvector(truncated.data, vecf_data)};
-}
-
-static inline float sin2pif_tls(float x) {
-    float f = x - (float)((int)x);
-    if (f < 0.0f) f += 1.0f;
-    float sign = 1.0f;
-    if (f >= 0.5f) {
-        sign = -1.0f;
-        f -= 0.5f;
-    }
-    if (f > 0.25f) f = 0.5f - f;
-    float f2 = f * f;
-    float p = f2 * 39.536706065730207835108712734262f - 76.549782293595742666226937116116f;
-    p = p * f2 + 81.601004073261773523492199897936f;
-    p = p * f2 - 41.341655031416278077153126232486f;
-    p = p * f2 + 6.2831851600894774430188071795666f;
-    p *= f;
-    return p * sign;
-}
-
-static inline float cos2pif_tls(float x) {
-    float f = x - (float)((int)x);
-    if (f < 0.0f) f += 1.0f;
-    if (f > 0.5f) f = 1.0f - f;
-    float sign = 1.0f;
-    if (f > 0.25f) {
-        sign = -1.0f;
-        f = 0.5f - f;
-    }
-    float f2 = f * f;
-    float p = f2 * 56.242380464873243259663276802701f - 85.240330322699427859509454517828f;
-    p = p * f2 + 64.934590626780991246193352727536f;
-    p = p * f2 - 19.739171434702393618770795066531f;
-    p = p * f2 + 0.99999995346667013630639784578184f;
-    return p * sign;
-}
-
-static inline VEC sin_2pi_ps(const VEC x) {
-    const VEC zero = SET_VEC(0.0f);
-    const VEC one = SET_VEC(1.0f);
-    const VEC half = SET_VEC(0.5f);
-    const VEC quarter = SET_VEC(0.25f);
-    const VEC minus_one = SET_VEC(-1.0f);
-
-    VEC f = {.data = x.data - vec_trunc_ps(x).data};
-    f = vec_blend(f.data < zero.data, (VEC){.data = f.data + one.data}, f);
-
-    VEC sign = one;
-    veci_data ge_half = f.data >= half.data;
-    sign = vec_blend(ge_half, minus_one, sign);
-    f = vec_blend(ge_half, (VEC){.data = f.data - half.data}, f);
-    f = vec_blend(f.data > quarter.data, (VEC){.data = half.data - f.data}, f);
-
-    VEC f2 = {.data = f.data * f.data};
-    VEC p = {.data = f2.data * SET_VEC(39.536706065730207835108712734262f).data - SET_VEC(76.549782293595742666226937116116f).data};
-    p.data = p.data * f2.data + SET_VEC(81.601004073261773523492199897936f).data;
-    p.data = p.data * f2.data - SET_VEC(41.341655031416278077153126232486f).data;
-    p.data = p.data * f2.data + SET_VEC(6.2831851600894774430188071795666f).data;
-    return (VEC){.data = p.data * f.data * sign.data};
-}
-
-static inline VEC cos_2pi_ps(const VEC x) {
-    const VEC zero = SET_VEC(0.0f);
-    const VEC one = SET_VEC(1.0f);
-    const VEC half = SET_VEC(0.5f);
-    const VEC quarter = SET_VEC(0.25f);
-    const VEC minus_one = SET_VEC(-1.0f);
-
-    VEC f = {.data = x.data - vec_trunc_ps(x).data};
-    f = vec_blend(f.data < zero.data, (VEC){.data = f.data + one.data}, f);
-    f = vec_blend(f.data > half.data, (VEC){.data = one.data - f.data}, f);
-
-    VEC sign = one;
-    veci_data gt_quarter = f.data > quarter.data;
-    sign = vec_blend(gt_quarter, minus_one, sign);
-    f = vec_blend(gt_quarter, (VEC){.data = half.data - f.data}, f);
-
-    VEC f2 = {.data = f.data * f.data};
-    VEC p = {.data = f2.data * SET_VEC(56.242380464873243259663276802701f).data - SET_VEC(85.240330322699427859509454517828f).data};
-    p.data = p.data * f2.data + SET_VEC(64.934590626780991246193352727536f).data;
-    p.data = p.data * f2.data - SET_VEC(19.739171434702393618770795066531f).data;
-    p.data = p.data * f2.data + SET_VEC(0.99999995346667013630639784578184f).data;
-    return (VEC){.data = p.data * sign.data};
-}
 
 static inline VEC ln_ps(const VEC x) {
     const IVEC mant_mask = SET_IVEC(0x807FFFFF);

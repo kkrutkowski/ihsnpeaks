@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../utils/trig.h"
 #include "nufft1.h"
 
 #ifndef M_PI
@@ -58,41 +59,6 @@ static inline int bitceil_int(unsigned int n) {
 }
 
 static int next_fast_len(int n) { return bitceil_int((unsigned int)n); }
-
-static inline float sin2pif_tls(float x) {
-    float f = x - (float)((int)x);
-    if (f < 0.0f) f += 1.0f;
-    float sign = 1.0f;
-    if (f >= 0.5f) {
-        sign = -1.0f;
-        f -= 0.5f;
-    }
-    if (f > 0.25f) f = 0.5f - f;
-    float f2 = f * f;
-    float p = f2 * 39.536706065730207835108712734262f - 76.549782293595742666226937116116f;
-    p = p * f2 + 81.601004073261773523492199897936f;
-    p = p * f2 - 41.341655031416278077153126232486f;
-    p = p * f2 + 6.2831851600894774430188071795666f;
-    p *= f;
-    return p * sign;
-}
-
-static inline float cos2pif_tls(float x) {
-    float f = x - (float)((int)x);
-    if (f < 0.0f) f += 1.0f;
-    if (f > 0.5f) f = 1.0f - f;
-    float sign = 1.0f;
-    if (f > 0.25f) {
-        sign = -1.0f;
-        f = 0.5f - f;
-    }
-    float f2 = f * f;
-    float p = f2 * 56.242380464873243259663276802701f - 85.240330322699427859509454517828f;
-    p = p * f2 + 64.934590626780991246193352727536f;
-    p = p * f2 - 19.739171434702393618770795066531f;
-    p = p * f2 + 0.99999995346667013630639784578184f;
-    return p * sign;
-}
 
 static inline VECF vecf_exp_tls(VECF v) {
     VECF y = v * ((VECF){} + 1.4426950408889634f);
@@ -486,6 +452,9 @@ struct nufft1_plan {
 
 struct nufft1_workspace {
     const nufft1_plan *plan;
+    int capacity_mpoints;
+    int capacity_factors;
+    int capacity_spread_stride;
     int active_mpoints;
     int *spread_base_idx;
     float *spread_weight;
@@ -649,6 +618,9 @@ nufft1_workspace *nufft1_create_workspace(const nufft1_plan *plan, float *fft_re
     nufft1_workspace *workspace = (nufft1_workspace *)calloc(1, sizeof(*workspace));
     if (!workspace) return NULL;
     workspace->plan = plan;
+    workspace->capacity_mpoints = plan->Mpoints;
+    workspace->capacity_factors = plan->num_factors;
+    workspace->capacity_spread_stride = plan->spread_stride;
     workspace->fft_real = fft_real;
     workspace->fft_imag = fft_imag;
     workspace->cobra_real = cobra_real;
@@ -662,6 +634,17 @@ nufft1_workspace *nufft1_create_workspace(const nufft1_plan *plan, float *fft_re
         return NULL;
     }
     return workspace;
+}
+
+int nufft1_workspace_set_plan(nufft1_workspace *workspace, const nufft1_plan *plan) {
+    if (!workspace || !plan) return NUFFT1_UTIL_ERR_ARGUMENT;
+    if (plan->Mpoints > workspace->capacity_mpoints || plan->num_factors > workspace->capacity_factors ||
+        plan->spread_stride > workspace->capacity_spread_stride) {
+        return NUFFT1_UTIL_ERR_ARGUMENT;
+    }
+    workspace->plan = plan;
+    workspace->active_mpoints = 0;
+    return NUFFT1_UTIL_OK;
 }
 
 void nufft1_precompute(nufft1_workspace *workspace, const double *x, int Mpoints, double df) {

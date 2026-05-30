@@ -81,6 +81,23 @@ static uint32_t estimate_frequency_count(const parameters *params, double time_s
 
 static int pswf_backend(nufft1_mode mode) { return mode == NUFFT1_PSWF21 ? 2 : 1; }
 
+static uint32_t nufft_output_len_for_grid(uint32_t grid_len, nufft1_mode mode) {
+    return mode == NUFFT1_PSWF43 ? (uint32_t)nufft1_pswf43_output_len_for_plan((int)grid_len) : grid_len;
+}
+
+static void free_nufft_plan_cache(parameters *params) {
+    if (!params || !params->nufftPlanCache) return;
+    for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
+        nufft1_free_plan(params->nufftPlanCache[i].plan);
+        free(params->nufftPlanCache[i].twiddleReal);
+        free(params->nufftPlanCache[i].twiddleImag);
+    }
+    free(params->nufftPlanCache);
+    params->nufftPlanCache = NULL;
+    params->nufftPlanCount = 0;
+    params->nufftExternalSizes = (nufft1_external_sizes){0};
+}
+
 static void initialize_nufft_plan(parameters *params) {
     double beta = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_BETA : F_PSWF43_BETA;
     double gamma = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_GAMMA : F_PSWF43_GAMMA;
@@ -94,24 +111,50 @@ static void initialize_nufft_plan(parameters *params) {
     if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
 
     params->gridLen = (uint32_t)base_len;
-    params->outputLen = params->gridMode == NUFFT1_PSWF43 ? (uint32_t)nufft1_pswf43_output_len_for_plan(base_len) : (uint32_t)base_len;
+    params->outputLen = nufft_output_len_for_grid(params->gridLen, params->gridMode);
     params->ladderLevels = (uint32_t)nufft1_twiddle_ladder_levels((int)params->maxFreqCount, (int)params->outputLen);
     if (params->ladderLevels > 8U) params->ladderLevels = 8U;
     if (params->ladderLevels == 0U) params->ladderLevels = 1U;
 
     params->nufftExternalSizes = nufft1_external_sizes_for_plan((int)params->gridLen, params->gridMode);
-    params->nufftTwiddleReal = aligned_alloc(64, round_metadata_alloc(params->nufftExternalSizes.twiddle_len * sizeof(float)));
-    params->nufftTwiddleImag = aligned_alloc(64, round_metadata_alloc(params->nufftExternalSizes.twiddle_len * sizeof(float)));
-    if (!params->nufftTwiddleReal || !params->nufftTwiddleImag) {
-        fprintf(stderr, "Failed to allocate shared NuFFT twiddles\n");
+    int nufft_factors = periodogram_uses_aov(params->periodogramMethod) ? 2 * params->nterms : params->nterms;
+
+    uint32_t plan_count = 0;
+    for (uint32_t len = 1U << 8; len < params->gridLen; len <<= 1U) ++plan_count;
+    ++plan_count;
+
+    params->nufftPlanCache = calloc(plan_count, sizeof(*params->nufftPlanCache));
+    if (!params->nufftPlanCache) {
+        fprintf(stderr, "Failed to allocate shared NuFFT plan cache\n");
         exit(EXIT_FAILURE);
     }
-    int nufft_factors = periodogram_uses_aov(params->periodogramMethod) ? 2 * params->nterms : params->nterms;
-    params->nufftPlan = nufft1_initialize_shared((int)params->maxLen, (int)params->gridLen, nufft_factors, params->gridMode, params->nufftTwiddleReal,
-                                                 params->nufftTwiddleImag);
-    if (!params->nufftPlan) {
-        fprintf(stderr, "Failed to initialize shared NuFFT plan\n");
-        exit(EXIT_FAILURE);
+
+    uint32_t idx = 0;
+    for (uint32_t len = 1U << 8; len < params->gridLen; len <<= 1U) {
+        params->nufftPlanCache[idx++].gridLen = len;
+    }
+    params->nufftPlanCache[idx++].gridLen = params->gridLen;
+    params->nufftPlanCount = idx;
+
+    for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
+        nufft_plan_cache_entry_t *entry = &params->nufftPlanCache[i];
+        if (params->gridMode == NUFFT1_PSWF43) entry->gridLen = (uint32_t)nufft1_pswf43_plan_len_from_base((int)entry->gridLen);
+        entry->outputLen = nufft_output_len_for_grid(entry->gridLen, params->gridMode);
+        entry->externalSizes = nufft1_external_sizes_for_plan((int)entry->gridLen, params->gridMode);
+        entry->twiddleReal = aligned_alloc(64, round_metadata_alloc(entry->externalSizes.twiddle_len * sizeof(float)));
+        entry->twiddleImag = aligned_alloc(64, round_metadata_alloc(entry->externalSizes.twiddle_len * sizeof(float)));
+        if (!entry->twiddleReal || !entry->twiddleImag) {
+            fprintf(stderr, "Failed to allocate shared NuFFT twiddles\n");
+            free_nufft_plan_cache(params);
+            exit(EXIT_FAILURE);
+        }
+        entry->plan =
+            nufft1_initialize_shared((int)params->maxLen, (int)entry->gridLen, nufft_factors, params->gridMode, entry->twiddleReal, entry->twiddleImag);
+        if (!entry->plan) {
+            fprintf(stderr, "Failed to initialize shared NuFFT plan\n");
+            free_nufft_plan_cache(params);
+            exit(EXIT_FAILURE);
+        }
     }
 }
 

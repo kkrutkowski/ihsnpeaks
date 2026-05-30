@@ -101,6 +101,13 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
     buffer->terms = params->nterms;
     buffer->maxFreqCount = params->maxFreqCount;
     buffer->paddedLen = (uint32_t)(((size_t)params->maxLen + (size_t)VEC_LEN - 1U) & ~((size_t)VEC_LEN - 1U));
+    uint32_t max_plan_idx = params->nufftPlanCount > 0U ? params->nufftPlanCount - 1U : 0U;
+    if (params->nufftPlanCount > 0U) {
+        buffer->activePlanIndex = max_plan_idx;
+        buffer->activeGridLen = params->nufftPlanCache[max_plan_idx].gridLen;
+        buffer->activeOutputLen = params->nufftPlanCache[max_plan_idx].outputLen;
+        buffer->activeLadderLevels = params->ladderLevels;
+    }
     buffer->spectrum = sdsempty();
     buffer->outBuf = sdsempty();
     if (!buffer->x) {
@@ -148,7 +155,7 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->inputImag = aligned_alloc(64, round_buffer((size_t)buffer->paddedLen * sizeof(float)));
     }
     if (!buffer->inputImag) goto error;
-    size_t ladder_len = (size_t)params->ladderLevels * (size_t)buffer->paddedLen;
+    size_t ladder_len = (size_t)NUFFT_LADDER_LEVEL_CAP * (size_t)buffer->paddedLen;
     if (!buffer->workReal) {
         buffer->workReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
     }
@@ -182,7 +189,9 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
     }
     if (!buffer->cobraImag) goto error;
     if (!buffer->nufftWorkspace) {
-        buffer->nufftWorkspace = nufft1_create_workspace(params->nufftPlan, buffer->fftReal, buffer->fftImag, buffer->cobraReal, buffer->cobraImag);
+        if (params->nufftPlanCount == 0U) goto error;
+        buffer->nufftWorkspace =
+            nufft1_create_workspace(params->nufftPlanCache[max_plan_idx].plan, buffer->fftReal, buffer->fftImag, buffer->cobraReal, buffer->cobraImag);
     }
     if (!buffer->nufftWorkspace) goto error;
     if (params->prewhiten) {

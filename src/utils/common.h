@@ -102,6 +102,17 @@ typedef struct {
     float r2;
 } peak_t;
 
+enum { NUFFT_LADDER_LEVEL_CAP = 8U };
+
+typedef struct {
+    uint32_t gridLen;
+    uint32_t outputLen;
+    nufft1_external_sizes externalSizes;
+    nufft1_plan* plan;
+    float* twiddleReal;
+    float* twiddleImag;
+} nufft_plan_cache_entry_t;
+
 typedef struct {
     bool allocated;
     uint8_t loc_iter;
@@ -144,6 +155,10 @@ typedef struct {
     float* cobraReal;
     float* cobraImag;
     nufft1_workspace* nufftWorkspace;
+    uint32_t activePlanIndex;
+    uint32_t activeGridLen;
+    uint32_t activeOutputLen;
+    uint32_t activeLadderLevels;
 
     sds spectrum;
     sds outBuf;
@@ -211,9 +226,8 @@ typedef struct {
     double maxTimeSpan;
     nufft1_mode gridMode;
     nufft1_external_sizes nufftExternalSizes;
-    nufft1_plan* nufftPlan;
-    float* nufftTwiddleReal;
-    float* nufftTwiddleImag;
+    nufft_plan_cache_entry_t* nufftPlanCache;
+    uint32_t nufftPlanCount;
 
     kvec_target_t targets;
 

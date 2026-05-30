@@ -30,6 +30,40 @@ static inline uint32_t target_frequency_count(const parameters *params, double f
     return (uint32_t)floor(((double)params->fmax - fmin) / fstep) + 1U;
 }
 
+static inline bool activate_target_nufft_plan(buffer_t *buffer, const parameters *params, uint32_t nfreq) {
+    if (!buffer || !params || params->nufftPlanCount == 0U || !buffer->nufftWorkspace) return false;
+
+    double beta = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_BETA : F_PSWF43_BETA;
+    double gamma = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_GAMMA : F_PSWF43_GAMMA;
+    int plan_degree = periodogram_uses_aov(params->periodogramMethod) ? params->nterms : 0;
+    int target_nfreq = nfreq > 0U ? (int)nfreq : 1;
+    int base_len = nufft1_optimize_plan_size(target_nfreq, (int)buffer->n, plan_degree, F_ALPHA, beta, gamma, pswf_backend(params->gridMode));
+    if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
+    if (base_len < (1 << 8)) base_len = 1 << 8;
+    if ((uint32_t)base_len > params->gridLen) base_len = (int)params->gridLen;
+    if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
+    if ((uint32_t)base_len > params->gridLen) base_len = (int)params->gridLen;
+
+    uint32_t plan_idx = params->nufftPlanCount - 1U;
+    for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
+        if (params->nufftPlanCache[i].gridLen >= (uint32_t)base_len) {
+            plan_idx = i;
+            break;
+        }
+    }
+
+    const nufft_plan_cache_entry_t *entry = &params->nufftPlanCache[plan_idx];
+    if (nufft1_workspace_set_plan(buffer->nufftWorkspace, entry->plan) != NUFFT1_UTIL_OK) return false;
+
+    buffer->activePlanIndex = plan_idx;
+    buffer->activeGridLen = entry->gridLen;
+    buffer->activeOutputLen = entry->outputLen;
+    buffer->activeLadderLevels = (uint32_t)nufft1_twiddle_ladder_levels(target_nfreq, (int)entry->outputLen);
+    if (buffer->activeLadderLevels > NUFFT_LADDER_LEVEL_CAP) buffer->activeLadderLevels = NUFFT_LADDER_LEVEL_CAP;
+    if (buffer->activeLadderLevels == 0U) buffer->activeLadderLevels = 1U;
+    return true;
+}
+
 static inline void fill_complex_input(buffer_t *buffer, double base_freq, double freq_factor) {
     uint32_t i = 0;
     for (; i < buffer->n; ++i) {
@@ -43,10 +77,10 @@ static inline void fill_complex_input(buffer_t *buffer, double base_freq, double
     }
 }
 
-static inline void fill_twiddle_ladder(buffer_t *buffer, const parameters *params, double fstep, double freq_factor) {
-    for (uint32_t level = 0; level < params->ladderLevels; ++level) {
+static inline void fill_twiddle_ladder(buffer_t *buffer, double fstep, double freq_factor) {
+    for (uint32_t level = 0; level < buffer->activeLadderLevels; ++level) {
         size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-        double advance = nufft1_twiddle_ladder_advance((int)params->outputLen, (int)level);
+        double advance = nufft1_twiddle_ladder_advance((int)buffer->activeOutputLen, (int)level);
         uint32_t i = 0;
         for (; i < buffer->n; ++i) {
             float phase = (float)(buffer->x[i] * fstep * freq_factor * advance);
@@ -60,17 +94,17 @@ static inline void fill_twiddle_ladder(buffer_t *buffer, const parameters *param
     }
 }
 
-static inline void reset_work_ladder(buffer_t *buffer, const parameters *params) {
-    for (uint32_t level = 0; level < params->ladderLevels; ++level) {
+static inline void reset_work_ladder(buffer_t *buffer) {
+    for (uint32_t level = 0; level < buffer->activeLadderLevels; ++level) {
         size_t offset = (size_t)level * (size_t)buffer->paddedLen;
         memcpy(buffer->workReal + offset, buffer->inputReal, (size_t)buffer->paddedLen * sizeof(float));
         memcpy(buffer->workImag + offset, buffer->inputImag, (size_t)buffer->paddedLen * sizeof(float));
     }
 }
 
-static inline void advance_work_ladder(buffer_t *buffer, const parameters *params, size_t next_block) {
-    int level = nufft1_twiddle_ladder_carry_level(next_block, (int)params->ladderLevels);
-    if (level >= (int)params->ladderLevels) level = (int)params->ladderLevels - 1;
+static inline void advance_work_ladder(buffer_t *buffer, size_t next_block) {
+    int level = nufft1_twiddle_ladder_carry_level(next_block, (int)buffer->activeLadderLevels);
+    if (level >= (int)buffer->activeLadderLevels) level = (int)buffer->activeLadderLevels - 1;
     size_t offset = (size_t)level * (size_t)buffer->paddedLen;
 
     uint32_t i = 0;
@@ -115,24 +149,25 @@ static inline void accumulate_power(buffer_t *buffer, uint32_t base, uint32_t co
 }
 
 static inline void execute_nufft_sweep(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq) {
+    (void)params;
     memset(buffer->power, 0, ((size_t)nfreq + 1U) * sizeof(float));
     nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
 
-    size_t num_blocks = ((size_t)nfreq + (size_t)params->outputLen - 1U) / (size_t)params->outputLen;
+    size_t num_blocks = ((size_t)nfreq + (size_t)buffer->activeOutputLen - 1U) / (size_t)buffer->activeOutputLen;
     for (int t = 0; t < buffer->terms; ++t) {
         double freq_factor = (double)(t + 1);
         fill_complex_input(buffer, fmin, freq_factor);
-        fill_twiddle_ladder(buffer, params, fstep, freq_factor);
-        reset_work_ladder(buffer, params);
+        fill_twiddle_ladder(buffer, fstep, freq_factor);
+        reset_work_ladder(buffer);
 
         for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-            uint32_t base = (uint32_t)(block_idx * (size_t)params->outputLen);
-            uint32_t count = params->outputLen;
+            uint32_t base = (uint32_t)(block_idx * (size_t)buffer->activeOutputLen);
+            uint32_t count = buffer->activeOutputLen;
             if (base + count > nfreq) count = nfreq - base;
             nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, t + 1);
             accumulate_power(buffer, base, count);
             if (block_idx + 1U < num_blocks) {
-                advance_work_ladder(buffer, params, block_idx + 1U);
+                advance_work_ladder(buffer, block_idx + 1U);
             }
         }
     }
@@ -186,6 +221,10 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     double df = 1.0 / buffer->x[buffer->n - 1];
     uint32_t nfreq = target_frequency_count(params, fmin, fstep);
     if (nfreq > buffer->maxFreqCount) nfreq = buffer->maxFreqCount;
+    if (!mode_uses_direct_gb_grid(params->mode) && !activate_target_nufft_plan(buffer, params, nfreq)) {
+        fprintf(stderr, "Failed to activate NuFFT plan for %s\n", in_file);
+        goto cleanup;
+    }
 
     if (!batch && params->debug) {
         printf("\tNumber of target frequencies: %u\n\n", nfreq);
@@ -309,6 +348,12 @@ next:
     if (params->spectrum) {
         write_tsv(buffer, in_file);
     }
+    free(backup_r2);
+    free(backup_p);
+    buffer->nPeaks = 0;
+    return;
+
+cleanup:
     free(backup_r2);
     free(backup_p);
     buffer->nPeaks = 0;

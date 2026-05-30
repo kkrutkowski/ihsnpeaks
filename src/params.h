@@ -79,9 +79,7 @@ void alloc_buffers(parameters *params) {
 
 // Free allocated memory for parameters
 void free_parameters(parameters *params) {
-    nufft1_free_plan(params->nufftPlan);
-    free(params->nufftTwiddleReal);
-    free(params->nufftTwiddleImag);
+    free_nufft_plan_cache(params);
     free(params->target);  // Free the allocated string
     free_targets(&params->targets);
     for (int i = 0; i < params->nbuffers; i++) {

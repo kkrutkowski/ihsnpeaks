@@ -515,7 +515,7 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
 
     int degree = params->nterms;
     int max_factor = 2 * degree;
-    uint32_t block_len = params->outputLen;
+    uint32_t block_len = buffer->activeOutputLen;
     float *Sw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)block_len, sizeof(float));
     float *Cw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)block_len, sizeof(float));
     float *Syw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)block_len, sizeof(float));

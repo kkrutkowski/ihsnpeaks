@@ -1,6 +1,7 @@
 REASONIX.md
 REASONIX_BIG.md
 build/
+test_data/
 ihsnpeaks
 src/ihsnpeaks
 output.tsv
