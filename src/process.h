@@ -233,7 +233,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         printf("\tNumber of target frequencies: %u\n\n", nfreq);
     }
 
-    char stringBuff[32];
+    char stringBuff[64];
     bool aov_streamed = false;
 
     do {

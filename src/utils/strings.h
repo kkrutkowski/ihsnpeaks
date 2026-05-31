@@ -34,10 +34,22 @@ static inline double output_coordinate(double freq, bool outputPeriod) {
     return INFINITY;
 }
 
+static inline int output_frequency_significant_digits(double freq, int precision) {
+    if (!(freq > 0.0) || !double_is_finite_bits(freq)) return precision;
+    int digits = precision + (int)ceil(log10(freq));
+    if (digits < 1) digits = 1;
+    if (digits > PREC_DBL_NR) digits = PREC_DBL_NR;
+    return digits;
+}
+
 static inline void custom_coordinate_dtoa(double freq, bool outputPeriod, int precision, char *line) {
     double coord = output_coordinate(freq, outputPeriod);
     if (!double_is_finite_bits(coord)) {
         strcpy(line, "inf");
+        return;
+    }
+    if (outputPeriod) {
+        fast_dtoa(coord, output_frequency_significant_digits(freq, precision), line);
         return;
     }
     custom_dtoa(coord, precision, line);
@@ -105,14 +117,14 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     /* First pass: scan through peaks and compute the maximum printed width for each column.
        Note: For log(p) we compute log10(p) by first converting the natural log to log10 using M_LOG10E. */
     for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
-        double coord = output_coordinate(buffer->peaks[i].freq, params->outputPeriod);
         double logp = buffer->peaks[i].p * M_LOG10E;  // equivalent to log10(p)
         double amp = print_amp ? buffer->peaks[i].amp : buffer->peaks[i].r2;
         double r = buffer->peaks[i].r2;
         // printf("%.3f\n", r); // ??? - wrong here
         // if (r <= 1.0 && mode > 0) {r = get_r(buffer, buffer->peaks[i].freq, NULL, false);}
         int w;
-        w = column_width(coord, n);
+        custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
+        w = (int)strlen(stringBuff);
         if (w > colWidth[0]) colWidth[0] = w;
         w = column_width(logp, 2);
         if (w > colWidth[1]) colWidth[1] = w;
