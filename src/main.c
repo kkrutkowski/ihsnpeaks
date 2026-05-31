@@ -1,4 +1,5 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
+#define IHSNPEAKS_VERSION "v1.0.0-preview"
 #if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L  // If C23 is not available
 #    define constexpr const
 #endif

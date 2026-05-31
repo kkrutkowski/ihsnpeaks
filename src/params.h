@@ -94,6 +94,7 @@ void free_parameters(parameters *params) {
 }
 
 void print_help(char **argv) {
+    printf("ihsnpeaks %s\n", IHSNPEAKS_VERSION);
     printf("Usage: %s target fmax [options]\n", argv[0]);
     printf("\n");
     printf("Positional arguments:\n");
@@ -101,7 +102,7 @@ void print_help(char **argv) {
     printf("  fmax                     Upper bound of the frequency grid \n");
     printf("\n");
     printf("Options:\n");
-    printf("  -d, --terms               Set the number of harmonics used for computation (default: 3)\n");
+    printf("  -d, --degree, --terms     Set the number of harmonics used for computation (default: 3)\n");
     printf("  -m, --mode                Peak evaluation mode (0-6, default:2):\n");
     printf("                            \t0 NuFFT-based grid only\n");
     printf("                            \t1 reevaluate up to n strongest above-threshold grid peaks\n");
@@ -114,7 +115,7 @@ void print_help(char **argv) {
     printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbaw|gba, optionally [alpha in 0..1] (default: gbls[0.025])\n");
     printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
     printf("  -g, --g, --grid           Periodogram method: ihs (default) or aov/aovmh/aobmhw/chi/chi2/fastchi2\n");
-    printf("  -s, --spectrum            Print generated spectra into .tsv files (default: false)\n");
+    printf("  -s, --save, --spectrum    Print generated spectra into .tsv files (default: false)\n");
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
@@ -224,6 +225,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     // Define long options
     static ko_longopt_t longopts[] = {// impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
                                       {"peaks", ko_required_argument, 'n'},
+                                      {"degree", ko_required_argument, 'd'},
                                       {"terms", ko_required_argument, 'd'},
                                       {"threshold", ko_required_argument, 't'},
                                       {"fmin", ko_required_argument, 'f'},
@@ -238,6 +240,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"nufft", ko_required_argument, OPT_NUFFT},
                                       {"nufft1", ko_required_argument, OPT_NUFFT},
                                       {"jobs", ko_required_argument, 'j'},
+                                      {"save", ko_no_argument, 's'},
                                       {"spectrum", ko_no_argument, 's'},
                                       {"corrected", ko_no_argument, 'c'},  // apply the logarithmic correction, not fully implemented
                                       {"idle", ko_no_argument, 'i'},

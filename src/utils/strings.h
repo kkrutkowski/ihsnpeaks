@@ -134,6 +134,10 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         if (w > colWidth[3]) colWidth[3] = w;
     }
 
+    buffer->outBuf = sdscat(buffer->outBuf, "ihsnpeaks ");
+    buffer->outBuf = sdscat(buffer->outBuf, IHSNPEAKS_VERSION);
+    buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
+
     // Append file information (unchanged)
     buffer->outBuf = sdscat(buffer->outBuf, "File: ");
     buffer->outBuf = sdscat(buffer->outBuf, in_file);
