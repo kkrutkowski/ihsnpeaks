@@ -28,9 +28,24 @@ inline unsigned int custom_dtoa(double v, int size, char *line) {
     }
 }
 
-static inline void appendFreq(double freq, float magnitude, int precision, sds *buffer, char *stringBuff) {
-    // Convert frequency to string and append to the buffer
-    custom_dtoa(freq, precision, stringBuff);
+static inline double output_coordinate(double freq, bool outputPeriod) {
+    if (!outputPeriod) return freq;
+    if (freq > 0.0 && double_is_finite_bits(freq)) return 1.0 / freq;
+    return INFINITY;
+}
+
+static inline void custom_coordinate_dtoa(double freq, bool outputPeriod, int precision, char *line) {
+    double coord = output_coordinate(freq, outputPeriod);
+    if (!double_is_finite_bits(coord)) {
+        strcpy(line, "inf");
+        return;
+    }
+    custom_dtoa(coord, precision, line);
+}
+
+static inline void appendFreq(double freq, float magnitude, int precision, bool outputPeriod, sds *buffer, char *stringBuff) {
+    // Convert output coordinate to string and append to the buffer.
+    custom_coordinate_dtoa(freq, outputPeriod, precision, stringBuff);
     *buffer = sdscat(*buffer, stringBuff);
     *buffer = sdscatlen(*buffer, "\t", 1);  // Add the separator
 
@@ -63,6 +78,7 @@ static inline void write_tsv(buffer_t *buffer, char *in_file) {
 };
 
 static int column_width(double val, int precision) {
+    if (!double_is_finite_bits(val)) return 3;
     int intPartWidth = (val > 0) ? (int)ceil(log10(val)) : 1;
     return 3 + precision + intPartWidth;
 }
@@ -72,9 +88,10 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         n += 1;
     }
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
-    // Column indices: 0: f[1/d] (frequency), 1: log(p), 2: Amp, 3: R.
-    const char *hdr[4] = {"f[1/d]", "log(p)", "Amp", gb_stat_label(evalMode)};
-    if (use_aov) hdr[2] = "R2";
+    bool print_amp = mode > 0;
+    // Column indices: 0: output coordinate, 1: log(p), 2: Amp, 3: R.
+    const char *hdr[4] = {params->outputPeriod ? "P[d]" : "f[1/d]", "log(p)", "Amp", gb_stat_label(evalMode)};
+    if (use_aov && !print_amp) hdr[2] = "R2";
     int hdrWidth[4];
     int colWidth[4];
     int i;
@@ -88,14 +105,14 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     /* First pass: scan through peaks and compute the maximum printed width for each column.
        Note: For log(p) we compute log10(p) by first converting the natural log to log10 using M_LOG10E. */
     for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
-        double freq = buffer->peaks[i].freq;
+        double coord = output_coordinate(buffer->peaks[i].freq, params->outputPeriod);
         double logp = buffer->peaks[i].p * M_LOG10E;  // equivalent to log10(p)
-        double amp = use_aov ? buffer->peaks[i].r2 : buffer->peaks[i].amp;
+        double amp = print_amp ? buffer->peaks[i].amp : buffer->peaks[i].r2;
         double r = buffer->peaks[i].r2;
         // printf("%.3f\n", r); // ??? - wrong here
         // if (r <= 1.0 && mode > 0) {r = get_r(buffer, buffer->peaks[i].freq, NULL, false);}
         int w;
-        w = column_width(freq, n);
+        w = column_width(coord, n);
         if (w > colWidth[0]) colWidth[0] = w;
         w = column_width(logp, 2);
         if (w > colWidth[1]) colWidth[1] = w;
@@ -120,10 +137,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     {
         char temp[64];  // temporary buffer for spaces
         int pad;
-        int HdrCols = use_aov ? 3 : 4;
-        if (mode == 0 && !use_aov) {
-            HdrCols = 2;
-        }
+        int HdrCols = print_amp ? 4 : (use_aov ? 3 : 2);
         for (i = 0; i < HdrCols; i++) {
             pad = colWidth[i] - (int)strlen(hdr[i]);
             if (pad > 0) {
@@ -143,8 +157,8 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         char temp[64];
         int pad, len;
         for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
-            // Frequency column (precision n)
-            custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
+            // Output coordinate column (precision n)
+            custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
             len = (int)strlen(stringBuff);
             pad = colWidth[0] - len;
             if (pad > 0) {
@@ -167,7 +181,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
             buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
-            if (use_aov) {
+            if (use_aov && !print_amp) {
                 custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
                 len = (int)strlen(stringBuff);
                 pad = colWidth[2] - len;
@@ -177,7 +191,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
                     buffer->outBuf = sdscat(buffer->outBuf, temp);
                 }
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-            } else if (mode > 0) {
+            } else if (print_amp) {
                 // Amplitude (precision 3)
                 custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
                 len = (int)strlen(stringBuff);
@@ -227,11 +241,12 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
 void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
     (void)evalMode;
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
+    bool print_amp = mode > 0;
     int i = 0;
     if (buffer->nPeaks > 0) {
         // Append file information to the output buffer
         buffer->outBuf = sdscat(buffer->outBuf, in_file);
-        custom_dtoa(buffer->peaks[0].freq, n, stringBuff);
+        custom_coordinate_dtoa(buffer->peaks[0].freq, params->outputPeriod, n, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
         custom_ftoa(buffer->peaks[0].p * M_LOG10E, 2, stringBuff);
@@ -241,10 +256,10 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
         // buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
         // Append each peak's information to the output buffer
-        if (use_aov) {
+        if (use_aov && !print_amp) {
             while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
-                custom_dtoa(buffer->peaks[i].freq, n + (mode > 1 ? 1 : 0), stringBuff);
+                custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n + (mode > 1 ? 1 : 0), stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
                 custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
@@ -255,11 +270,24 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
                 i++;
             }
+        } else if (use_aov) {
+            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
+                custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n + 1, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
+                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
+                i++;
+            }
         } else if (mode == 0) {
             while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
-                // Convert frequency to string using custom_ftoa
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
-                custom_dtoa(buffer->peaks[i].freq, n, stringBuff);
+                custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
                 // Convert log(p) to string using custom_ftoa
@@ -270,9 +298,8 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
             }
         } else {
             while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
-                // Convert frequency to string using custom_ftoa
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
-                custom_dtoa(buffer->peaks[i].freq, n + 1, stringBuff);
+                custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n + 1, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
                 // Convert amplitude to string using custom_ftoa

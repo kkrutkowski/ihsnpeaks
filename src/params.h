@@ -55,6 +55,7 @@ void print_parameters(parameters *params) {
     printf("\tNterms: %d\n", params->nterms);
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
     printf("\tPrewhiten: %s\n", params->prewhiten ? "true" : "false");
+    printf("\tOutput period: %s\n", params->outputPeriod ? "true" : "false");
     printf("\tIs file: %s\n", params->isFile ? "true" : "false");
     printf("\tIDLE: %s\n", params->idle ? "true" : "false");
     printf("\tLargest file's length: %i\n", params->maxLen);
@@ -115,7 +116,7 @@ void print_help(char **argv) {
     printf("                            5 like 2, but use a dense direct evaluation grid\n");
     printf("                            6 like 4, but dense direct evaluation replaces the NuFFT grid\n");
     printf("  -g, --g, --grid           Periodogram method: ihs (default) or aov/aovmh/aobmhw/chi/chi2/fastchi2\n");
-    printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbas|gba, optionally [alpha in 0..1] (default: gbls[0.025])\n");
+    printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbaw|gba, optionally [alpha in 0..1] (default: gbls[0.025])\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
@@ -127,6 +128,7 @@ void print_help(char **argv) {
     printf("      --prewhiten           Attenuate detected variability modes (default: false)\n");
     printf("\n");
     printf("  -h, --help                Display this help message and exit\n");
+    printf("      --period              Print periods instead of frequencies (not recommended; frequency output is preferred)\n");
     printf("Example:\n");
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
 }
@@ -206,8 +208,8 @@ static bool parse_gb_eval(const char *arg, gb_eval_mode *mode, float *gbAlpha) {
         *mode = GB_EVAL_GBLS;
         return true;
     }
-    if (strcmp(name, "gbas") == 0 || strcmp(name, "gba") == 0) {
-        *mode = GB_EVAL_GBAS;
+    if (strcmp(name, "gbaw") == 0 || strcmp(name, "gba") == 0) {
+        *mode = GB_EVAL_GBAW;
         return true;
     }
     return false;
@@ -217,7 +219,7 @@ static bool parse_gb_eval(const char *arg, gb_eval_mode *mode, float *gbAlpha) {
 static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
 
-    enum { OPT_EPSILON = 0xF9, OPT_NUFFT = 0xFA, OPT_PREWHITEN = 0xFB, OPT_DEBUG = 0xFC, OPT_STRIP = 0xFD, OPT_PACK = 0xFE };
+    enum { OPT_PERIOD = 0xF8, OPT_EPSILON = 0xF9, OPT_NUFFT = 0xFA, OPT_PREWHITEN = 0xFB, OPT_DEBUG = 0xFC, OPT_STRIP = 0xFD, OPT_PACK = 0xFE };
 
     // Define long options
     static ko_longopt_t longopts[] = {// impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
@@ -242,6 +244,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"help", ko_no_argument, 'h'},
                                       {"prewhiten", ko_no_argument, OPT_PREWHITEN},
                                       {"debug", ko_no_argument, OPT_DEBUG},
+                                      {"period", ko_no_argument, OPT_PERIOD},
                                       // Negative cases, corresponding to long arguments only;
                                       {"strip", ko_no_argument, OPT_STRIP},
                                       {"pack", ko_no_argument, OPT_PACK},
@@ -272,7 +275,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'e':
                 if (!parse_gb_eval(opt.arg, &params.gbEvalMode, &params.gbAlpha)) {
-                    fprintf(stderr, "Invalid evaluation '%s'. Expected gbls, gbl, gbas, or gba with optional [alpha].\n", opt.arg);
+                    fprintf(stderr, "Invalid evaluation '%s'. Expected gbls, gbl, gbaw, or gba with optional [alpha].\n", opt.arg);
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -313,6 +316,9 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case OPT_DEBUG:
                 params.debug = true;
+                break;
+            case OPT_PERIOD:
+                params.outputPeriod = true;
                 break;
             case 'i':
                 params.idle = true;

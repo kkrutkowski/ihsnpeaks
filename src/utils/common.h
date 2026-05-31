@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <sds.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "../nufft/nufft1.h"
@@ -20,7 +21,7 @@ typedef enum {
     PERIODOGRAM_FASTCHI2
 } periodogram_method;
 
-typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAS } gb_eval_mode;
+typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW } gb_eval_mode;
 
 static inline bool float_is_nan_bits(float value) {
     union {
@@ -68,9 +69,9 @@ static inline const char* periodogram_method_name(periodogram_method method) {
     }
 }
 
-static inline const char* gb_eval_name(gb_eval_mode mode) { return mode == GB_EVAL_GBAS ? "gbas" : "gbls"; }
+static inline const char* gb_eval_name(gb_eval_mode mode) { return mode == GB_EVAL_GBAW ? "gbaw" : "gbls"; }
 
-static inline const char* gb_stat_label(gb_eval_mode mode) { return mode == GB_EVAL_GBAS ? "T" : "R2"; }
+static inline const char* gb_stat_label(gb_eval_mode mode) { return mode == GB_EVAL_GBAW ? "T" : "R2"; }
 
 static inline bool mode_uses_direct_gb_grid(int mode) { return mode >= 5; }
 
@@ -154,6 +155,8 @@ typedef struct {
     float* fftImag;
     float* cobraReal;
     float* cobraImag;
+    float* aovScratch;
+    size_t aovScratchLen;
     nufft1_workspace* nufftWorkspace;
     uint32_t activePlanIndex;
     uint32_t activeGridLen;
@@ -209,6 +212,7 @@ typedef struct {
     bool corrected;
     bool idle;
     bool prewhiten;
+    bool outputPeriod;
     pthread_mutex_t mutex;
     pthread_mutex_t counter_mutex;
     int iter_count;

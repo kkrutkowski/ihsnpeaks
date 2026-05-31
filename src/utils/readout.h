@@ -73,6 +73,9 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->cobraReal = NULL;
     free(buffer->cobraImag);
     buffer->cobraImag = NULL;
+    free(buffer->aovScratch);
+    buffer->aovScratch = NULL;
+    buffer->aovScratchLen = 0;
     if (buffer->peaks) {
         free(buffer->peaks);
         buffer->peaks = NULL;
@@ -194,17 +197,18 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
             nufft1_create_workspace(params->nufftPlanCache[max_plan_idx].plan, buffer->fftReal, buffer->fftImag, buffer->cobraReal, buffer->cobraImag);
     }
     if (!buffer->nufftWorkspace) goto error;
-    if (params->prewhiten) {
-        if (!buffer->peaks) {
-            buffer->peaks = calloc(2 * params->npeaks, sizeof(peak_t));
+    if (periodogram_uses_aov(params->periodogramMethod) && !buffer->aovScratch) {
+        buffer->aovScratchLen = params->nterms > 0 ? (size_t)(26 * params->nterms + 16) : 0U;
+        if (buffer->aovScratchLen > 0U) {
+            buffer->aovScratch = aligned_alloc(64, round_buffer(buffer->aovScratchLen * sizeof(float)));
         }
-        buffer->nPeaks = 0;
-    } else {
-        if (!buffer->peaks) {
-            buffer->peaks = calloc(params->npeaks, sizeof(peak_t));
-        }
-        buffer->nPeaks = 0;
+        if (!buffer->aovScratch) goto error;
     }
+    if (!buffer->peaks) {
+        size_t peak_count = params->prewhiten ? (size_t)2 * (size_t)params->npeaks : (size_t)params->npeaks;
+        buffer->peaks = calloc(peak_count, sizeof(peak_t));
+    }
+    buffer->nPeaks = 0;
     if (!buffer->peaks) goto error;
     if ((params->mode > 0 || params->prewhiten) && !buffer->buf) {
         buffer->buf = calloc(3, sizeof(void*));
@@ -299,6 +303,24 @@ static inline void linregw_buffer(buffer_t* buffer) {
     }
 }
 
+static inline void refresh_weighted_signal_buffer(buffer_t* buffer, double epsilon) {
+    double wysum = 0.0;
+    double wysqsum = 0.0;
+    for (uint32_t i = 0; i < buffer->n; i++) {
+        float weight = 1.0f / ((buffer->dy[i] * buffer->dy[i]) + (float)epsilon);
+        buffer->wy[i] = weight * buffer->y[i];
+        wysum += fabs(buffer->wy[i]);
+        wysqsum += buffer->wy[i] * buffer->wy[i];
+    }
+    buffer->amp_neff = wysqsum > 0.0 ? ((wysum * wysum) / wysqsum) - 2.0 : 0.0;
+    double norm_neff = buffer->amp_neff > 0.0 ? buffer->amp_neff : buffer->neff;
+    double norm = (wysum > 0.0 && norm_neff > 0.0 && double_is_finite_bits(wysum) && double_is_finite_bits(norm_neff)) ? sqrt(norm_neff) / wysum : 0.0;
+    if (!double_is_finite_bits(norm)) norm = 0.0;
+    for (uint32_t i = 0; i < buffer->n; i++) {
+        buffer->wy[i] *= (float)norm;
+    }
+}
+
 static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode) {
     linregw_buffer(buffer);
     if (mode > 0) {
@@ -310,24 +332,11 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode)
 
     for (uint32_t i = 0; i < buffer->n; i++) {
         float weight = 1.0f / ((buffer->dy[i] * buffer->dy[i]) + (float)epsilon);
-        buffer->wy[i] = weight;
-        wsum += fabs(buffer->wy[i]);
-        wsqsum += buffer->wy[i] * buffer->wy[i];
+        wsum += fabs(weight);
+        wsqsum += weight * weight;
     }
-    buffer->neff = ((wsum * wsum) / wsqsum) - 2.0;
-    double wysum = 0.0;
-    double wysqsum = 0.0;
-    for (uint32_t i = 0; i < buffer->n; i++) {
-        buffer->wy[i] *= buffer->y[i];
-        wysum += fabs(buffer->wy[i]);
-        wysqsum += buffer->wy[i] * buffer->wy[i];
-    }  // ok
-    buffer->amp_neff = wysqsum > 0.0 ? ((wysum * wysum) / wysqsum) - 2.0 : 0.0;
-    double norm_neff = buffer->amp_neff > 0.0 ? buffer->amp_neff : buffer->neff;
-    wsum = wysum > 0.0 ? sqrt(norm_neff) / wysum : 0.0;  // sqrt because of square later
-    for (uint32_t i = 0; i < buffer->n; i++) {
-        buffer->wy[i] *= wsum;
-    }  // correct result
+    buffer->neff = wsqsum > 0.0 ? ((wsum * wsum) / wsqsum) - 2.0 : 0.0;
+    refresh_weighted_signal_buffer(buffer, epsilon);
 }
 
 static inline void read_dat(const char* in_file, buffer_t* buffer) {

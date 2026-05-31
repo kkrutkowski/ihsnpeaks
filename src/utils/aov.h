@@ -35,6 +35,11 @@ static inline float aov_invalid_value(void) { return NAN; }
 
 static inline bool aov_target_has_dof(const buffer_t *buffer, int degree) { return periodogram_effective_n(buffer) > (2 * degree + 1); }
 
+static inline size_t aov_single_scratch_len(int degree) {
+    if (degree <= 0) return 0U;
+    return (size_t)(26 * degree + 16);
+}
+
 static inline float aov_clamp_r2(float r2) {
     if (!float_is_finite_bits(r2)) return aov_invalid_value();
     if (r2 < 0.0f) return 0.0f;
@@ -281,7 +286,8 @@ static inline void aov_gls_impl(const float *Sw, const float *Cw, const float *S
     }
 }
 
-static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw, const float *Syw, const float *Cyw, int degree, float chi2_ref) {
+static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw, const float *Syw, const float *Cyw, int degree, float chi2_ref, float *scratch,
+                                               size_t scratch_len) {
     if (degree == 1) {
         float power = aov_invalid_value();
         aov_gls_impl(Sw, Cw, Syw, Cyw, 1, Cw[0], Cyw[0], chi2_ref, &power);
@@ -289,7 +295,30 @@ static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw,
     }
 
     int norder = (2 * degree) + 1;
-    float Rr[norder + 1], Ri[norder + 1], Yr[norder], Yi[norder], Xr[norder], Xi[norder], Ar[norder], Ai[norder], Apr[norder], Api[norder];
+    size_t required = ((size_t)norder + 1U) * 2U + ((size_t)norder * 8U);
+    if (!scratch || scratch_len < required) return aov_invalid_value();
+
+    size_t offset = 0;
+    float *Rr = scratch + offset;
+    offset += (size_t)norder + 1U;
+    float *Ri = scratch + offset;
+    offset += (size_t)norder + 1U;
+    float *Yr = scratch + offset;
+    offset += (size_t)norder;
+    float *Yi = scratch + offset;
+    offset += (size_t)norder;
+    float *Xr = scratch + offset;
+    offset += (size_t)norder;
+    float *Xi = scratch + offset;
+    offset += (size_t)norder;
+    float *Ar = scratch + offset;
+    offset += (size_t)norder;
+    float *Ai = scratch + offset;
+    offset += (size_t)norder;
+    float *Apr = scratch + offset;
+    offset += (size_t)norder;
+    float *Api = scratch + offset;
+
     for (int k = 0; k < norder; ++k) {
         Rr[k] = Cw[k];
         Ri[k] = -Sw[k];
@@ -465,7 +494,7 @@ static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *bu
     if (write_spectrum) {
         float magnitude = aov_likelihood_from_r2(value, params->nterms, periodogram_effective_n(buffer));
         if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
-        appendFreq(freq, magnitude, precision, &buffer->spectrum, stringBuff);
+        appendFreq(freq, magnitude, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
     }
 
     if (stream->has_left && stream->has_center && stream->center_idx > 0U && idx < nfreq) {
@@ -496,7 +525,7 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         if (write_spectrum) {
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
-                appendFreq(freq, 0.0f, precision, &buffer->spectrum, stringBuff);
+                appendFreq(freq, 0.0f, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
             }
         }
         return 0;
@@ -507,7 +536,7 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         if (write_spectrum) {
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
-                appendFreq(freq, 0.0f, precision, &buffer->spectrum, stringBuff);
+                appendFreq(freq, 0.0f, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
             }
         }
         return 0;
@@ -582,7 +611,21 @@ static inline float aov_get_stat(buffer_t *buffer, const parameters *params, dou
     aov_reference_t ref;
     if (!aov_prepare_reference(buffer, params->epsilon, &ref)) return aov_invalid_value();
 
-    float Sw[(2 * degree) + 1], Cw[(2 * degree) + 1], Syw[degree + 1], Cyw[degree + 1];
+    size_t scratch_len = aov_single_scratch_len(degree);
+    if (!buffer->aovScratch || buffer->aovScratchLen < scratch_len) return aov_invalid_value();
+    float *scratch = buffer->aovScratch;
+    size_t offset = 0;
+    int trig_len = (2 * degree) + 1;
+    int ytrig_len = degree + 1;
+    float *Sw = scratch + offset;
+    offset += (size_t)trig_len;
+    float *Cw = scratch + offset;
+    offset += (size_t)trig_len;
+    float *Syw = scratch + offset;
+    offset += (size_t)ytrig_len;
+    float *Cyw = scratch + offset;
+    offset += (size_t)ytrig_len;
+
     Cw[0] = ref.ws;
     Sw[0] = 0.0f;
     Cyw[0] = ref.yws;
@@ -614,7 +657,7 @@ static inline float aov_get_stat(buffer_t *buffer, const parameters *params, dou
         }
     }
 
-    return aov_solve_single_from_sums(Sw, Cw, Syw, Cyw, degree, ref.chi2_ref);
+    return aov_solve_single_from_sums(Sw, Cw, Syw, Cyw, degree, ref.chi2_ref, scratch + offset, buffer->aovScratchLen - offset);
 }
 
 static inline void aov_binsearch_peak(peak_t *peak, buffer_t *buffer, const parameters *params, double df) {
@@ -651,6 +694,7 @@ static inline void aov_append_peak(buffer_t *buffer, const parameters *params, d
         if (mode_eagerly_refines_peaks(params->mode)) {
             appended.r2 = get_gb_stat(buffer, appended.freq, &appended.amp, params->gbEvalMode, params->gbAlpha);
             binsearch_peak(&appended, buffer, df, params->gbEvalMode, params->gbAlpha);
+            appended.r2 = get_gb_stat(buffer, appended.freq, &appended.amp, params->gbEvalMode, params->gbAlpha);
         } else {
             appended.r2 = get_gb_stat(buffer, appended.freq, &appended.amp, params->gbEvalMode, params->gbAlpha);
         }
@@ -681,7 +725,10 @@ static inline void aov_sort_peaks(peak_t *peaks, int length, buffer_t *buffer, c
 
     for (int i = 0; i < length; ++i) {
         if (mode_defers_peak_evaluation(params->mode)) peaks[i].r2 = get_gb_stat(buffer, peaks[i].freq, &peaks[i].amp, params->gbEvalMode, params->gbAlpha);
-        if (mode_refines_retained_peaks(params->mode)) binsearch_peak(&peaks[i], buffer, df, params->gbEvalMode, params->gbAlpha);
+        if (mode_refines_retained_peaks(params->mode)) {
+            binsearch_peak(&peaks[i], buffer, df, params->gbEvalMode, params->gbAlpha);
+            peaks[i].r2 = get_gb_stat(buffer, peaks[i].freq, &peaks[i].amp, params->gbEvalMode, params->gbAlpha);
+        }
         peaks[i].p = get_gb_likelihood_from_stat(peaks[i].r2, buffer->n, params->gbEvalMode);
     }
 

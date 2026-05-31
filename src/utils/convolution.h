@@ -120,12 +120,25 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     }  // Normalize
 }
 
-static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewhiten, float gbAlpha) {
-    double freq_tmp = 1024.0 * freq;  // 10-bit key
-    double min = 0;
-    double max = 0;
+typedef struct {
+    kvpair* sorted;
+    double* model;
+    double scale;
+    double min_model;
+    double max_model;
+    double Sxx;
+    double Syy;
+    double Sxy;
+    int n;
+} gb_projection_t;
 
-    // Replaced ref/res with orthogonal projection accumulators
+static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool keep_indices, float gbAlpha, double model_multiplier,
+                                         gb_projection_t* projection) {
+    if (!buffer || !projection || !buffer->buf || !buffer->buf[0] || !buffer->buf[1] || !buffer->buf[2] || !buffer->pidx || buffer->n == 0) return false;
+
+    double freq_tmp = 1024.0 * freq;  // 10-bit key
+    double min_model = 0.0;
+    double max_model = 0.0;
     double Sxx = 0.0;
     double Syy = 0.0;
     double Sxy = 0.0;
@@ -140,7 +153,7 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
     for (int i = 0; i < buffer->n; i++) {
         input[i].parts.key = ((uint16_t)(buffer->x[i] * freq_tmp)) & 0b0000001111111111;  // get rid of the 6 most significant bits
         input[i].parts.val = buffer->y[i];
-        if (prewhiten) {
+        if (keep_indices) {
             input[i].parts.idx = i;
         }
     }
@@ -152,98 +165,92 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
 
     double correction = corr(r);
     for (int i = 0; i < buffer->n; i++) {
-        output[i] = (output[i] - (correction * (double)(sorted[i].parts.val)));
-        if (amp) {
-            if (i == 0 || output[i] < min) min = output[i];
-            if (i == 0 || output[i] > max) max = output[i];
-        }
-
-        // Calculate true R^2 statistic components
         double y_val = (double)(sorted[i].parts.val);
-        double smooth_val = output[i];
+        double smooth_val = (output[i] - (correction * y_val)) * model_multiplier;
+        output[i] = smooth_val;
+        if (i == 0 || smooth_val < min_model) min_model = smooth_val;
+        if (i == 0 || smooth_val > max_model) max_model = smooth_val;
 
         Sxx += smooth_val * smooth_val;
         Syy += y_val * y_val;
         Sxy += y_val * smooth_val;
     }
 
-    // Calculate final R^2 with clamping
-    float R2 = 0.0f;
     double scale = 0.0;
     if (Sxx > 0.0 && Syy > 0.0) {
         scale = clamp_gbls_scale(Sxy / Sxx);
+    }
+
+    projection->sorted = sorted;
+    projection->model = output;
+    projection->scale = scale;
+    projection->min_model = min_model;
+    projection->max_model = max_model;
+    projection->Sxx = Sxx;
+    projection->Syy = Syy;
+    projection->Sxy = Sxy;
+    projection->n = (int)buffer->n;
+    return true;
+}
+
+static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewhiten, float gbAlpha) {
+    gb_projection_t projection = {0};
+    if (!gb_prepare_projection(buffer, freq, prewhiten, gbAlpha, 1.0, &projection)) return 0.0f;
+
+    float R2 = 0.0f;
+    if (projection.Sxx > 0.0 && projection.Syy > 0.0) {
+        double scale = projection.scale;
+        double Sxy = projection.Sxy;
+        double Sxx = projection.Sxx;
+        double Syy = projection.Syy;
         double explained = ((2.0 * scale * Sxy) - (scale * scale * Sxx)) / Syy;
         R2 = (float)explained;
         if (R2 < 0.0f) R2 = 0.0f;
         if (R2 > (1.0f - 1e-15f)) R2 = 1.0f - 1e-15f;
     }
     if (amp) {
-        *amp = (float)(fabs(scale) * (max - min));
+        *amp = (float)(fabs(projection.scale) * (projection.max_model - projection.min_model));
     }
     if (prewhiten) {
-        for (int i = 0; i < buffer->n; i++) {
-            buffer->y[sorted[i].parts.idx] -= (float)(scale * output[i]);
+        for (int i = 0; i < projection.n; i++) {
+            buffer->y[projection.sorted[i].parts.idx] -= (float)(projection.scale * projection.model[i]);
         }
     }
 
     return R2;
 }
 
-static inline float get_gbas_t(buffer_t* buffer, double freq, float* amp, float gbAlpha) {
-    double freq_tmp = 1024.0 * freq;  // 10-bit key
-    double min = 0;
-    double max = 0;
+static inline float get_gbaw_t(buffer_t* buffer, double freq, float* amp, float gbAlpha) {
+    if (!buffer || buffer->n == 0) return 0.0f;
     double ref = 0;
     double res = 0;
 
-    kvpair* input = (kvpair*)(buffer->buf[0]);
-    kvpair* sorted = (kvpair*)(buffer->buf[1]);
-    double* tmp = (double*)(buffer->buf[0]);
-    double* output = (double*)(buffer->buf[2]);
-    uint64_t** sort_in = (uint64_t**)(&buffer->buf[0]);
-    uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
-
-    for (int i = 0; i < buffer->n; i++) {
-        input[i].parts.key = ((uint16_t)(buffer->x[i] * freq_tmp)) & 0b0000001111111111;  // get rid of the 6 most significant bits
-        input[i].parts.val = buffer->y[i];
-    }
-
-    csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);  // sort the pairs by phase
     int r = gb_convolution_radius(buffer->n, gbAlpha);
-
-    convolve(sorted, tmp, output, r, buffer->n);
-
     double correction = corr(r);
     double multiplier = 1.0 / (1.0 - correction);
+    gb_projection_t projection = {0};
+    if (!gb_prepare_projection(buffer, freq, false, gbAlpha, multiplier, &projection)) return 0.0f;
 
-    for (int i = 0; i < buffer->n; i++) {
-        if (amp) {
-            if (output[i] < min) {
-                min = output[i];
-            }
-            if (output[i] > max) {
-                max = output[i];
-            }
-        }
-
-        output[i] = (output[i] - (correction * (double)(sorted[i].parts.val))) * multiplier;
-        res += ((double)(sorted[i].parts.val) - output[i]) * ((double)(sorted[i].parts.val) - output[i]);
-        ref += ((double)(sorted[i].parts.val) + output[i]) * ((double)(sorted[i].parts.val) + output[i]);
+    for (int i = 0; i < projection.n; i++) {
+        double y_val = (double)(projection.sorted[i].parts.val);
+        double model = projection.model[i];
+        res += (y_val - model) * (y_val - model);
+        ref += (y_val + model) * (y_val + model);
     }
 
     if (amp) {
-        *amp = max - min;
+        *amp = (float)(fabs(projection.scale) * (projection.max_model - projection.min_model));
     }
 
     return (float)(ref / res);
 }
 
 static inline float get_gb_stat(buffer_t* buffer, double freq, float* amp, gb_eval_mode evalMode, float gbAlpha) {
-    return evalMode == GB_EVAL_GBAS ? get_gbas_t(buffer, freq, amp, gbAlpha) : get_r2(buffer, freq, amp, false, gbAlpha);
+    return evalMode == GB_EVAL_GBAW ? get_gbaw_t(buffer, freq, amp, gbAlpha) : get_r2(buffer, freq, amp, false, gbAlpha);
 }
 
 static inline float get_gb_likelihood_from_stat(float stat, int n, gb_eval_mode evalMode) {
-    return evalMode == GB_EVAL_GBAS ? (float)get_z(stat, n) : (float)lnFAP(2, 1, stat, n);
+    return evalMode == GB_EVAL_GBAW ? (float)get_z(stat, n) : (float)lnFAP(2, 1, stat, n);
 }
 
 static inline float get_gb_likelihood(buffer_t* buffer, double freq, float* amp, float* stat, gb_eval_mode evalMode, float gbAlpha) {

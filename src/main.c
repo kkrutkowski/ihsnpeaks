@@ -106,12 +106,14 @@ int main(int argc, char *argv[]) {
             perror("Failed to create the output file");
             return 1;
         }
-        if (periodogram_uses_aov(params.periodogramMethod)) {
-            fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP), R2]\n");
+        const char *coordinateLabel = params.outputPeriod ? "period" : "freq";
+        const char *bestFitLabel = params.outputPeriod ? "best_fit_period" : "best_fit_frequency";
+        if (periodogram_uses_aov(params.periodogramMethod) && params.mode < 1) {
+            fprintf(outputFile, "Input_file\t%s\t-log_10(FAP)\t\t[%s, -log_10(FAP), R2]\n", bestFitLabel, coordinateLabel);
         } else if (params.mode < 1) {
-            fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, -log_10(FAP)]\n");
+            fprintf(outputFile, "Input_file\t%s\t-log_10(FAP)\t\t[%s, -log_10(FAP)]\n", bestFitLabel, coordinateLabel);
         } else {
-            fprintf(outputFile, "Input_file\tbest_fit_frequency\t-log_10(FAP)\t\t[freq, amp, %s]\n", gb_stat_label(params.gbEvalMode));
+            fprintf(outputFile, "Input_file\t%s\t-log_10(FAP)\t\t[%s, amp, %s]\n", bestFitLabel, coordinateLabel, gb_stat_label(params.gbEvalMode));
         }
         fclose(outputFile);
 

@@ -207,9 +207,10 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     read_dat(in_file, buffer);
     preprocess_buffer(buffer, params->epsilon, params->mode);
 
-    int prewhitening_iter = 0;
-    double *backup_r2 = calloc(params->npeaks, sizeof(double));
-    double *backup_p = calloc(params->npeaks, sizeof(double));
+    peak_t *peak_base = buffer->peaks;
+    peak_t *selected_peaks = peak_base;
+    peak_t *candidate_peaks = params->prewhiten ? peak_base + params->npeaks : peak_base;
+    int selected_count = 0;
 
     const int n = 1 + (int)(log10(buffer->x[buffer->n - 1] * (double)(params->oversamplingFactor * params->nterms)));
     double fmin = effective_grid_fmin(params, buffer->x[buffer->n - 1]);
@@ -235,111 +236,93 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     char stringBuff[32];
     bool aov_streamed = false;
 
-prewhiten:
-    aov_streamed = false;
-    if (prewhitening_iter > 0) {
-        double prewhitening_freq = buffer->peaks[prewhitening_iter - 1].freq;
-        float prewhiten_r2 = get_r2(buffer, prewhitening_freq, NULL, true, params->gbAlpha);
-
-        backup_r2[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].r2;
-        backup_p[prewhitening_iter] = buffer->peaks[prewhitening_iter - 1].p;
-
-        double ysum = 0;
-        for (unsigned int i = 0; i < buffer->n; i++) {
-            ysum += fabs(buffer->y[i]);
-        }
-        double norm_neff = buffer->amp_neff > 0.0 ? buffer->amp_neff : buffer->neff;
-        float norm = (sqrtf((float)norm_neff) / (float)(ysum));
-        for (unsigned int i = 0; i < buffer->n; i++) {
-            buffer->wy[i] = buffer->y[i] * norm;
-        }
-
-        float threshold_stat = params->gbEvalMode == GB_EVAL_GBAS ? prewhiten_r2 : buffer->peaks[prewhitening_iter - 1].r2;
-        if (threshold_stat < params->r2_threshold) {
-            buffer->nPeaks -= 1;
-            goto next;
-        }
-    }
-
-    buffer->nPeaks = prewhitening_iter;
-    if (!mode_uses_direct_gb_grid(params->mode)) {
-        if (use_aov) {
-            aov_streamed = true;
-            if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, params->spectrum, n, stringBuff) != 0) {
-                fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
-            }
-        } else {
-            execute_nufft_sweep(buffer, params, fmin, fstep, nfreq);
-        }
-    }
-
-    if (params->spectrum && !aov_streamed) {
-        for (uint32_t i = 0; i < nfreq; ++i) {
-            double freq = fmin + ((double)i * fstep);
-            float magnitude;
+    do {
+        aov_streamed = false;
+        buffer->peaks = candidate_peaks;
+        buffer->nPeaks = 0;
+        if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
-                float r2 = mode_uses_direct_gb_grid(params->mode) ? aov_get_stat(buffer, params, freq) : buffer->power[i];
-                magnitude = aov_likelihood_from_r2(r2, params->nterms, aov_n_eff);
+                aov_streamed = true;
+                if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, params->spectrum, n, stringBuff) != 0) {
+                    fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
+                }
             } else {
-                magnitude = mode_uses_direct_gb_grid(params->mode) ? get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha)
-                                                                   : correct_ihs_res(buffer->power[i], params->nterms);
+                execute_nufft_sweep(buffer, params, fmin, fstep, nfreq);
             }
-            if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
-            appendFreq(freq, magnitude, n, &buffer->spectrum, &stringBuff[0]);
         }
-    }
 
-    if (!aov_streamed)
-        for (uint32_t i = 1; i + 1 < nfreq; ++i) {
-            double freq = fmin + ((double)i * fstep);
-            float magnitude = 0.0f;
-            float left = 0.0f;
-            float right = 0.0f;
-            if (!mode_uses_direct_gb_grid(params->mode)) {
-                magnitude = buffer->power[i];
-                left = buffer->power[i - 1];
-                right = buffer->power[i + 1];
-            }
-            if (use_aov && mode_uses_direct_gb_grid(params->mode)) {
-                magnitude = aov_get_stat(buffer, params, freq);
-                left = aov_get_stat(buffer, params, freq - fstep);
-                right = aov_get_stat(buffer, params, freq + fstep);
-            } else if (mode_uses_direct_gb_grid(params->mode)) {
-                magnitude = get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha);
-                left = get_gb_likelihood(buffer, freq - fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
-                right = get_gb_likelihood(buffer, freq + fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
-            }
-            double peak_freq = freq;
-            float peak_magnitude = magnitude;
-            if (!quadratic_peak_position(freq, fstep, left, magnitude, right, params->oversamplingFactor, &peak_freq, &peak_magnitude)) continue;
-            if (magnitude > left && magnitude > right && (magnitude > threshold || (aov_valid && mode_evaluates_all_local_peaks(params->mode)))) {
+        if (params->spectrum && !aov_streamed) {
+            for (uint32_t i = 0; i < nfreq; ++i) {
+                double freq = fmin + ((double)i * fstep);
+                float magnitude;
                 if (use_aov) {
-                    aov_append_peak(buffer, params, peak_freq, peak_magnitude, df);
+                    float r2 = mode_uses_direct_gb_grid(params->mode) ? aov_get_stat(buffer, params, freq) : buffer->power[i];
+                    magnitude = aov_likelihood_from_r2(r2, params->nterms, aov_n_eff);
                 } else {
-                    append_peak(buffer, params->npeaks, params->mode, peak_freq, peak_magnitude, df, params->gbEvalMode, params->gbAlpha);
+                    magnitude = mode_uses_direct_gb_grid(params->mode) ? get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha)
+                                                                       : correct_ihs_res(buffer->power[i], params->nterms);
+                }
+                if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
+                appendFreq(freq, magnitude, n, params->outputPeriod, &buffer->spectrum, &stringBuff[0]);
+            }
+        }
+
+        if (!aov_streamed)
+            for (uint32_t i = 1; i + 1 < nfreq; ++i) {
+                double freq = fmin + ((double)i * fstep);
+                float magnitude = 0.0f;
+                float left = 0.0f;
+                float right = 0.0f;
+                if (!mode_uses_direct_gb_grid(params->mode)) {
+                    magnitude = buffer->power[i];
+                    left = buffer->power[i - 1];
+                    right = buffer->power[i + 1];
+                }
+                if (use_aov && mode_uses_direct_gb_grid(params->mode)) {
+                    magnitude = aov_get_stat(buffer, params, freq);
+                    left = aov_get_stat(buffer, params, freq - fstep);
+                    right = aov_get_stat(buffer, params, freq + fstep);
+                } else if (mode_uses_direct_gb_grid(params->mode)) {
+                    magnitude = get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha);
+                    left = get_gb_likelihood(buffer, freq - fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
+                    right = get_gb_likelihood(buffer, freq + fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
+                }
+                double peak_freq = freq;
+                float peak_magnitude = magnitude;
+                if (!quadratic_peak_position(freq, fstep, left, magnitude, right, params->oversamplingFactor, &peak_freq, &peak_magnitude)) continue;
+                if (magnitude > left && magnitude > right && (magnitude > threshold || (aov_valid && mode_evaluates_all_local_peaks(params->mode)))) {
+                    if (use_aov) {
+                        aov_append_peak(buffer, params, peak_freq, peak_magnitude, df);
+                    } else {
+                        append_peak(buffer, params->npeaks, params->mode, peak_freq, peak_magnitude, df, params->gbEvalMode, params->gbAlpha);
+                    }
                 }
             }
+
+        int candidate_count = (int)buffer->nPeaks;
+        if (use_aov) {
+            aov_sort_peaks(buffer->peaks, candidate_count, buffer, params, df);
+        } else {
+            sortPeaks(buffer->peaks, candidate_count, buffer, params->mode, df, params->nterms, params->gbEvalMode, params->gbAlpha);
         }
 
-    if (use_aov) {
-        aov_sort_peaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params, df);
-    } else {
-        sortPeaks(&buffer->peaks[prewhitening_iter], buffer->nPeaks, buffer, params->mode, df, params->nterms, params->gbEvalMode, params->gbAlpha);
-    }
+        if (!params->prewhiten) break;
+        if (candidate_count <= 0 || selected_count >= params->npeaks) break;
 
-    if (params->prewhiten && prewhitening_iter < buffer->nPeaks) {
-        prewhitening_iter += 1;
-        buffer->nPeaks = prewhitening_iter;
-        goto prewhiten;
-    }
+        peak_t selected = buffer->peaks[0];
+        if (selected.p <= 0.0f || !float_is_finite_bits(selected.p)) break;
 
-next:
-    if (prewhitening_iter > 1) {
-        for (int i = 1; i <= prewhitening_iter; i++) {
-            buffer->peaks[i - 1].r2 = backup_r2[i];
-            buffer->peaks[i - 1].p = backup_p[i];
-        }
-        buffer->nPeaks = prewhitening_iter;
+        float prewhiten_r2 = get_r2(buffer, selected.freq, NULL, true, params->gbAlpha);
+        float threshold_stat = (params->gbEvalMode == GB_EVAL_GBAW || params->mode == 0) ? prewhiten_r2 : selected.r2;
+        if (!float_is_finite_bits(threshold_stat) || threshold_stat < params->r2_threshold) break;
+
+        selected_peaks[selected_count++] = selected;
+        refresh_weighted_signal_buffer(buffer, params->epsilon);
+    } while (params->prewhiten && selected_count < params->npeaks);
+
+    if (params->prewhiten) {
+        buffer->peaks = selected_peaks;
+        buffer->nPeaks = (uint32_t)selected_count;
     }
 
     if (!batch) {
@@ -350,14 +333,12 @@ next:
     if (params->spectrum) {
         write_tsv(buffer, in_file);
     }
-    free(backup_r2);
-    free(backup_p);
+    buffer->peaks = peak_base;
     buffer->nPeaks = 0;
     return;
 
 cleanup:
-    free(backup_r2);
-    free(backup_p);
+    buffer->peaks = peak_base;
     buffer->nPeaks = 0;
 }
 
