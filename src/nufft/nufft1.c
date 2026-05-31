@@ -399,14 +399,14 @@ static void sande_tukey_in_place(float *real, float *imag, const float *twiddle_
 #endif
 }
 
-static nufft1_nanofft_plan *nufft1_nanofft_make_plan(uint32_t n, float *twiddle_real, float *twiddle_imag) {
+static nufft1_nanofft_plan *nufft1_nanofft_make_plan(uint32_t n, float *twiddle_real, float *twiddle_imag, bool precomputed_twiddles) {
     if (!is_power_of_two(n) || !twiddle_real || !twiddle_imag) return NULL;
     nufft1_nanofft_plan *plan = (nufft1_nanofft_plan *)calloc(1, sizeof(*plan));
     if (!plan) return NULL;
     plan->n = n;
     plan->twiddle_real = twiddle_real;
     plan->twiddle_imag = twiddle_imag;
-    generate_fft_buffer(n, plan->twiddle_real, plan->twiddle_imag);
+    if (!precomputed_twiddles) generate_fft_buffer(n, plan->twiddle_real, plan->twiddle_imag);
     return plan;
 }
 
@@ -583,7 +583,8 @@ static int initialize_deconv(nufft1_plan *plan) {
     return NUFFT1_UTIL_OK;
 }
 
-nufft1_plan *nufft1_initialize_shared(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag) {
+static nufft1_plan *nufft1_initialize_shared_impl(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag,
+                                                  bool precomputed_twiddles) {
     if (Mpoints <= 0 || N <= 0 || freq_factor <= 0) return NULL;
     if (mode != NUFFT1_PSWF21 && mode != NUFFT1_PSWF43) return NULL;
     if (mode == NUFFT1_PSWF43 && (N % 4) != 0) return NULL;
@@ -605,12 +606,20 @@ nufft1_plan *nufft1_initialize_shared(int Mpoints, int N, int freq_factor, nufft
     plan->alpha = (float)PSWF_W * 0.5f / (float)plan->Nfft;
 
     plan->deconv = alloc_aligned_float((size_t)plan->Nout);
-    plan->nanofft_p = nufft1_nanofft_make_plan((uint32_t)plan->Nfft, twiddle_real, twiddle_imag);
+    plan->nanofft_p = nufft1_nanofft_make_plan((uint32_t)plan->Nfft, twiddle_real, twiddle_imag, precomputed_twiddles);
     if (!plan->deconv || !plan->nanofft_p || initialize_deconv(plan) != NUFFT1_UTIL_OK) {
         nufft1_free_plan(plan);
         return NULL;
     }
     return plan;
+}
+
+nufft1_plan *nufft1_initialize_shared(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag) {
+    return nufft1_initialize_shared_impl(Mpoints, N, freq_factor, mode, twiddle_real, twiddle_imag, false);
+}
+
+nufft1_plan *nufft1_initialize_shared_precomputed(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag) {
+    return nufft1_initialize_shared_impl(Mpoints, N, freq_factor, mode, twiddle_real, twiddle_imag, true);
 }
 
 nufft1_workspace *nufft1_create_workspace(const nufft1_plan *plan, float *fft_real, float *fft_imag, float *cobra_real, float *cobra_imag) {

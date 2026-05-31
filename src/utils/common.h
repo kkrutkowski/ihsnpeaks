@@ -227,6 +227,8 @@ typedef struct {
     nufft1_mode gridMode;
     nufft1_external_sizes nufftExternalSizes;
     nufft_plan_cache_entry_t* nufftPlanCache;
+    float* nufftTwiddleReal;
+    float* nufftTwiddleImag;
     uint32_t nufftPlanCount;
 
     kvec_target_t targets;

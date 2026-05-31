@@ -33,22 +33,24 @@ static inline uint32_t target_frequency_count(const parameters *params, double f
 static inline bool activate_target_nufft_plan(buffer_t *buffer, const parameters *params, uint32_t nfreq) {
     if (!buffer || !params || params->nufftPlanCount == 0U || !buffer->nufftWorkspace) return false;
 
-    double beta = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_BETA : F_PSWF43_BETA;
-    double gamma = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_GAMMA : F_PSWF43_GAMMA;
-    int plan_degree = periodogram_uses_aov(params->periodogramMethod) ? params->nterms : 0;
-    int target_nfreq = nfreq > 0U ? (int)nfreq : 1;
-    int base_len = nufft1_optimize_plan_size(target_nfreq, (int)buffer->n, plan_degree, F_ALPHA, beta, gamma, pswf_backend(params->gridMode));
-    if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
-    if (base_len < (1 << 8)) base_len = 1 << 8;
-    if ((uint32_t)base_len > params->gridLen) base_len = (int)params->gridLen;
-    if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
-    if ((uint32_t)base_len > params->gridLen) base_len = (int)params->gridLen;
-
     uint32_t plan_idx = params->nufftPlanCount - 1U;
-    for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
-        if (params->nufftPlanCache[i].gridLen >= (uint32_t)base_len) {
-            plan_idx = i;
-            break;
+    int target_nfreq = nfreq > 0U ? (int)nfreq : 1;
+    if ((uint64_t)buffer->n * 2U < (uint64_t)params->maxLen || (uint64_t)nfreq * 2U < (uint64_t)params->maxFreqCount) {
+        double beta = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_BETA : F_PSWF43_BETA;
+        double gamma = params->gridMode == NUFFT1_PSWF21 ? F_PSWF21_GAMMA : F_PSWF43_GAMMA;
+        int plan_degree = periodogram_uses_aov(params->periodogramMethod) ? params->nterms : 0;
+        int base_len = nufft1_optimize_plan_size(target_nfreq, (int)buffer->n, plan_degree, F_ALPHA, beta, gamma, pswf_backend(params->gridMode));
+        if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
+        if (base_len < (1 << 8)) base_len = 1 << 8;
+        if ((uint32_t)base_len > params->gridLen) base_len = (int)params->gridLen;
+        if (params->gridMode == NUFFT1_PSWF43) base_len = nufft1_pswf43_plan_len_from_base(base_len);
+        if ((uint32_t)base_len > params->gridLen) base_len = (int)params->gridLen;
+
+        for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
+            if (params->nufftPlanCache[i].gridLen >= (uint32_t)base_len) {
+                plan_idx = i;
+                break;
+            }
         }
     }
 

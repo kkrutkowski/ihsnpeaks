@@ -33,6 +33,7 @@ typedef struct {
 
 nufft1_external_sizes nufft1_external_sizes_for_plan(int N, nufft1_mode mode);
 nufft1_plan *nufft1_initialize_shared(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag);
+nufft1_plan *nufft1_initialize_shared_precomputed(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag);
 nufft1_workspace *nufft1_create_workspace(const nufft1_plan *plan, float *fft_real, float *fft_imag, float *cobra_real, float *cobra_imag);
 int nufft1_workspace_set_plan(nufft1_workspace *workspace, const nufft1_plan *plan);
 void nufft1_precompute(nufft1_workspace *workspace, const double *x, int Mpoints, double df);
