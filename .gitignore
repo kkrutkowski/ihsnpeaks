@@ -1,9 +1,11 @@
 REASONIX.md
 REASONIX_BIG.md
 build/
+dist/
 test_data/
 ihsnpeaks
 src/ihsnpeaks
 output.tsv
 .agents
 .codex
+__pycache__/

@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean format
+.PHONY: all native check_compiler install clean format release release-linux-x86_64-musl clean-docker
 
 CC ?= cc
 AR ?= ar
@@ -20,6 +20,9 @@ ifeq ($(MIMALLOC),1)
     ALLOCATOR_BUILD := mimalloc
 endif
 BUILD_DIR := $(MAKEFILE_DIR)build/native/$(ALLOCATOR_BUILD)
+RELEASE_IMAGE ?= ihsnpeaks-release-linux-x86_64
+RELEASE_CONTAINER ?= ihsnpeaks-release-extract
+RELEASE_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-x86_64
 MIMALLOC_COMPAT_DIR := $(BUILD_DIR)/compat
 MIMALLOC_COMPAT_HEADER := $(MIMALLOC_COMPAT_DIR)/mimalloc/mimalloc.h
 MIMALLOC_OVERRIDE_HEADER := $(MIMALLOC_COMPAT_DIR)/ihsnpeaks-mimalloc-override.h
@@ -106,7 +109,7 @@ CC_VERSION := $(shell $(CC) --version 2>/dev/null | head -n 1)
 # for future multi-dispatch/release selection. The current source build still
 # uses -march=native while the PSWF NuFFT transition settles.
 UNAME_M := $(shell uname -m 2>/dev/null)
-CPU_FLAGS := $(shell lscpu 2>/dev/null | grep -oP 'Flags:\s*\K.*' | head -n 1)
+CPU_FLAGS := $(shell lscpu 2>/dev/null | sed -n 's/^Flags:[[:space:]]*//p' | head -n 1)
 ifeq ($(strip $(CPU_FLAGS)),)
     CPU_FLAGS := $(shell grep -m1 -E '^(flags|Features)[[:space:]]*:' /proc/cpuinfo 2>/dev/null | cut -d: -f2)
 endif
@@ -228,6 +231,21 @@ native: $(NUFFT_OBJ) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP)
 	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(STATIC_LDFLAGS) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
 	strip -s ihsnpeaks
 	@echo "Compilation complete"
+
+release:
+	docker build -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE) $(MAKEFILE_DIR)
+	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
+	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE) >/dev/null
+	@mkdir -p $(dir $(RELEASE_BIN))
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_BIN)
+	docker rm $(RELEASE_CONTAINER) >/dev/null
+	@echo "Release binary: $(RELEASE_BIN)"
+
+release-linux-x86_64-musl:
+	python3 $(MAKEFILE_DIR)dispatch/build_release.py --build-dir $(MAKEFILE_DIR)build/release/linux-x86_64-musl --output $(RELEASE_BIN)
+
+clean-docker:
+	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
 
 install: native
 	@if [ "$$(id -u)" -ne 0 ]; then \

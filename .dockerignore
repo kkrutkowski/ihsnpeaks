@@ -1,0 +1,9 @@
+.git
+.agents
+.codex
+build
+dist
+ihsnpeaks
+src/ihsnpeaks
+output.tsv
+test_data

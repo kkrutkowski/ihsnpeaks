@@ -1,0 +1,8 @@
+FROM alpine:3.23
+
+RUN apk add --no-cache build-base python3 binutils file
+
+WORKDIR /work
+COPY . /work
+
+RUN make release-linux-x86_64-musl
