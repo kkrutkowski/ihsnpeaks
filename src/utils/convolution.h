@@ -285,15 +285,13 @@ static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df, gb_
 }
 
 static inline double correct_ihs_res(const double sum, const int n) {
-    long double logSum = 1.0;
-    long double tmp = 1.0;
-    long double denum = 1.0;
+    double logSum = 1.0;
+    double term = 1.0;
     for (int i = 1; i < n; i++) {
-        denum *= (long double)(i);
-        tmp *= sum;
-        logSum += tmp / denum;
+        term *= sum / (double)i;
+        logSum += term;
     }
-    return sum - logl(logSum);  // asymptotic formula for possible overflow cases may be useful
+    return sum - log(logSum);
 }
 
 static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode, double df, int n, gb_eval_mode evalMode, float gbAlpha) {
