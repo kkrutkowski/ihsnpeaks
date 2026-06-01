@@ -85,6 +85,7 @@ int main(int argc, char *argv[]) {
         process_target(kv_A(params.targets, 0).path, &buffer, &params, false);
         // print_buffer(&buffer);
         // process the data here
+        profile_report(&params);
         free_buffer(&buffer);
         free_parameters(&params);
         return 0;
@@ -138,6 +139,8 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < params.nbuffers; i++) {
             fprint_buffer(params.buffers[i], &params);
         }  // free the buffers before freeing
+
+        profile_report(&params);
 
         // Kill the worker threads before exiting
         kt_forpool_destroy(pool);

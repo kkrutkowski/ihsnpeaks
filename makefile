@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean format release release-linux-x86_64-musl clean-docker
+.PHONY: all native check_compiler install clean format release release-linux-x86_64-musl clean-docker profile profile-run profile-clean
 
 CC ?= cc
 AR ?= ar
@@ -32,6 +32,40 @@ TRIG_HDR := $(MAKEFILE_DIR)src/utils/trig.h
 NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
+
+PROFILE_CC ?= musl-gcc
+PROFILE_ISA ?= native
+PROFILE_ROOT := $(MAKEFILE_DIR)build/profile
+PROFILE_BUILD_DIR := $(PROFILE_ROOT)/$(PROFILE_ISA)
+PROFILE_BIN := $(PROFILE_ROOT)/ihsnpeaks-profile
+PROFILE_NUFFT_OBJ := $(PROFILE_BUILD_DIR)/nufft1.o
+PROFILE_SCALING_GEN := $(PROFILE_BUILD_DIR)/scaling_gen
+PROFILE_SCALING_HEADER := $(PROFILE_BUILD_DIR)/scaling.h
+PROFILE_RESULTS_DIR := $(PROFILE_ROOT)/results
+PROFILE_HEADERS := $(wildcard $(MAKEFILE_DIR)src/*.h $(MAKEFILE_DIR)src/utils/*.h $(MAKEFILE_DIR)src/nufft/*.h)
+PROFILE_TARGET ?= /home/krutkowski/Pulpit/LMC_ECL/phot
+PROFILE_FMAX ?= 40
+PROFILE_ARGS ?= -d1 -m0
+PROFILE_JOBS ?= 1 2 4 8 16 32
+
+ifeq ($(PROFILE_ISA),native)
+    PROFILE_ARCH_FLAGS := -march=native -mtune=native
+else ifeq ($(PROFILE_ISA),x86-64)
+    PROFILE_ARCH_FLAGS := -march=x86-64 -mtune=generic
+else ifeq ($(PROFILE_ISA),x86-64-v2)
+    PROFILE_ARCH_FLAGS := -march=x86-64-v2 -mtune=generic
+else ifeq ($(PROFILE_ISA),x86-64-v2-avx)
+    PROFILE_ARCH_FLAGS := -march=x86-64-v2 -mavx -mxsave -mtune=generic
+else ifeq ($(PROFILE_ISA),x86-64-v3)
+    PROFILE_ARCH_FLAGS := -march=x86-64-v3 -mtune=generic
+else ifeq ($(PROFILE_ISA),x86-64-v4)
+    PROFILE_ARCH_FLAGS := -march=x86-64-v4 -mtune=generic
+else
+    $(error Unsupported PROFILE_ISA '$(PROFILE_ISA)'; expected native, x86-64, x86-64-v2, x86-64-v2-avx, x86-64-v3, or x86-64-v4)
+endif
+
+PROFILE_CFLAGS = $(STDFLAG) -O3 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DIHSNPEAKS_PROFILE=1 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(PROFILE_BUILD_DIR)
+PROFILE_SCALING_CFLAGS = -std=gnu11 -O3 -ffast-math -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)src/nufft
 
 ifeq ($(MIMALLOC),1)
 MIMALLOC_HEADER_PATH := $(shell for d in /usr/local/include /usr/include "$$HOME/include"; do [ -d "$$d" ] || continue; p=$$(find "$$d" -maxdepth 3 -type f -name mimalloc.h -print -quit 2>/dev/null); if [ -n "$$p" ]; then printf '%s\n' "$$p"; break; fi; done)
@@ -231,6 +265,53 @@ native: $(NUFFT_OBJ) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP)
 	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(STATIC_LDFLAGS) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
 	strip -s ihsnpeaks
 	@echo "Compilation complete"
+
+$(PROFILE_BUILD_DIR):
+	@mkdir -p $@
+
+$(PROFILE_ROOT):
+	@mkdir -p $@
+
+$(PROFILE_NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) | $(PROFILE_BUILD_DIR)
+	$(PROFILE_CC) $(PROFILE_CFLAGS) -c $< -o $@
+
+$(PROFILE_SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(PROFILE_NUFFT_OBJ) $(NUFFT_HDR) | $(PROFILE_BUILD_DIR)
+	$(PROFILE_CC) $(PROFILE_SCALING_CFLAGS) $< $(PROFILE_NUFFT_OBJ) -static -lm -o $@
+
+$(PROFILE_SCALING_HEADER): $(PROFILE_SCALING_GEN)
+	$(PROFILE_SCALING_GEN) $@
+
+$(PROFILE_BIN): $(MAKEFILE_DIR)src/main.c $(PROFILE_HEADERS) $(PROFILE_NUFFT_OBJ) $(PROFILE_SCALING_HEADER) | $(PROFILE_ROOT)
+	$(PROFILE_CC) $(PROFILE_CFLAGS) $(MAKEFILE_DIR)src/main.c $(PROFILE_NUFFT_OBJ) -static -Wl,--gc-sections -lm -o $@
+
+profile: $(PROFILE_BIN)
+	@echo "Profile binary: $(PROFILE_BIN)"
+	@echo "Profile ISA: $(PROFILE_ISA)"
+
+profile-run: profile
+	@mkdir -p $(PROFILE_RESULTS_DIR)
+	@for j in $(PROFILE_JOBS); do \
+		log="$(PROFILE_RESULTS_DIR)/$(PROFILE_ISA)-j$${j}.log"; \
+		echo "Profiling PROFILE_ISA=$(PROFILE_ISA) -j $${j} -> $${log}"; \
+		{ \
+			echo "[ihsnpeaks profile host]"; \
+			if command -v lscpu >/dev/null 2>&1; then \
+				lscpu | grep -E '^(Model name|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket\(s\)|L1d cache|L2 cache|L3 cache):' || true; \
+			else \
+				echo "lscpu: unavailable"; \
+			fi; \
+			bash -c 'time -p "$$@"' ihsnpeaks-profile $(PROFILE_BIN) $(PROFILE_TARGET) $(PROFILE_FMAX) $(PROFILE_ARGS) -j $${j}; \
+		} > "$${log}" 2>&1; \
+		status=$$?; \
+		if [ $$status -ne 0 ]; then \
+			echo "profile run failed for -j $${j}; see $${log}"; \
+			exit $$status; \
+		fi; \
+		grep -E '^(real|user|sys|\[ihsnpeaks profile\]|threads:|targets:|  nufft_execute|  power_accumulate|  ladder_advance|  estimated total|  nufft workspace|  twiddle ladder arrays)' "$${log}" || true; \
+	done
+
+profile-clean:
+	@rm -rf $(PROFILE_ROOT)
 
 release:
 	docker build -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE) $(MAKEFILE_DIR)

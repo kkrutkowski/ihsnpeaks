@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "params.h"
+#include "profile.h"
 #include "utils/readout.h"
 #include "utils/simd.h"
 #include "utils/strings.h"
@@ -153,23 +154,49 @@ static inline void accumulate_power(buffer_t *buffer, uint32_t base, uint32_t co
 static inline void execute_nufft_sweep(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq) {
     (void)params;
     memset(buffer->power, 0, ((size_t)nfreq + 1U) * sizeof(float));
-    nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
+    {
+        PROFILE_START(precompute);
+        nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
+        PROFILE_END(precompute, PROFILE_PHASE_PRECOMPUTE);
+    }
 
     size_t num_blocks = ((size_t)nfreq + (size_t)buffer->activeOutputLen - 1U) / (size_t)buffer->activeOutputLen;
     for (int t = 0; t < buffer->terms; ++t) {
         double freq_factor = (double)(t + 1);
-        fill_complex_input(buffer, fmin, freq_factor);
-        fill_twiddle_ladder(buffer, fstep, freq_factor);
-        reset_work_ladder(buffer);
+        {
+            PROFILE_START(fill_input);
+            fill_complex_input(buffer, fmin, freq_factor);
+            PROFILE_END(fill_input, PROFILE_PHASE_FILL_INPUT);
+        }
+        {
+            PROFILE_START(ladder_setup);
+            fill_twiddle_ladder(buffer, fstep, freq_factor);
+            PROFILE_END(ladder_setup, PROFILE_PHASE_LADDER_SETUP);
+        }
+        {
+            PROFILE_START(reset_ladder);
+            reset_work_ladder(buffer);
+            PROFILE_END(reset_ladder, PROFILE_PHASE_RESET_LADDER);
+        }
 
         for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             uint32_t base = (uint32_t)(block_idx * (size_t)buffer->activeOutputLen);
             uint32_t count = buffer->activeOutputLen;
             if (base + count > nfreq) count = nfreq - base;
-            nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, t + 1);
-            accumulate_power(buffer, base, count);
+            {
+                PROFILE_START(nufft_execute);
+                nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, t + 1);
+                PROFILE_END(nufft_execute, PROFILE_PHASE_NUFFT_EXECUTE);
+            }
+            {
+                PROFILE_START(power_accumulate);
+                accumulate_power(buffer, base, count);
+                PROFILE_END(power_accumulate, PROFILE_PHASE_POWER_ACCUMULATE);
+            }
             if (block_idx + 1U < num_blocks) {
+                PROFILE_START(ladder_advance);
                 advance_work_ladder(buffer, block_idx + 1U);
+                PROFILE_END(ladder_advance, PROFILE_PHASE_LADDER_ADVANCE);
             }
         }
     }
@@ -204,8 +231,13 @@ static inline bool quadratic_peak_position(double freq, double fstep, float left
 }
 
 void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch) {
+    PROFILE_COUNT_TARGET();
+    PROFILE_START(read);
     read_dat(in_file, buffer);
+    PROFILE_END(read, PROFILE_PHASE_READ);
+    PROFILE_START(preprocess);
     preprocess_buffer(buffer, params->epsilon, params->mode);
+    PROFILE_END(preprocess, PROFILE_PHASE_PREPROCESS);
 
     peak_t *peak_base = buffer->peaks;
     peak_t *selected_peaks = peak_base;
@@ -252,6 +284,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         }
 
         if (params->spectrum && !aov_streamed) {
+            PROFILE_START(spectrum);
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
                 float magnitude;
@@ -265,9 +298,11 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                 if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
                 appendFreq(freq, magnitude, n, params->outputPeriod, &buffer->spectrum, &stringBuff[0]);
             }
+            PROFILE_END(spectrum, PROFILE_PHASE_PEAK_SCAN);
         }
 
-        if (!aov_streamed)
+        if (!aov_streamed) {
+            PROFILE_START(peak_scan);
             for (uint32_t i = 1; i + 1 < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
                 float magnitude = 0.0f;
@@ -298,13 +333,17 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                     }
                 }
             }
+            PROFILE_END(peak_scan, PROFILE_PHASE_PEAK_SCAN);
+        }
 
         int candidate_count = (int)buffer->nPeaks;
+        PROFILE_START(sort);
         if (use_aov) {
             aov_sort_peaks(buffer->peaks, candidate_count, buffer, params, df);
         } else {
             sortPeaks(buffer->peaks, candidate_count, buffer, params->mode, df, params->nterms, params->gbEvalMode, params->gbAlpha);
         }
+        PROFILE_END(sort, PROFILE_PHASE_SORT);
 
         if (!params->prewhiten) break;
         if (candidate_count <= 0 || selected_count >= params->npeaks) break;
@@ -325,21 +364,27 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         buffer->nPeaks = (uint32_t)selected_count;
     }
 
-    if (!batch) {
-        print_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
-    } else {
-        append_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
-    }
-    if (params->spectrum) {
-        write_tsv(buffer, in_file);
+    {
+        PROFILE_START(output);
+        if (!batch) {
+            print_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+        } else {
+            append_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+        }
+        if (params->spectrum) {
+            write_tsv(buffer, in_file);
+        }
+        PROFILE_END(output, PROFILE_PHASE_OUTPUT);
     }
     buffer->peaks = peak_base;
     buffer->nPeaks = 0;
+    PROFILE_FLUSH_THREAD();
     return;
 
 cleanup:
     buffer->peaks = peak_base;
     buffer->nPeaks = 0;
+    PROFILE_FLUSH_THREAD();
 }
 
 void process_targets(void *data, long i, int thread_id) {
