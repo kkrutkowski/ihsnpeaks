@@ -1,8 +1,10 @@
 # ihsnpeaks
 
-`ihsnpeaks` is a small C command-line periodogram utility for astronomical light-curve searches. The 1.0 release line is focused on the CLI: high-performance multi-harmonic IHS/Rayleigh-style periodograms, AoV-style periodograms, Gaussian Blur evaluation modes, and batch processing of `.dat` photometry files.
+`ihsnpeaks` is a C command-line periodogram utility for astronomical light-curve analysis. The 1.0 release line is focused on the CLI: high-performance multi-harmonic IHS/Rayleigh-style periodograms, AoVMH(W)/FastChi^2 periodogram's implementation, and Gaussian blur-based Supersmoother-like periodogram, with ANCOVA and F-test for inequality of variance available for reevaluation, as well, as batch processing of OGLE-format `.dat` photometric files (with native multithreading support).
 
-The repository may contain viewer experiments such as `photview` and `spec_viewer`, but they are not part of the 1.0 release surface.
+The tool is meant first and foremost as a more performant (and stable) replacement for [FNPEAKS/MPEAKS](http://helas.astro.uni.wroc.pl/deliverables.php?lang=en&active=fnpeaks), [aovdist](https://users.camk.edu.pl/alex/#software) and [FastChi2 v1.03](https://web.archive.org/web/20250525051459/http://public.lanl.gov/palmer/fastchi.html) CLI utilities.
+
+The repository additionally contain `photview` and `spec_viewer` Python utilities meant for debugging purposes, which are not a part of 
 
 ## Features
 
@@ -10,7 +12,7 @@ The repository may contain viewer experiments such as `photview` and `spec_viewe
 - No mimalloc dependency in the default build path.
 - Full static musl Linux x86-64 release build with runtime dispatch.
 - Runtime dispatch variants for `x86-64`, `x86-64-v2`, `x86-64-v2+avx`, `x86-64-v3`, and `x86-64-v4` when supported by the build host.
-- Native source builds prefer GNU C23, fall back to GNU C11, and finally GNU C99.
+- Native source builds prefer GNU C23, with fallback to GNU C11 and GNU C99 standards.
 - C99-compatible aligned allocation fallback is kept for systems without C11 `aligned_alloc`.
 
 ## Building
