@@ -28,9 +28,16 @@ typedef enum {
 static unsigned long long profile_ns[PROFILE_PHASE_COUNT];
 static unsigned long long profile_calls[PROFILE_PHASE_COUNT];
 static unsigned long long profile_targets;
-static _Thread_local unsigned long long profile_local_ns[PROFILE_PHASE_COUNT];
-static _Thread_local unsigned long long profile_local_calls[PROFILE_PHASE_COUNT];
-static _Thread_local unsigned long long profile_local_targets;
+
+#    if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#        define IHSNPEAKS_PROFILE_THREAD_LOCAL _Thread_local
+#    else
+#        define IHSNPEAKS_PROFILE_THREAD_LOCAL __thread
+#    endif
+
+static IHSNPEAKS_PROFILE_THREAD_LOCAL unsigned long long profile_local_ns[PROFILE_PHASE_COUNT];
+static IHSNPEAKS_PROFILE_THREAD_LOCAL unsigned long long profile_local_calls[PROFILE_PHASE_COUNT];
+static IHSNPEAKS_PROFILE_THREAD_LOCAL unsigned long long profile_local_targets;
 
 static inline uint64_t profile_now_ns(void) {
     struct timespec ts;

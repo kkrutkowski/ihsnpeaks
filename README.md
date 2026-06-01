@@ -1,38 +1,76 @@
 # ihsnpeaks
-A minimalistic C23 implementation of high-performance multi-harmonic Rayleigh's Z-test and a circularly-independent F test, designed as a replacement for [FNPEAKS and MPEAKS](http://helas.astro.uni.wroc.pl/deliverables.php?active=fnpeaks)
 
-## Installation
-### Dependencies
-The makefile requires [readlink](https://www.gnu.org/software/coreutils/manual/html_node/readlink-invocation.html#readlink-invocation) and a gnu11-compatible C compiler.
+`ihsnpeaks` is a small C command-line periodogram utility for astronomical light-curve searches. The 1.0 release line is focused on the CLI: high-performance multi-harmonic IHS/Rayleigh-style periodograms, AoV-style periodograms, Gaussian Blur evaluation modes, and batch processing of `.dat` photometry files.
 
-While these binaries should come preinstalled on most modern Linux distributions they may be absent on some of the other POSIX-compliant operating systems. In that case, manual compilation may be required. In that case the compiler has to support at least the gnu99 C standard (with a fallback to ANSI C99 planned for the full 1.0 release).
+The repository may contain viewer experiments such as `photview` and `spec_viewer`, but they are not part of the 1.0 release surface.
 
-Additionally the [**photview**](https://github.com/kkrutkowski/ihsnpeaks/blob/main/src/photview) extension (written in the python3 language) relies on [NumPy](https://pypi.org/project/numpy/), [AstroPy](https://pypi.org/project/astropy/), [PyQt6](https://pypi.org/project/PyQt6/) and [PyQt6-Charts](https://pypi.org/project/PyQt6-Charts/).
-### Building from source
-The makefile installation requires running the makefile with CC set to a gnu11-compatible compiler, although the gnu23 compatibility is expected to result in a noticeable performance increase over the older compilers. To install the application on the systems with no release candidates available please run;
-```
-git clone --depth=1 https://github.com/kkrutkowski/ihsnpeaks && cd ihsnpeaks
+## Features
+
+- Built-in PSWF NuFFT backend; FFTW3 is no longer downloaded or linked.
+- No mimalloc dependency in the default build path.
+- Full static musl Linux x86-64 release build with runtime dispatch.
+- Runtime dispatch variants for `x86-64`, `x86-64-v2`, `x86-64-v2+avx`, `x86-64-v3`, and `x86-64-v4` when supported by the build host.
+- Native source builds prefer GNU C23, fall back to GNU C11, and finally GNU C99.
+- C99-compatible aligned allocation fallback is kept for systems without C11 `aligned_alloc`.
+
+## Building
+
+The default source build targets the current machine:
+
+```sh
 make native
+```
+
+`make` is an alias for `make native`. The native build requires a POSIX-like environment, `make`, `readlink`, and a GNU-compatible C compiler. Newer compilers generally produce faster binaries, but the makefile probes the compiler and chooses `-std=gnu23`, `-std=gnu11`, or `-std=gnu99`.
+
+Install the native binary with:
+
+```sh
 sudo make install
 ```
 
-Alternatively, `make` is an alias for `make native`.
+The static Linux x86-64 release binary is generated with Docker:
 
-Current source builds use the bundled PSWF NuFFT backend in `src/nufft/`; FFTW is no longer downloaded or linked.
+```sh
+make release
+```
 
-## Planned features
-* Prewhitening
-  * Transit detection and outlier filtering
-* MAST .fits photometry support
-* Multi-target archive support
-  * Custom .phot64 binary archive
-  * Tape archive input (.dat + .fits content)
-  * Multiband periodograms
-  * LZ4 runtime decompression
-  * Archive creation
-* GUI results evalutation tool
+This writes `dist/ihsnpeaks-linux-x86_64`. `dist/` is ignored by git, so release binaries should be regenerated as part of the release process rather than treated as tracked source artifacts.
+
+## Usage
+
+```sh
+./ihsnpeaks target fmax [options]
+```
+
+Examples:
+
+```sh
+./ihsnpeaks test_data/OGLE-BLAP-035.dat 10 -n 3 -d 5
+./ihsnpeaks /path/to/photometry_directory 40 -d 1 -m 0 -j 16
+./ihsnpeaks target.dat 20 --save --degree 10
+```
+
+Useful options:
+
+- `-d, --degree, --terms`: number of harmonics.
+- `-m, --mode`: peak evaluation/refinement mode.
+- `-g, --grid`: periodogram method, including `ihs`, `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2`.
+- `-s, --save, --spectrum`: write generated spectra to `.tsv`.
+- `-j, --jobs`: limit worker threads.
+- `--nfft, --nufft, --nufft1`: select PSWF NuFFT backend variant.
+
+Run `./ihsnpeaks --help` for the full option list.
+
+## Release Notes
+
+- The 1.0 CLI no longer depends on FFTW3 or mimalloc by default.
+- The release binary uses musl static linking and x86-64 runtime dispatch.
+- Dispatch can be forced for testing with `IHSNPEAKS_DISPATCH=<variant>`.
+- Stale local binaries are not release artifacts; rebuild with `make native` or `make release`.
 
 ## Credits
+
 1. [astropy](https://github.com/astropy/astropy)
 2. [aovdist](https://users.camk.edu.pl/alex/)
 3. [FastChi2](https://web.archive.org/web/20260000000000*/https://public.lanl.gov/palmer/fastchi.html)

@@ -29,6 +29,7 @@ MIMALLOC_OVERRIDE_HEADER := $(MIMALLOC_COMPAT_DIR)/ihsnpeaks-mimalloc-override.h
 NUFFT_SRC := $(MAKEFILE_DIR)src/nufft/nufft1.c
 NUFFT_HDR := $(MAKEFILE_DIR)src/nufft/nufft1.h
 TRIG_HDR := $(MAKEFILE_DIR)src/utils/trig.h
+COMPAT_HDR := $(MAKEFILE_DIR)src/utils/compat.h
 NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
@@ -65,7 +66,7 @@ else
 endif
 
 PROFILE_CFLAGS = $(STDFLAG) -O3 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DIHSNPEAKS_PROFILE=1 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(PROFILE_BUILD_DIR)
-PROFILE_SCALING_CFLAGS = -std=gnu11 -O3 -ffast-math -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)src/nufft
+PROFILE_SCALING_CFLAGS = $(STDFLAG) -O3 -ffast-math -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)src/nufft
 
 ifeq ($(MIMALLOC),1)
 MIMALLOC_HEADER_PATH := $(shell for d in /usr/local/include /usr/include "$$HOME/include"; do [ -d "$$d" ] || continue; p=$$(find "$$d" -maxdepth 3 -type f -name mimalloc.h -print -quit 2>/dev/null); if [ -n "$$p" ]; then printf '%s\n' "$$p"; break; fi; done)
@@ -215,16 +216,7 @@ else
     OPTFLAGS := -O3
 endif
 
-CC_MAJOR_VERSION := $(firstword $(subst ., ,$(CC_VERSION_NUMBER)))
-ifeq ($(CC_MAJOR_VERSION),)
-    CC_MAJOR_VERSION := 0
-endif
-
-ifeq ($(shell test $(CC_MAJOR_VERSION) -lt $(MIN_VERSION) && echo true || echo false),true)
-    STDFLAG := -std=gnu11
-else
-    STDFLAG := -std=gnu23
-endif
+STDFLAG := $(shell if printf 'int main(void){return 0;}\n' | $(CC) -std=gnu23 -x c - -fsyntax-only >/dev/null 2>&1; then printf '%s\n' -std=gnu23; elif printf 'int main(void){return 0;}\n' | $(CC) -std=gnu11 -x c - -fsyntax-only >/dev/null 2>&1; then printf '%s\n' -std=gnu11; else printf '%s\n' -std=gnu99; fi)
 
 CFLAGS := $(STDFLAG) $(OPTFLAGS) $(CFLAGS_BASE)
 
@@ -251,11 +243,11 @@ $(MIMALLOC_OVERRIDE_HEADER): $(MIMALLOC_COMPAT_HEADER) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@printf '#ifndef IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#define IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#include <mimalloc/mimalloc.h>\n#define malloc(n) mi_malloc(n)\n#define calloc(c,n) mi_calloc(c,n)\n#define realloc(p,n) mi_realloc(p,n)\n#define free(p) mi_free(p)\n#define strdup(s) mi_strdup(s)\n#define strndup(s,n) mi_strndup(s,n)\n#define realpath(f,n) mi_realpath(f,n)\n#define aligned_alloc(a,n) mi_aligned_alloc(a,n)\n#define posix_memalign(p,a,n) mi_posix_memalign(p,a,n)\n#define reallocarray(p,c,n) mi_reallocarray(p,c,n)\n#endif\n' > $@
 
-$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(MIMALLOC_HEADER_DEP) | $(BUILD_DIR)
+$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(MIMALLOC_HEADER_DEP) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
 
-$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) | $(BUILD_DIR)
-	$(CC) -std=gnu11 -O3 -ffast-math -Wall -Wextra -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
+$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) | $(BUILD_DIR)
+	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra -D_GNU_SOURCE -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
 
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@
@@ -272,10 +264,10 @@ $(PROFILE_BUILD_DIR):
 $(PROFILE_ROOT):
 	@mkdir -p $@
 
-$(PROFILE_NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) | $(PROFILE_BUILD_DIR)
+$(PROFILE_NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) | $(PROFILE_BUILD_DIR)
 	$(PROFILE_CC) $(PROFILE_CFLAGS) -c $< -o $@
 
-$(PROFILE_SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(PROFILE_NUFFT_OBJ) $(NUFFT_HDR) | $(PROFILE_BUILD_DIR)
+$(PROFILE_SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(PROFILE_NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) | $(PROFILE_BUILD_DIR)
 	$(PROFILE_CC) $(PROFILE_SCALING_CFLAGS) $< $(PROFILE_NUFFT_OBJ) -static -lm -o $@
 
 $(PROFILE_SCALING_HEADER): $(PROFILE_SCALING_GEN)

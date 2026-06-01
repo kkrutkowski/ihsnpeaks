@@ -4,8 +4,6 @@
 #include <math.h>
 #include <stdint.h>
 
-#include "trig.h"
-
 #ifndef VEC_BYTES
 #    ifdef __AVX512F__
 #        define VEC_BYTES 64

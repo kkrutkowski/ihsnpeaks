@@ -13,6 +13,7 @@
 #include "utils/readout.h"
 #include "utils/simd.h"
 #include "utils/strings.h"
+#include "utils/trig.h"
 
 static inline float correctPowerTmp(float K, float nInv) {
     VEC K_tmp = SET_VEC(0.0f);

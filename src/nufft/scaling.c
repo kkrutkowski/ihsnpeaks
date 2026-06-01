@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../utils/compat.h"
 #include "nufft1.h"
 
 static double now_seconds(void) {

@@ -9,6 +9,7 @@
 
 #include "common.h"
 #include "simd.h"
+#include "trig.h"
 
 #ifndef M_SQRT1_2
 #    define M_SQRT1_2 0.70710678118654752440

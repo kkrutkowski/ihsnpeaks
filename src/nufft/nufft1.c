@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../utils/compat.h"
 #include "../utils/trig.h"
 #include "nufft1.h"
 
