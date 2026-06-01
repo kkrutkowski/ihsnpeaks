@@ -57,10 +57,9 @@ Useful options:
 
 - `-d, --degree, --terms`: number of harmonics.
 - `-m, --mode`: peak evaluation/refinement mode.
-- `-g, --grid`: periodogram method, including `ihs`, `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2`.
-- `-s, --save, --spectrum`: write generated spectra to `.tsv`.
-- `-j, --jobs`: limit worker threads.
-- `--nfft, --nufft, --nufft1`: select PSWF NuFFT backend variant.
+- `-g, --grid`: periodogram method: default `ihs` or phase-coherent `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2` (all phase-coherent keys are aliases of the same method).
+- `-s, --save, --spectrum`: write generated spectra to `.tsv` files.
+- `-j, --jobs`: limit worker threads (default:0 - unlimited threads)
 
 Run `./ihsnpeaks --help` for the full option list.
 
