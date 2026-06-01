@@ -2,7 +2,7 @@
 
 CC ?= gcc
 MIMALLOC ?= 0
-ROOT := ..
+ROOT := ../..
 ALLOCATOR_BUILD := system
 ifeq ($(MIMALLOC),1)
     ALLOCATOR_BUILD := mimalloc
