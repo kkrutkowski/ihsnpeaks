@@ -76,7 +76,10 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     for (int j = 0; j < n; j++) {
         out[j] = in[j].parts.val;
     }
-    double norm = 1.0 / ((2 * r + 1) * (2 * r + 1) * (2 * r + 1) * (2 * r + 1));
+    double width = (2.0 * (double)r) + 1.0;
+    double inv_width = 1.0 / width;
+    double norm = inv_width * inv_width;
+    norm *= norm;
 
     for (int i = 0; i <= 3; i++) {
         double val = 0.0;
