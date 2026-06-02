@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <klib/ketopt.h>
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -27,6 +28,9 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
     params.gbAlpha = 0.025f;
+    params.blsMinRelWidth = 0.01;
+    params.blsMaxRelWidth = 0.5;
+    params.blsWidthCount = 10;
     params.npeaks = 10;
     params.nterms = 3;
     params.defaultGridRatio = 128;
@@ -49,8 +53,13 @@ void print_parameters(parameters *params) {
     printf("\tDetection threshold: %.2f\n", params->threshold * M_LOG10E);
     printf("\tExpected systemic variation: %.1e\n", params->epsilon);
     printf("\tPeriodogram method: %s\n", periodogram_method_name(params->periodogramMethod));
-    printf("\tGaussian blur evaluation: %s\n", gb_eval_name(params->gbEvalMode));
-    printf("\tGaussian blur alpha: %.6g\n", params->gbAlpha);
+    const eval_method_t *method = eval_method_for_params(params);
+    printf("\tPeak evaluation: %s\n", method->name);
+    if (method->uses_duration_grid) {
+        printf("\tBLS relative durations: %.6g .. %.6g (%d)\n", params->blsMinRelWidth, params->blsMaxRelWidth, params->blsWidthCount);
+    } else {
+        printf("\tGaussian blur alpha: %.6g\n", params->gbAlpha);
+    }
     printf("\tNpeaks: %d\n", params->npeaks);
     printf("\tNterms: %d\n", params->nterms);
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
@@ -112,7 +121,8 @@ void print_help(char **argv) {
     printf("                            \t5 like 2, but use a dense direct evaluation grid\n");
     printf("                            \t6 like 4, but dense direct evaluation replaces the NuFFT grid\n");
     printf("  -t, --threshold           Set the peak detection threshold (default: 10.0)\n");
-    printf("  -e, --eval, --evaluate    Gaussian blur evaluation: gbls|gbl or gbaw|gba, optionally [alpha in 0..1] (default: gbls[0.025])\n");
+    printf("  -e, --eval, --evaluate    Peak evaluation: gbls|gbl, gbaw|gba, or bls; gbls/gbaw accept [alpha], bls accepts [a,b,count]\n");
+    printf("                            \t(default: gbls[0.025]; bls default: bls[0.01,0.5,10])\n");
     printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
     printf("  -g, --g, --grid           Periodogram method: ihs (default) or aov/aovmh/aobmhw/chi/chi2/fastchi2\n");
     printf("  -s, --save, --spectrum    Print generated spectra into .tsv files (default: false)\n");
@@ -178,7 +188,7 @@ static bool parse_periodogram_method(const char *arg, periodogram_method *method
     return false;
 }
 
-static bool parse_gb_eval(const char *arg, gb_eval_mode *mode, float *gbAlpha) {
+static bool parse_eval(const char *arg, parameters *params) {
     const char *open = strchr(arg, '[');
     const char *name_end = open ? open : arg + strlen(arg);
     size_t name_len = (size_t)(name_end - arg);
@@ -190,27 +200,58 @@ static bool parse_gb_eval(const char *arg, gb_eval_mode *mode, float *gbAlpha) {
     if (open) {
         const char *close = strchr(open + 1, ']');
         if (!close || close[1] != '\0') return false;
-        errno = 0;
-        char *parse_end = NULL;
-        float parsed_alpha = strtof(open + 1, &parse_end);
-        if (errno != 0 || parse_end != close || !isfinite(parsed_alpha)) return false;
-        if (parsed_alpha < 0.0f) {
-            fprintf(stderr, "Warning: Gaussian blur alpha %.6g is below 0.0; clamping to 0.0.\n", parsed_alpha);
-            parsed_alpha = 0.0f;
+        if (strcmp(name, "bls") == 0) {
+            errno = 0;
+            char *parse_end = NULL;
+            double a = strtod(open + 1, &parse_end);
+            if (errno != 0 || parse_end == open + 1 || *parse_end != ',' || !isfinite(a)) return false;
+            const char *second = parse_end + 1;
+            errno = 0;
+            double b = strtod(second, &parse_end);
+            if (errno != 0 || parse_end == second || *parse_end != ',' || !isfinite(b)) return false;
+            const char *third = parse_end + 1;
+            errno = 0;
+            long count = strtol(third, &parse_end, 10);
+            if (errno != 0 || parse_end == third || parse_end != close || count < 1 || count > INT32_MAX) return false;
+            double min_width = a < b ? a : b;
+            double max_width = a < b ? b : a;
+            if (!(min_width >= 1.0e-3) || !(max_width < 1.0)) {
+                fprintf(stderr, "Invalid BLS relative duration bounds %.6g, %.6g. Expected 1e-3 <= min(a,b) <= max(a,b) < 1.\n", a, b);
+                return false;
+            }
+            params->blsMinRelWidth = min_width;
+            params->blsMaxRelWidth = max_width;
+            params->blsWidthCount = (int)count;
+        } else {
+            errno = 0;
+            char *parse_end = NULL;
+            float parsed_alpha = strtof(open + 1, &parse_end);
+            if (errno != 0 || parse_end != close || !isfinite(parsed_alpha)) return false;
+            if (parsed_alpha < 0.0f) {
+                fprintf(stderr, "Warning: Gaussian blur alpha %.6g is below 0.0; clamping to 0.0.\n", parsed_alpha);
+                parsed_alpha = 0.0f;
+            }
+            if (parsed_alpha > 1.0f) {
+                fprintf(stderr, "Warning: Gaussian blur alpha %.6g is above 1.0; clamping to 1.0.\n", parsed_alpha);
+                parsed_alpha = 1.0f;
+            }
+            params->gbAlpha = parsed_alpha;
         }
-        if (parsed_alpha > 1.0f) {
-            fprintf(stderr, "Warning: Gaussian blur alpha %.6g is above 1.0; clamping to 1.0.\n", parsed_alpha);
-            parsed_alpha = 1.0f;
-        }
-        *gbAlpha = parsed_alpha;
     }
 
     if (strcmp(name, "gbls") == 0 || strcmp(name, "gbl") == 0) {
-        *mode = GB_EVAL_GBLS;
+        params->gbEvalMode = GB_EVAL_GBLS;
         return true;
     }
     if (strcmp(name, "gbaw") == 0 || strcmp(name, "gba") == 0) {
-        *mode = GB_EVAL_GBAW;
+        params->gbEvalMode = GB_EVAL_GBAW;
+        return true;
+    }
+    if (strcmp(name, "bls") == 0) {
+        if (!open) {
+            if (!(params->blsMinRelWidth >= 1.0e-3) || !(params->blsMaxRelWidth < 1.0) || params->blsWidthCount < 1) return false;
+        }
+        params->gbEvalMode = GB_EVAL_BLS;
         return true;
     }
     return false;
@@ -277,8 +318,8 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.fmin = atof(opt.arg);
                 break;
             case 'e':
-                if (!parse_gb_eval(opt.arg, &params.gbEvalMode, &params.gbAlpha)) {
-                    fprintf(stderr, "Invalid evaluation '%s'. Expected gbls, gbl, gbaw, or gba with optional [alpha].\n", opt.arg);
+                if (!parse_eval(opt.arg, &params)) {
+                    fprintf(stderr, "Invalid evaluation '%s'. Expected gbls/gbl or gbaw/gba with optional [alpha], or bls[a,b,count].\n", opt.arg);
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -390,6 +431,9 @@ static inline double correct_aov_threshold(const double threshold, const int deg
 }
 
 static inline double correct_threshold(const parameters *params, const buffer_t *buffer) {
+    const bool use_aov = periodogram_uses_aov(params->periodogramMethod);
+    const eval_method_t *method = eval_method_for_params(params);
+    if (eval_method_uses_direct_grid(method, use_aov, params->mode)) return params->threshold;
     if (periodogram_uses_aov(params->periodogramMethod)) {
         return correct_aov_threshold(params->threshold, params->nterms, periodogram_effective_n(buffer));
     }

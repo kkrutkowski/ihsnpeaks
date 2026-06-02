@@ -21,7 +21,7 @@ typedef enum {
     PERIODOGRAM_FASTCHI2
 } periodogram_method;
 
-typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW } gb_eval_mode;
+typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW, GB_EVAL_BLS } gb_eval_mode;
 
 static inline bool float_is_nan_bits(float value) {
     union {
@@ -69,11 +69,9 @@ static inline const char* periodogram_method_name(periodogram_method method) {
     }
 }
 
-static inline const char* gb_eval_name(gb_eval_mode mode) { return mode == GB_EVAL_GBAW ? "gbaw" : "gbls"; }
-
-static inline const char* gb_stat_label(gb_eval_mode mode) { return mode == GB_EVAL_GBAW ? "T" : "R2"; }
-
 static inline bool mode_uses_direct_gb_grid(int mode) { return mode >= 5; }
+
+static inline bool mode_uses_direct_eval_grid(int mode) { return mode_uses_direct_gb_grid(mode); }
 
 static inline bool mode_defers_peak_evaluation(int mode) { return mode < 3 || mode == 5; }
 
@@ -94,6 +92,11 @@ static inline double gb_direct_frequency_step(uint32_t n, double time_span, floa
     if (n == 0 || time_span <= 0.0 || oversamplingFactor <= 0.0f) return 0.0;
     int r = gb_convolution_radius(n, gbAlpha);
     return (12.0 * (double)r) / ((double)n * (double)oversamplingFactor * time_span);
+}
+
+static inline double bls_direct_frequency_step(double time_span, float oversamplingFactor, double minRelWidth) {
+    if (time_span <= 0.0 || oversamplingFactor <= 0.0f || minRelWidth <= 0.0) return 0.0;
+    return (2.0 * minRelWidth) / (time_span * (double)oversamplingFactor);
 }
 
 typedef struct {
@@ -200,6 +203,9 @@ typedef struct {
     float oversamplingFactor;
     float epsilon;
     float gbAlpha;
+    double blsMinRelWidth;
+    double blsMaxRelWidth;
+    int blsWidthCount;
     int npeaks;
     int nterms;
     int mode;

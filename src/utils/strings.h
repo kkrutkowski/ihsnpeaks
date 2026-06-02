@@ -101,8 +101,9 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     }
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     bool print_amp = mode > 0;
-    // Column indices: 0: output coordinate, 1: log(p), 2: Amp, 3: R.
-    const char *hdr[4] = {params->outputPeriod ? "P[d]" : "f[1/d]", "log(p)", "Amp", gb_stat_label(evalMode)};
+    const eval_method_t *method = eval_method_for_mode(evalMode);
+    // Column indices: 0: output coordinate, 1: NLL, 2: Amp, 3: statistic.
+    const char *hdr[4] = {params->outputPeriod ? "P[d]" : "f[1/d]", method->peak_power_label, "Amp", method->stat_label};
     if (use_aov && !print_amp) hdr[2] = "R2";
     int hdrWidth[4];
     int colWidth[4];
@@ -115,9 +116,9 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     }
 
     /* First pass: scan through peaks and compute the maximum printed width for each column.
-       Note: For log(p) we compute log10(p) by first converting the natural log to log10 using M_LOG10E. */
+       Peak power is stored internally as natural NLL and printed here as base-10 NLL. */
     for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
-        double logp = buffer->peaks[i].p * M_LOG10E;  // equivalent to log10(p)
+        double nll10 = buffer->peaks[i].p * M_LOG10E;
         double amp = print_amp ? buffer->peaks[i].amp : buffer->peaks[i].r2;
         double r = buffer->peaks[i].r2;
         // printf("%.3f\n", r); // ??? - wrong here
@@ -126,7 +127,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
         custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
         w = (int)strlen(stringBuff);
         if (w > colWidth[0]) colWidth[0] = w;
-        w = column_width(logp, 2);
+        w = column_width(nll10, 2);
         if (w > colWidth[1]) colWidth[1] = w;
         w = column_width(amp, 3);
         if (w > colWidth[2]) colWidth[2] = w;
@@ -185,7 +186,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
             buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             buffer->outBuf = sdscat(buffer->outBuf, "\t");
 
-            // log(p) (precision 2)
+            // Base-10 NLL (precision 2)
             custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
             len = (int)strlen(stringBuff);
             pad = colWidth[1] - len;
@@ -306,7 +307,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
-                // Convert log(p) to string using custom_ftoa
+                // Convert base-10 NLL to string using custom_ftoa
                 custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
                 buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);

@@ -685,6 +685,7 @@ static inline void aov_binsearch_peak(peak_t *peak, buffer_t *buffer, const para
 static inline void aov_append_peak(buffer_t *buffer, const parameters *params, double freq, float r2, double df) {
     if (params->npeaks <= 0) return;
     if (!float_is_finite_bits(r2)) return;
+    const eval_method_t *method = eval_method_for_params(params);
     peak_t appended = {0};
     appended.freq = freq;
     appended.r2 = r2;
@@ -693,22 +694,20 @@ static inline void aov_append_peak(buffer_t *buffer, const parameters *params, d
     float rank = r2;
     if (!mode_defers_peak_evaluation(params->mode)) {
         if (mode_eagerly_refines_peaks(params->mode)) {
-            appended.r2 = get_gb_stat(buffer, appended.freq, &appended.amp, params->gbEvalMode, params->gbAlpha);
-            binsearch_peak(&appended, buffer, df, params->gbEvalMode, params->gbAlpha);
-            appended.r2 = get_gb_stat(buffer, appended.freq, &appended.amp, params->gbEvalMode, params->gbAlpha);
+            binsearch_peak(&appended, buffer, params, method, df);
         } else {
-            appended.r2 = get_gb_stat(buffer, appended.freq, &appended.amp, params->gbEvalMode, params->gbAlpha);
+            evaluate_peak_at_current_frequency(&appended, buffer, params, method);
         }
-        if (!float_is_finite_bits(appended.r2)) return;
-        appended.p = get_gb_likelihood_from_stat(appended.r2, buffer->n, params->gbEvalMode);
-        rank = appended.r2;
+        rank = eval_peak_rank(method, &appended);
+        if (!float_is_finite_bits(rank)) return;
     }
 
     int idx = (int)buffer->nPeaks;
-    float last_rank = mode_defers_peak_evaluation(params->mode) ? buffer->peaks[params->npeaks - 1].p : buffer->peaks[params->npeaks - 1].r2;
+    float last_rank =
+        mode_defers_peak_evaluation(params->mode) ? buffer->peaks[params->npeaks - 1].p : eval_peak_rank(method, &buffer->peaks[params->npeaks - 1]);
     if (idx >= params->npeaks && rank <= last_rank) return;
     while (idx > 0) {
-        float prev_rank = mode_defers_peak_evaluation(params->mode) ? buffer->peaks[idx - 1].p : buffer->peaks[idx - 1].r2;
+        float prev_rank = mode_defers_peak_evaluation(params->mode) ? buffer->peaks[idx - 1].p : eval_peak_rank(method, &buffer->peaks[idx - 1]);
         if (rank <= prev_rank) break;
         --idx;
     }
@@ -718,6 +717,7 @@ static inline void aov_append_peak(buffer_t *buffer, const parameters *params, d
 }
 
 static inline void aov_sort_peaks(peak_t *peaks, int length, buffer_t *buffer, const parameters *params, double df) {
+    const eval_method_t *method = eval_method_for_params(params);
     int n_eff = periodogram_effective_n(buffer);
     if (params->mode == 0) {
         for (int i = 0; i < length; ++i) peaks[i].p = aov_likelihood_from_r2(peaks[i].r2, params->nterms, n_eff);
@@ -725,18 +725,18 @@ static inline void aov_sort_peaks(peak_t *peaks, int length, buffer_t *buffer, c
     }
 
     for (int i = 0; i < length; ++i) {
-        if (mode_defers_peak_evaluation(params->mode)) peaks[i].r2 = get_gb_stat(buffer, peaks[i].freq, &peaks[i].amp, params->gbEvalMode, params->gbAlpha);
+        if (mode_defers_peak_evaluation(params->mode)) evaluate_peak_at_current_frequency(&peaks[i], buffer, params, method);
         if (mode_refines_retained_peaks(params->mode)) {
-            binsearch_peak(&peaks[i], buffer, df, params->gbEvalMode, params->gbAlpha);
-            peaks[i].r2 = get_gb_stat(buffer, peaks[i].freq, &peaks[i].amp, params->gbEvalMode, params->gbAlpha);
+            binsearch_peak(&peaks[i], buffer, params, method, df);
+        } else if (eval_peak_needs_result(&peaks[i])) {
+            evaluate_peak_at_current_frequency(&peaks[i], buffer, params, method);
         }
-        peaks[i].p = get_gb_likelihood_from_stat(peaks[i].r2, buffer->n, params->gbEvalMode);
     }
 
     for (int i = 1; i < length; ++i) {
         peak_t key = peaks[i];
         int j = i - 1;
-        while (j >= 0 && peaks[j].r2 < key.r2) {
+        while (j >= 0 && eval_peak_rank(method, &peaks[j]) < eval_peak_rank(method, &key)) {
             peaks[j + 1] = peaks[j];
             --j;
         }

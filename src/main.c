@@ -79,12 +79,14 @@ int main(int argc, char *argv[]) {
         }
         const char *coordinateLabel = params.outputPeriod ? "period" : "freq";
         const char *bestFitLabel = params.outputPeriod ? "best_fit_period" : "best_fit_frequency";
+        const eval_method_t *evalMethod = eval_method_for_params(&params);
+        const char *powerLabel = evalMethod->peak_power_label;
         if (periodogram_uses_aov(params.periodogramMethod) && params.mode < 1) {
-            fprintf(outputFile, "Input_file\t%s\t-log_10(FAP)\t\t[%s, -log_10(FAP), R2]\n", bestFitLabel, coordinateLabel);
+            fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, %s, R2]\n", bestFitLabel, powerLabel, coordinateLabel, powerLabel);
         } else if (params.mode < 1) {
-            fprintf(outputFile, "Input_file\t%s\t-log_10(FAP)\t\t[%s, -log_10(FAP)]\n", bestFitLabel, coordinateLabel);
+            fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, %s]\n", bestFitLabel, powerLabel, coordinateLabel, powerLabel);
         } else {
-            fprintf(outputFile, "Input_file\t%s\t-log_10(FAP)\t\t[%s, amp, %s]\n", bestFitLabel, coordinateLabel, gb_stat_label(params.gbEvalMode));
+            fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, amp, %s]\n", bestFitLabel, powerLabel, coordinateLabel, evalMethod->stat_label);
         }
         fclose(outputFile);
 

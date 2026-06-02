@@ -1,6 +1,7 @@
 #ifndef FTEST_H
 
 #    include <fdist.h>
+#    include <float.h>
 #    include <math.h>
 #    include <stddef.h>
 #    include <stdint.h>
@@ -45,6 +46,15 @@ static inline int32_t wrapidx(int32_t idx, int32_t n) {
 
 // Extract key from the 64-bit value (16-bit key at the lower 16 bits)
 static inline uint16_t extract_key(uint64_t value) { return (uint16_t)value; }  // Assuming lowest 16 bits only on little endian
+
+static inline uint16_t phase_key_10(double phase) {
+    double frac = phase - floor(phase);
+    if (frac < 0.0) frac += 1.0;
+    int key = (int)(frac * 1024.0);
+    if (key < 0) key = 0;
+    if (key > 1023) key = 1023;
+    return (uint16_t)key;
+}
 
 static inline void csort64_10(uint64_t** array, size_t n, uint64_t** aux_buffer, size_t* indices) {
     // Clear the indices array (initialized to 0)
@@ -139,7 +149,6 @@ static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool kee
                                          gb_projection_t* projection) {
     if (!buffer || !projection || !buffer->buf || !buffer->buf[0] || !buffer->buf[1] || !buffer->buf[2] || !buffer->pidx || buffer->n == 0) return false;
 
-    double freq_tmp = 1024.0 * freq;  // 10-bit key
     double min_model = 0.0;
     double max_model = 0.0;
     double Sxx = 0.0;
@@ -154,7 +163,7 @@ static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool kee
     uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
 
     for (int i = 0; i < buffer->n; i++) {
-        input[i].parts.key = ((uint16_t)(buffer->x[i] * freq_tmp)) & 0b0000001111111111;  // get rid of the 6 most significant bits
+        input[i].parts.key = phase_key_10(buffer->x[i] * freq);
         input[i].parts.val = buffer->y[i];
         if (keep_indices) {
             input[i].parts.idx = i;
@@ -248,42 +257,316 @@ static inline float get_gbaw_t(buffer_t* buffer, double freq, float* amp, float 
     return (float)(ref / res);
 }
 
-static inline float get_gb_stat(buffer_t* buffer, double freq, float* amp, gb_eval_mode evalMode, float gbAlpha) {
-    return evalMode == GB_EVAL_GBAW ? get_gbaw_t(buffer, freq, amp, gbAlpha) : get_r2(buffer, freq, amp, false, gbAlpha);
-}
-
-static inline float get_gb_likelihood_from_stat(float stat, int n, gb_eval_mode evalMode) {
-    return evalMode == GB_EVAL_GBAW ? (float)get_z(stat, n) : (float)lnFAP(2, 1, stat, n);
-}
-
-static inline float get_gb_likelihood(buffer_t* buffer, double freq, float* amp, float* stat, gb_eval_mode evalMode, float gbAlpha) {
-    float value = get_gb_stat(buffer, freq, amp, evalMode, gbAlpha);
-    if (stat) {
-        *stat = value;
-    }
-    return get_gb_likelihood_from_stat(value, buffer->n, evalMode);
-}
-
-static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, double df, gb_eval_mode evalMode, float gbAlpha) {
-    double step = df;
+typedef struct {
+    float likelihood;
     float stat;
-    double freq_tmp;
+    float amp;
+    bool valid;
+} eval_result_t;
+
+typedef struct {
+    double weight;
+    double wy;
+    double wy2;
+    double y;
+} bls_sums_t;
+
+static inline double bls_relative_width_at(const parameters* params, int idx) {
+    double min_width = params->blsMinRelWidth > 0.0 ? params->blsMinRelWidth : 0.01;
+    double max_width = params->blsMaxRelWidth > 0.0 ? params->blsMaxRelWidth : 0.5;
+    int count = params->blsWidthCount > 0 ? params->blsWidthCount : 10;
+    if (max_width < min_width) {
+        double tmp = min_width;
+        min_width = max_width;
+        max_width = tmp;
+    }
+    if (count <= 1 || min_width == max_width) return min_width;
+    double t = (double)idx / (double)(count - 1);
+    return exp(log(min_width) + (log(max_width) - log(min_width)) * t);
+}
+
+static inline uint64_t bls_pack_phase_index(uint16_t key, uint32_t idx) { return (((uint64_t)idx) << 16U) | (uint64_t)(key & 1023U); }
+
+static inline uint32_t bls_unpack_index(uint64_t value) { return (uint32_t)(value >> 16U); }
+
+static inline double bls_point_weight(const buffer_t* buffer, uint32_t idx, double epsilon) {
+    double dy = (double)buffer->dy[idx];
+    double denom = (dy * dy) + epsilon;
+    return denom > 0.0 && double_is_finite_bits(denom) ? 1.0 / denom : 0.0;
+}
+
+static inline void bls_add_index(const buffer_t* buffer, uint32_t idx, double epsilon, double sign, bls_sums_t* sums) {
+    double y = (double)buffer->y[idx];
+    double weight = bls_point_weight(buffer, idx, epsilon);
+    sums->weight += sign * weight;
+    sums->wy += sign * weight * y;
+    sums->wy2 += sign * weight * y * y;
+    sums->y += sign * y;
+}
+
+static inline void bls_add_sorted(const buffer_t* buffer, const uint64_t* sorted, int pos, double epsilon, double sign, bls_sums_t* sums) {
+    int n = (int)buffer->n;
+    if (pos >= n) pos %= n;
+    if (pos < 0) pos = wrapidx(pos, n);
+    bls_add_index(buffer, bls_unpack_index(sorted[pos]), epsilon, sign, sums);
+}
+
+static inline float bls_float_value(double value) {
+    if (!double_is_finite_bits(value) || value <= 0.0) return 0.0f;
+    if (value > (double)FLT_MAX) return FLT_MAX;
+    return (float)value;
+}
+
+static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
+    eval_result_t result = {0};
+    if (!buffer || !params || !buffer->buf || !buffer->buf[0] || !buffer->buf[1] || !buffer->pidx || buffer->n < 2U) return result;
+
+    int n = (int)buffer->n;
+    uint64_t* input = (uint64_t*)buffer->buf[0];
+    uint64_t* sorted = (uint64_t*)buffer->buf[1];
+    uint64_t** sort_in = (uint64_t**)(&buffer->buf[0]);
+    uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
+    bls_sums_t total = {0};
+    for (int i = 0; i < n; ++i) {
+        uint16_t key = phase_key_10(buffer->x[i] * freq);
+        input[i] = bls_pack_phase_index(key, (uint32_t)i);
+        bls_add_index(buffer, (uint32_t)i, params->epsilon, 1.0, &total);
+    }
+    csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);
+
+    if (!(total.weight > 0.0)) return result;
+    double ref_sse = total.wy2 - ((total.wy * total.wy) / total.weight);
+    if (!(ref_sse > 0.0) || !double_is_finite_bits(ref_sse)) return result;
+
+    int width_count = params->blsWidthCount > 0 ? params->blsWidthCount : 10;
+    double best_nll = -1.0;
+    double best_r2 = 0.0;
+    double best_amp = 0.0;
+    double best_in_level = 0.0;
+    double best_out_level = 0.0;
+    int best_start = -1;
+    int best_width = 0;
+
+    for (int width_idx = 0; width_idx < width_count; ++width_idx) {
+        double rel_width = bls_relative_width_at(params, width_idx);
+        if (!(rel_width > 0.0) || !double_is_finite_bits(rel_width)) continue;
+        int width = (int)ceil(rel_width * (double)n);
+        if (width < 1) width = 1;
+        if (width >= n) width = n - 1;
+
+        bls_sums_t in = {0};
+        for (int j = 0; j < width; ++j) {
+            bls_add_sorted(buffer, sorted, j, params->epsilon, 1.0, &in);
+        }
+
+        for (int start = 0; start < n; ++start) {
+            bls_sums_t out = {.weight = total.weight - in.weight, .wy = total.wy - in.wy, .wy2 = total.wy2 - in.wy2, .y = total.y - in.y};
+            int out_count = n - width;
+            if (in.weight > 0.0 && out.weight > 0.0 && out_count > 0) {
+                double in_sse = in.wy2 - ((in.wy * in.wy) / in.weight);
+                double out_sse = out.wy2 - ((out.wy * out.wy) / out.weight);
+                if (in_sse < 0.0) in_sse = 0.0;
+                if (out_sse < 0.0) out_sse = 0.0;
+                double model_sse = in_sse + out_sse;
+                double explained = ref_sse - model_sse;
+                if (explained < 0.0) explained = 0.0;
+                double nll = 0.5 * explained;
+                if (double_is_finite_bits(nll) && nll > best_nll) {
+                    best_nll = nll;
+                    best_r2 = explained / ref_sse;
+                    if (best_r2 < 0.0) best_r2 = 0.0;
+                    if (best_r2 > 1.0 - 1.0e-15) best_r2 = 1.0 - 1.0e-15;
+                    best_amp = fabs((in.y / (double)width) - (out.y / (double)out_count));
+                    best_in_level = in.wy / in.weight;
+                    best_out_level = out.wy / out.weight;
+                    best_start = start;
+                    best_width = width;
+                }
+            }
+
+            bls_add_sorted(buffer, sorted, start, params->epsilon, -1.0, &in);
+            bls_add_sorted(buffer, sorted, start + width, params->epsilon, 1.0, &in);
+        }
+    }
+
+    if (best_start < 0) return result;
+
+    if (prewhiten) {
+        for (int i = 0; i < n; ++i) {
+            buffer->y[i] -= (float)best_out_level;
+        }
+        double delta = best_in_level - best_out_level;
+        for (int j = 0; j < best_width; ++j) {
+            int pos = best_start + j;
+            if (pos >= n) pos %= n;
+            uint32_t idx = bls_unpack_index(sorted[pos]);
+            buffer->y[idx] -= (float)delta;
+        }
+    }
+
+    result.likelihood = bls_float_value(best_nll);
+    result.stat = bls_float_value(best_r2);
+    result.amp = bls_float_value(best_amp);
+    result.valid = true;
+    return result;
+}
+
+typedef eval_result_t (*eval_score_fn)(buffer_t* buffer, const parameters* params, double freq, bool prewhiten);
+typedef float (*eval_rank_result_fn)(const eval_result_t* result);
+typedef float (*eval_rank_peak_fn)(const peak_t* peak);
+typedef double (*eval_direct_step_fn)(uint32_t n, double time_span, const parameters* params);
+
+typedef struct {
+    const char* name;
+    const char* stat_label;
+    const char* peak_power_label;
+    eval_score_fn score;
+    eval_rank_result_fn rank_result;
+    eval_rank_peak_fn rank_peak;
+    eval_direct_step_fn direct_frequency_step;
+    bool direct_replaces_aov;
+    bool uses_duration_grid;
+} eval_method_t;
+
+static inline float eval_rank_result_by_stat(const eval_result_t* result) { return result ? result->stat : 0.0f; }
+
+static inline float eval_rank_result_by_likelihood(const eval_result_t* result) { return result ? result->likelihood : 0.0f; }
+
+static inline float eval_rank_peak_by_stat(const peak_t* peak) { return peak ? peak->r2 : 0.0f; }
+
+static inline float eval_rank_peak_by_likelihood(const peak_t* peak) { return peak ? peak->p : 0.0f; }
+
+static inline double eval_gb_direct_frequency_step(uint32_t n, double time_span, const parameters* params) {
+    return gb_direct_frequency_step(n, time_span, params->oversamplingFactor, params->gbAlpha);
+}
+
+static inline double eval_bls_direct_frequency_step(uint32_t n, double time_span, const parameters* params) {
+    (void)n;
+    return bls_direct_frequency_step(time_span, params->oversamplingFactor, params->blsMinRelWidth);
+}
+
+static inline eval_result_t eval_score_gbls(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
+    eval_result_t result = {0};
+    float stat = get_r2(buffer, freq, &result.amp, prewhiten, params->gbAlpha);
+    if (!float_is_finite_bits(stat)) return result;
+    result.stat = stat;
+    result.likelihood = (float)lnFAP(2, 1, stat, buffer->n);
+    result.valid = float_is_finite_bits(result.likelihood);
+    return result;
+}
+
+static inline eval_result_t eval_score_gbaw(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
+    eval_result_t result = {0};
+    float stat = prewhiten ? get_r2(buffer, freq, &result.amp, true, params->gbAlpha) : get_gbaw_t(buffer, freq, &result.amp, params->gbAlpha);
+    if (!float_is_finite_bits(stat)) return result;
+    result.stat = stat;
+    result.likelihood = prewhiten ? stat : (float)get_z(stat, buffer->n);
+    result.valid = float_is_finite_bits(result.likelihood);
+    return result;
+}
+
+static inline eval_result_t eval_score_bls(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
+    return get_bls_result(buffer, params, freq, prewhiten);
+}
+
+enum { EVAL_METHOD_COUNT = 3 };
+
+static const eval_method_t EVAL_METHODS[EVAL_METHOD_COUNT] = {
+    {"gbls", "R2", "NLL (Base-10)", eval_score_gbls, eval_rank_result_by_stat, eval_rank_peak_by_stat, eval_gb_direct_frequency_step, false, false},
+    {"gbaw", "T", "NLL (Base-10)", eval_score_gbaw, eval_rank_result_by_stat, eval_rank_peak_by_stat, eval_gb_direct_frequency_step, false, false},
+    {"bls", "R2", "NLL (Base-10)", eval_score_bls, eval_rank_result_by_likelihood, eval_rank_peak_by_likelihood, eval_bls_direct_frequency_step, true, true},
+};
+
+static inline unsigned eval_method_index(gb_eval_mode mode) {
+    unsigned idx = (unsigned)mode;
+    return idx < EVAL_METHOD_COUNT ? idx : 0U;
+}
+
+static inline const eval_method_t* eval_method_for_mode(gb_eval_mode mode) { return &EVAL_METHODS[eval_method_index(mode)]; }
+
+static inline const eval_method_t* eval_method_for_params(const parameters* params) { return eval_method_for_mode(params->gbEvalMode); }
+
+static inline bool eval_method_uses_direct_grid(const eval_method_t* method, bool use_aov, int mode) {
+    return mode_uses_direct_eval_grid(mode) && (!use_aov || (method && method->direct_replaces_aov));
+}
+
+static inline eval_result_t get_eval_result(buffer_t* buffer, const parameters* params, const eval_method_t* method, double freq) {
+    const eval_method_t* selected = method ? method : eval_method_for_params(params);
+    return selected->score(buffer, params, freq, false);
+}
+
+static inline float get_eval_likelihood(buffer_t* buffer, const parameters* params, const eval_method_t* method, double freq, float* amp, float* stat) {
+    eval_result_t result = get_eval_result(buffer, params, method, freq);
+    if (amp) *amp = result.amp;
+    if (stat) *stat = result.stat;
+    return result.valid ? result.likelihood : 0.0f;
+}
+
+static inline float eval_result_rank(const eval_method_t* method, const eval_result_t* result) {
+    return method && method->rank_result ? method->rank_result(result) : 0.0f;
+}
+
+static inline float eval_peak_rank(const eval_method_t* method, const peak_t* peak) { return method && method->rank_peak ? method->rank_peak(peak) : 0.0f; }
+
+static inline void set_peak_eval_result(peak_t* peak, const eval_result_t* result) {
+    peak->p = result->likelihood;
+    peak->r2 = result->stat;
+    peak->amp = result->amp;
+}
+
+static inline eval_result_t eval_prewhiten(buffer_t* buffer, const parameters* params, const eval_method_t* method, double freq) {
+    const eval_method_t* selected = method ? method : eval_method_for_params(params);
+    return selected->score(buffer, params, freq, true);
+}
+
+static inline void binsearch_peak(peak_t* peak, buffer_t* buffer, const parameters* params, const eval_method_t* method, double df) {
+    const eval_method_t* selected = method ? method : eval_method_for_params(params);
+    double step = df;
+    eval_result_t best = get_eval_result(buffer, params, selected, peak->freq);
+    if (best.valid) {
+        set_peak_eval_result(peak, &best);
+    } else {
+        best.likelihood = peak->p;
+        best.stat = peak->r2;
+        best.amp = peak->amp;
+    }
+    float best_rank = eval_result_rank(selected, &best);
+
     for (int i = 0; i < 12; i++) {
         step *= 0.5;
 
-        freq_tmp = peak->freq - step;
-        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode, gbAlpha);
-        if (stat > peak->r2) {
-            peak->r2 = stat;
-            peak->freq = freq_tmp;
+        double freq_tmp = peak->freq - step;
+        if (freq_tmp > 0.0) {
+            eval_result_t candidate = get_eval_result(buffer, params, selected, freq_tmp);
+            float rank = eval_result_rank(selected, &candidate);
+            if (candidate.valid && rank > best_rank) {
+                best_rank = rank;
+                set_peak_eval_result(peak, &candidate);
+                best = candidate;
+                peak->freq = freq_tmp;
+            }
         }
 
         freq_tmp = peak->freq + step;
-        stat = get_gb_stat(buffer, freq_tmp, NULL, evalMode, gbAlpha);
-        if (stat > peak->r2) {
-            peak->r2 = stat;
-            peak->freq = freq_tmp;
+        if (freq_tmp > 0.0) {
+            eval_result_t candidate = get_eval_result(buffer, params, selected, freq_tmp);
+            float rank = eval_result_rank(selected, &candidate);
+            if (candidate.valid && rank > best_rank) {
+                best_rank = rank;
+                set_peak_eval_result(peak, &candidate);
+                best = candidate;
+                peak->freq = freq_tmp;
+            }
         }
+    }
+}
+
+static inline bool eval_peak_needs_result(const peak_t* peak) { return !float_is_finite_bits(peak->p) || !float_is_finite_bits(peak->r2) || peak->p <= 0.0f; }
+
+static inline void evaluate_peak_at_current_frequency(peak_t* peak, buffer_t* buffer, const parameters* params, const eval_method_t* method) {
+    eval_result_t result = get_eval_result(buffer, params, method, peak->freq);
+    if (result.valid) {
+        set_peak_eval_result(peak, &result);
     }
 }
 
@@ -297,29 +580,31 @@ static inline double correct_ihs_res(const double sum, const int n) {
     return sum - log(logSum);
 }
 
-static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, int mode, double df, int n, gb_eval_mode evalMode, float gbAlpha) {
+static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, const parameters* params, double df) {
+    const eval_method_t* method = eval_method_for_params(params);
     int i, j;
     peak_t key;
 
-    if (mode == 0) {
+    if (params->mode == 0) {
         for (i = 0; i < length; i++) {
-            peaks[i].p = correct_ihs_res(peaks[i].p, n);
+            peaks[i].p = correct_ihs_res(peaks[i].p, params->nterms);
         }  // Erlang's logarithmic correction'
     } else {
         for (i = 0; i < length; i++) {
-            if (mode_refines_retained_peaks(mode)) {
-                binsearch_peak(&peaks[i], buf, df, evalMode, gbAlpha);
+            if (mode_defers_peak_evaluation(params->mode)) {
+                evaluate_peak_at_current_frequency(&peaks[i], buf, params, method);
             }
-            if (mode < 4 || mode == 5) {
-                peaks[i].r2 = get_gb_stat(buf, peaks[i].freq, &peaks[i].amp, evalMode, gbAlpha);
+            if (mode_refines_retained_peaks(params->mode)) {
+                binsearch_peak(&peaks[i], buf, params, method, df);
+            } else if (eval_peak_needs_result(&peaks[i])) {
+                evaluate_peak_at_current_frequency(&peaks[i], buf, params, method);
             }
-            peaks[i].p = get_gb_likelihood_from_stat(peaks[i].r2, buf->n, evalMode);
         };
 
         for (i = 1; i < length; i++) {
             key = peaks[i];
             j = i - 1;
-            while (j >= 0 && peaks[j].r2 < key.r2) {
+            while (j >= 0 && eval_peak_rank(method, &peaks[j]) < eval_peak_rank(method, &key)) {
                 peaks[j + 1] = peaks[j];
                 j = j - 1;
             }

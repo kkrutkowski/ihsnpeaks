@@ -13,6 +13,7 @@
 
 #include "scaling.h"
 #include "utils/common.h"
+#include "utils/convolution.h"
 
 static inline uint32_t intmax(int32_t a, int32_t b) { return (a > b) ? a : b; }
 uint32_t bitCeil(uint32_t n) {
@@ -69,7 +70,8 @@ static uint32_t estimate_frequency_count(const parameters *params, double time_s
     if (time_span <= 0.0 || params->fmax <= params->fmin) return 1;
     double count;
     if (mode_uses_direct_gb_grid(params->mode)) {
-        double fstep = gb_direct_frequency_step(params->maxLen, time_span, params->oversamplingFactor, params->gbAlpha);
+        const eval_method_t *method = eval_method_for_params(params);
+        double fstep = method->direct_frequency_step(params->maxLen, time_span, params);
         if (fstep <= 0.0) return 1;
         count = ((double)params->fmax - (double)params->fmin) / fstep;
     } else {

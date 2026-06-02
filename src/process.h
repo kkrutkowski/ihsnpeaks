@@ -248,12 +248,18 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     const int n = 1 + (int)(log10(buffer->x[buffer->n - 1] * (double)(params->oversamplingFactor * params->nterms)));
     double fmin = effective_grid_fmin(params, buffer->x[buffer->n - 1]);
     const bool use_aov = periodogram_uses_aov(params->periodogramMethod);
+    const eval_method_t *eval_method = eval_method_for_params(params);
+    const bool direct_eval_grid = eval_method_uses_direct_grid(eval_method, use_aov, params->mode);
     const int aov_n_eff = periodogram_effective_n(buffer);
     const bool aov_valid = !use_aov || aov_target_has_dof(buffer, params->nterms);
-    const float threshold = aov_valid ? (float)correct_threshold(params, buffer) : INFINITY;
-    double fstep = mode_uses_direct_gb_grid(params->mode)
-                       ? gb_direct_frequency_step(buffer->n, buffer->x[buffer->n - 1], params->oversamplingFactor, params->gbAlpha)
-                       : 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
+    const bool threshold_valid = direct_eval_grid || aov_valid;
+    const float threshold = threshold_valid ? (float)correct_threshold(params, buffer) : INFINITY;
+    double fstep = 0.0;
+    if (mode_uses_direct_eval_grid(params->mode)) {
+        fstep = eval_method->direct_frequency_step(buffer->n, buffer->x[buffer->n - 1], params);
+    } else {
+        fstep = 1.0 / (double)(params->nterms * (double)params->oversamplingFactor * buffer->x[buffer->n - 1] * 0.5);
+    }
     double df = 1.0 / buffer->x[buffer->n - 1];
     uint32_t nfreq = target_frequency_count(params, fmin, fstep);
     if (nfreq > buffer->maxFreqCount) nfreq = buffer->maxFreqCount;
@@ -289,12 +295,14 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
                 float magnitude;
-                if (use_aov) {
-                    float r2 = mode_uses_direct_gb_grid(params->mode) ? aov_get_stat(buffer, params, freq) : buffer->power[i];
+                if (direct_eval_grid) {
+                    magnitude = get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+                } else if (use_aov) {
+                    float r2 = mode_uses_direct_eval_grid(params->mode) ? aov_get_stat(buffer, params, freq) : buffer->power[i];
                     magnitude = aov_likelihood_from_r2(r2, params->nterms, aov_n_eff);
                 } else {
-                    magnitude = mode_uses_direct_gb_grid(params->mode) ? get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha)
-                                                                       : correct_ihs_res(buffer->power[i], params->nterms);
+                    magnitude = mode_uses_direct_eval_grid(params->mode) ? get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL)
+                                                                         : correct_ihs_res(buffer->power[i], params->nterms);
                 }
                 if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
                 appendFreq(freq, magnitude, n, params->outputPeriod, &buffer->spectrum, &stringBuff[0]);
@@ -314,23 +322,27 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                     left = buffer->power[i - 1];
                     right = buffer->power[i + 1];
                 }
-                if (use_aov && mode_uses_direct_gb_grid(params->mode)) {
+                if (direct_eval_grid) {
+                    magnitude = get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+                    left = get_eval_likelihood(buffer, params, eval_method, freq - fstep, NULL, NULL);
+                    right = get_eval_likelihood(buffer, params, eval_method, freq + fstep, NULL, NULL);
+                } else if (use_aov && mode_uses_direct_eval_grid(params->mode)) {
                     magnitude = aov_get_stat(buffer, params, freq);
                     left = aov_get_stat(buffer, params, freq - fstep);
                     right = aov_get_stat(buffer, params, freq + fstep);
-                } else if (mode_uses_direct_gb_grid(params->mode)) {
-                    magnitude = get_gb_likelihood(buffer, freq, NULL, NULL, params->gbEvalMode, params->gbAlpha);
-                    left = get_gb_likelihood(buffer, freq - fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
-                    right = get_gb_likelihood(buffer, freq + fstep, NULL, NULL, params->gbEvalMode, params->gbAlpha);
+                } else if (mode_uses_direct_eval_grid(params->mode)) {
+                    magnitude = get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+                    left = get_eval_likelihood(buffer, params, eval_method, freq - fstep, NULL, NULL);
+                    right = get_eval_likelihood(buffer, params, eval_method, freq + fstep, NULL, NULL);
                 }
                 double peak_freq = freq;
                 float peak_magnitude = magnitude;
                 if (!quadratic_peak_position(freq, fstep, left, magnitude, right, params->oversamplingFactor, &peak_freq, &peak_magnitude)) continue;
-                if (magnitude > left && magnitude > right && (magnitude > threshold || (aov_valid && mode_evaluates_all_local_peaks(params->mode)))) {
-                    if (use_aov) {
+                if (magnitude > left && magnitude > right && (magnitude > threshold || (threshold_valid && mode_evaluates_all_local_peaks(params->mode)))) {
+                    if (use_aov && !direct_eval_grid) {
                         aov_append_peak(buffer, params, peak_freq, peak_magnitude, df);
                     } else {
-                        append_peak(buffer, params->npeaks, params->mode, peak_freq, peak_magnitude, df, params->gbEvalMode, params->gbAlpha);
+                        append_peak(buffer, params, peak_freq, peak_magnitude, df);
                     }
                 }
             }
@@ -339,10 +351,10 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
 
         int candidate_count = (int)buffer->nPeaks;
         PROFILE_START(sort);
-        if (use_aov) {
+        if (use_aov && !direct_eval_grid) {
             aov_sort_peaks(buffer->peaks, candidate_count, buffer, params, df);
         } else {
-            sortPeaks(buffer->peaks, candidate_count, buffer, params->mode, df, params->nterms, params->gbEvalMode, params->gbAlpha);
+            sortPeaks(buffer->peaks, candidate_count, buffer, params, df);
         }
         PROFILE_END(sort, PROFILE_PHASE_SORT);
 
@@ -352,8 +364,8 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         peak_t selected = buffer->peaks[0];
         if (selected.p <= 0.0f || !float_is_finite_bits(selected.p)) break;
 
-        float prewhiten_r2 = get_r2(buffer, selected.freq, NULL, true, params->gbAlpha);
-        float threshold_stat = (params->gbEvalMode == GB_EVAL_GBAW || params->mode == 0) ? prewhiten_r2 : selected.r2;
+        eval_result_t prewhiten_result = eval_prewhiten(buffer, params, eval_method, selected.freq);
+        float threshold_stat = prewhiten_result.stat;
         if (!float_is_finite_bits(threshold_stat) || threshold_stat < params->r2_threshold) break;
 
         selected_peaks[selected_count++] = selected;
