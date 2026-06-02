@@ -251,6 +251,7 @@ typedef struct {
     float likelihood;
     float stat;
     float amp;
+    float width;
     bool valid;
 } eval_result_t;
 
@@ -329,7 +330,7 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
     if (!(ref_sse > 0.0) || !double_is_finite_bits(ref_sse)) return result;
 
     int width_count = params->blsWidthCount > 0 ? params->blsWidthCount : 10;
-    double best_nll = -1.0;
+    double best_score = -1.0;
     double best_r2 = 0.0;
     double best_amp = 0.0;
     double best_in_level = 0.0;
@@ -360,9 +361,8 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
                 double model_sse = in_sse + out_sse;
                 double explained = ref_sse - model_sse;
                 if (explained < 0.0) explained = 0.0;
-                double nll = 0.5 * explained;
-                if (double_is_finite_bits(nll) && nll > best_nll) {
-                    best_nll = nll;
+                if (double_is_finite_bits(explained) && explained > best_score) {
+                    best_score = explained;
                     best_r2 = explained / ref_sse;
                     if (best_r2 < 0.0) best_r2 = 0.0;
                     if (best_r2 > 1.0 - 1.0e-15) best_r2 = 1.0 - 1.0e-15;
@@ -381,6 +381,12 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
 
     if (best_start < 0) return result;
 
+    int n_eff = periodogram_effective_n(buffer);
+    if (n_eff <= 2) return result;
+    double best_nll = lnFAP(2, 1, best_r2, n_eff);
+    float likelihood = bls_float_value(best_nll);
+    if (!float_is_finite_bits(likelihood) || likelihood <= 0.0f) return result;
+
     if (prewhiten) {
         for (int i = 0; i < n; ++i) {
             buffer->y[i] -= (float)best_out_level;
@@ -394,9 +400,10 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
         }
     }
 
-    result.likelihood = bls_float_value(best_nll);
+    result.likelihood = likelihood;
     result.stat = bls_float_value(best_r2);
     result.amp = bls_float_value(best_amp);
+    result.width = bls_float_value((double)best_width / (double)n);
     result.valid = true;
     return result;
 }
@@ -409,6 +416,7 @@ typedef double (*eval_direct_step_fn)(uint32_t n, double time_span, const parame
 typedef struct {
     const char* name;
     const char* stat_label;
+    const char* width_label;
     const char* peak_power_label;
     eval_score_fn score;
     eval_rank_result_fn rank_result;
@@ -462,9 +470,10 @@ static inline eval_result_t eval_score_bls(buffer_t* buffer, const parameters* p
 enum { EVAL_METHOD_COUNT = 3 };
 
 static const eval_method_t EVAL_METHODS[EVAL_METHOD_COUNT] = {
-    {"gbls", "R2", "NLL (Base-10)", eval_score_gbls, eval_rank_result_by_stat, eval_rank_peak_by_stat, eval_gb_direct_frequency_step, false, false},
-    {"gbaw", "T", "NLL (Base-10)", eval_score_gbaw, eval_rank_result_by_stat, eval_rank_peak_by_stat, eval_gb_direct_frequency_step, false, false},
-    {"bls", "R2", "NLL (Base-10)", eval_score_bls, eval_rank_result_by_likelihood, eval_rank_peak_by_likelihood, eval_bls_direct_frequency_step, true, true},
+    {"gbls", "R2", NULL, "NLL (Base-10)", eval_score_gbls, eval_rank_result_by_stat, eval_rank_peak_by_stat, eval_gb_direct_frequency_step, false, false},
+    {"gbaw", "T", NULL, "NLL (Base-10)", eval_score_gbaw, eval_rank_result_by_stat, eval_rank_peak_by_stat, eval_gb_direct_frequency_step, false, false},
+    {"bls", "R2", "Duration", "NLL (Base-10)", eval_score_bls, eval_rank_result_by_likelihood, eval_rank_peak_by_likelihood, eval_bls_direct_frequency_step,
+     true, true},
 };
 
 static inline unsigned eval_method_index(gb_eval_mode mode) {
@@ -502,6 +511,7 @@ static inline void set_peak_eval_result(peak_t* peak, const eval_result_t* resul
     peak->p = result->likelihood;
     peak->r2 = result->stat;
     peak->amp = result->amp;
+    peak->width = result->width;
 }
 
 static inline eval_result_t eval_prewhiten(buffer_t* buffer, const parameters* params, const eval_method_t* method, double freq) {

@@ -42,6 +42,31 @@ static inline int output_frequency_significant_digits(double freq, int precision
     return digits;
 }
 
+static inline int output_fractional_digits(double coord, int significant_digits) {
+    if (!(coord > 0.0) || !double_is_finite_bits(coord)) return 0;
+    int integer_digits = (int)ceil(log10(coord));
+    if (integer_digits < 0) integer_digits = 0;
+    int fractional_digits = significant_digits - integer_digits;
+    return fractional_digits > 0 ? fractional_digits : 0;
+}
+
+static inline void pad_fractional_digits(char *line, int fractional_digits) {
+    if (fractional_digits <= 0 || strchr(line, 'e') || strchr(line, 'E')) return;
+    char *dot = strchr(line, '.');
+    size_t len = strlen(line);
+    if (!dot) {
+        line[len++] = '.';
+        line[len] = '\0';
+        dot = line + len - 1U;
+    }
+    int current = (int)(len - (size_t)(dot - line) - 1U);
+    while (current < fractional_digits) {
+        line[len++] = '0';
+        line[len] = '\0';
+        ++current;
+    }
+}
+
 static inline void custom_coordinate_dtoa(double freq, bool outputPeriod, int precision, char *line) {
     double coord = output_coordinate(freq, outputPeriod);
     if (!double_is_finite_bits(coord)) {
@@ -49,7 +74,9 @@ static inline void custom_coordinate_dtoa(double freq, bool outputPeriod, int pr
         return;
     }
     if (outputPeriod) {
-        fast_dtoa(coord, output_frequency_significant_digits(freq, precision), line);
+        int significant_digits = output_frequency_significant_digits(freq, precision);
+        fast_dtoa(coord, significant_digits, line);
+        pad_fractional_digits(line, output_fractional_digits(coord, significant_digits));
         return;
     }
     custom_dtoa(coord, precision, line);
@@ -89,10 +116,24 @@ static inline void write_tsv(buffer_t *buffer, char *in_file) {
     sdsclear(buffer->spectrum);
 };
 
-static int column_width(double val, int precision) {
-    if (!double_is_finite_bits(val)) return 3;
-    int intPartWidth = (val > 0) ? (int)ceil(log10(val)) : 1;
-    return 3 + precision + intPartWidth;
+static inline void append_spaces(sds *buffer, int count) {
+    char spaces[64];
+    while (count > 0) {
+        int chunk = count > (int)sizeof(spaces) ? (int)sizeof(spaces) : count;
+        memset(spaces, ' ', (size_t)chunk);
+        *buffer = sdscatlen(*buffer, spaces, (size_t)chunk);
+        count -= chunk;
+    }
+}
+
+static inline void append_center_cell(sds *buffer, const char *str, int width) {
+    int len = (int)strlen(str);
+    int pad = width - len;
+    int left = pad > 0 ? pad / 2 : 0;
+    int right = pad > 0 ? pad - left : 0;
+    append_spaces(buffer, left);
+    *buffer = sdscat(*buffer, str);
+    append_spaces(buffer, right);
 }
 
 void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
@@ -102,37 +143,43 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     bool print_amp = mode > 0;
     const eval_method_t *method = eval_method_for_mode(evalMode);
-    // Column indices: 0: output coordinate, 1: NLL, 2: Amp, 3: statistic.
-    const char *hdr[4] = {params->outputPeriod ? "P[d]" : "f[1/d]", method->peak_power_label, "Amp", method->stat_label};
+    bool print_width = print_amp && method->width_label;
+    // Column indices: 0: output coordinate, 1: NLL, 2: Amp/R2, 3: statistic, 4: BLS duration.
+    const char *hdr[5] = {params->outputPeriod ? "P[d]" : "f[1/d]", method->peak_power_label, "Amp", method->stat_label, method->width_label};
     if (use_aov && !print_amp) hdr[2] = "R2";
-    int hdrWidth[4];
-    int colWidth[4];
+    int HdrCols = print_amp ? (print_width ? 5 : 4) : (use_aov ? 3 : 2);
+    int colWidth[5];
     int i;
 
-    // Set header widths (without any extra padding)
-    for (i = 0; i < 4; i++) {
-        hdrWidth[i] = (int)strlen(hdr[i]);
-        colWidth[i] = hdrWidth[i];
-    }
-
-    /* First pass: scan through peaks and compute the maximum printed width for each column.
-       Peak power is stored internally as natural NLL and printed here as base-10 NLL. */
+    for (i = 0; i < HdrCols; i++) colWidth[i] = (int)strlen(hdr[i]);
     for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
-        double nll10 = buffer->peaks[i].p * M_LOG10E;
-        double amp = print_amp ? buffer->peaks[i].amp : buffer->peaks[i].r2;
-        double r = buffer->peaks[i].r2;
-        // printf("%.3f\n", r); // ??? - wrong here
-        // if (r <= 1.0 && mode > 0) {r = get_r(buffer, buffer->peaks[i].freq, NULL, false);}
-        int w;
         custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
-        w = (int)strlen(stringBuff);
-        if (w > colWidth[0]) colWidth[0] = w;
-        w = column_width(nll10, 2);
-        if (w > colWidth[1]) colWidth[1] = w;
-        w = column_width(amp, 3);
-        if (w > colWidth[2]) colWidth[2] = w;
-        w = column_width(r, 2);
-        if (w > colWidth[3]) colWidth[3] = w;
+        int len = (int)strlen(stringBuff);
+        if (len > colWidth[0]) colWidth[0] = len;
+
+        custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
+        len = (int)strlen(stringBuff);
+        if (len > colWidth[1]) colWidth[1] = len;
+
+        if (use_aov && !print_amp) {
+            custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
+            len = (int)strlen(stringBuff);
+            if (len > colWidth[2]) colWidth[2] = len;
+        } else if (print_amp) {
+            custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
+            len = (int)strlen(stringBuff);
+            if (len > colWidth[2]) colWidth[2] = len;
+
+            custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
+            len = (int)strlen(stringBuff);
+            if (len > colWidth[3]) colWidth[3] = len;
+
+            if (print_width) {
+                custom_ftoa(buffer->peaks[i].width, 2, stringBuff);
+                len = (int)strlen(stringBuff);
+                if (len > colWidth[4]) colWidth[4] = len;
+            }
+        }
     }
 
     buffer->outBuf = sdscat(buffer->outBuf, "ihsnpeaks ");
@@ -150,87 +197,47 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
     buffer->outBuf = sdscatlen(buffer->outBuf, "\n", 1);
 
-    // Print table header with each header padded on the left to the column width.
+    // Print table header.
     {
-        char temp[64];  // temporary buffer for spaces
-        int pad;
-        int HdrCols = print_amp ? 4 : (use_aov ? 3 : 2);
+        buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
         for (i = 0; i < HdrCols; i++) {
-            pad = colWidth[i] - (int)strlen(hdr[i]);
-            if (pad > 0) {
-                memset(temp, ' ', pad);
-                temp[pad] = '\0';
-                buffer->outBuf = sdscat(buffer->outBuf, temp);
-            }
-            buffer->outBuf = sdscat(buffer->outBuf, hdr[i]);
+            append_center_cell(&buffer->outBuf, hdr[i], colWidth[i]);
             if (i + 1 < HdrCols)
-                buffer->outBuf = sdscat(buffer->outBuf, "\t");
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
             else
                 buffer->outBuf = sdscat(buffer->outBuf, "\n");
         }
     }
     // Second pass: print each peak row with proper padding.
     {
-        char temp[64];
-        int pad, len;
         for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
-            // Output coordinate column (precision n)
-            custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
-            len = (int)strlen(stringBuff);
-            pad = colWidth[0] - len;
-            if (pad > 0) {
-                memset(temp, ' ', pad);
-                temp[pad] = '\0';
-                buffer->outBuf = sdscat(buffer->outBuf, temp);
-            }
-            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-            buffer->outBuf = sdscat(buffer->outBuf, "\t");
+            buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
 
-            // Base-10 NLL (precision 2)
+            custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
+            append_center_cell(&buffer->outBuf, stringBuff, colWidth[0]);
+            buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+
             custom_ftoa(buffer->peaks[i].p * M_LOG10E, 2, stringBuff);
-            len = (int)strlen(stringBuff);
-            pad = colWidth[1] - len;
-            if (pad > 0) {
-                memset(temp, ' ', pad);
-                temp[pad] = '\0';
-                buffer->outBuf = sdscat(buffer->outBuf, temp);
-            }
-            buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-            buffer->outBuf = sdscat(buffer->outBuf, "\t");
+            append_center_cell(&buffer->outBuf, stringBuff, colWidth[1]);
 
             if (use_aov && !print_amp) {
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
                 custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
-                len = (int)strlen(stringBuff);
-                pad = colWidth[2] - len;
-                if (pad > 0) {
-                    memset(temp, ' ', pad);
-                    temp[pad] = '\0';
-                    buffer->outBuf = sdscat(buffer->outBuf, temp);
-                }
-                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                append_center_cell(&buffer->outBuf, stringBuff, colWidth[2]);
             } else if (print_amp) {
-                // Amplitude (precision 3)
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
                 custom_ftoa(buffer->peaks[i].amp, 3, stringBuff);
-                len = (int)strlen(stringBuff);
-                pad = colWidth[2] - len;
-                if (pad > 0) {
-                    memset(temp, ' ', pad);
-                    temp[pad] = '\0';
-                    buffer->outBuf = sdscat(buffer->outBuf, temp);
-                }
-                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
-                buffer->outBuf = sdscat(buffer->outBuf, "\t");
+                append_center_cell(&buffer->outBuf, stringBuff, colWidth[2]);
 
-                // Test statistics (precision 3)
+                buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
                 custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
-                len = (int)strlen(stringBuff);
-                pad = colWidth[3] - len;
-                if (pad > 0) {
-                    memset(temp, ' ', pad);
-                    temp[pad] = '\0';
-                    buffer->outBuf = sdscat(buffer->outBuf, temp);
+                append_center_cell(&buffer->outBuf, stringBuff, colWidth[3]);
+
+                if (print_width) {
+                    buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
+                    custom_ftoa(buffer->peaks[i].width, 2, stringBuff);
+                    append_center_cell(&buffer->outBuf, stringBuff, colWidth[4]);
                 }
-                buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
             }
             buffer->outBuf = sdscat(buffer->outBuf, "\n");
         }
@@ -256,7 +263,8 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
 }
 
 void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
-    (void)evalMode;
+    const eval_method_t *method = eval_method_for_mode(evalMode);
+    bool print_width = mode > 0 && method->width_label;
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     bool print_amp = mode > 0;
     int i = 0;
@@ -298,6 +306,11 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
                 custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                if (print_width) {
+                    buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                    custom_ftoa(buffer->peaks[i].width, 2, stringBuff);
+                    buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                }
                 buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
                 i++;
             }
@@ -325,6 +338,11 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
                 custom_ftoa(buffer->peaks[i].r2, 3, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                if (print_width) {
+                    buffer->outBuf = sdscatlen(buffer->outBuf, ", ", 2);
+                    custom_ftoa(buffer->peaks[i].width, 2, stringBuff);
+                    buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
+                }
                 buffer->outBuf = sdscatlen(buffer->outBuf, "]", 1);
                 i++;
             }

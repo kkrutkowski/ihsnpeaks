@@ -86,7 +86,12 @@ int main(int argc, char *argv[]) {
         } else if (params.mode < 1) {
             fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, %s]\n", bestFitLabel, powerLabel, coordinateLabel, powerLabel);
         } else {
-            fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, amp, %s]\n", bestFitLabel, powerLabel, coordinateLabel, evalMethod->stat_label);
+            if (evalMethod->width_label) {
+                fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, amp, %s, %s]\n", bestFitLabel, powerLabel, coordinateLabel, evalMethod->stat_label,
+                        evalMethod->width_label);
+            } else {
+                fprintf(outputFile, "Input_file\t%s\t%s\t\t[%s, amp, %s]\n", bestFitLabel, powerLabel, coordinateLabel, evalMethod->stat_label);
+            }
         }
         fclose(outputFile);
 

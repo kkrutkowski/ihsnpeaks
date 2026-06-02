@@ -104,6 +104,7 @@ typedef struct {
     float p;
     float amp;
     float r2;
+    float width;
 } peak_t;
 
 enum { NUFFT_LADDER_LEVEL_CAP = 8U };
