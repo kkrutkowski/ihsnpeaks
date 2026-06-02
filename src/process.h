@@ -231,6 +231,26 @@ static inline bool quadratic_peak_position(double freq, double fstep, float left
     return true;
 }
 
+static inline void capture_spectrum_column(buffer_t *buffer, const parameters *params, const eval_method_t *eval_method, bool use_aov, bool direct_eval_grid,
+                                           int aov_n_eff, double fmin, double fstep, uint32_t nfreq, int nterms, float *spectrum_matrix, uint32_t column) {
+    if (!spectrum_matrix) return;
+    float *dst = spectrum_matrix + ((size_t)column * (size_t)nfreq);
+    for (uint32_t i = 0; i < nfreq; ++i) {
+        double freq = fmin + ((double)i * fstep);
+        float magnitude;
+        if (direct_eval_grid) {
+            magnitude = get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+        } else if (use_aov) {
+            float r2 = mode_uses_direct_eval_grid(params->mode) ? aov_get_stat(buffer, params, freq) : buffer->power[i];
+            magnitude = aov_likelihood_from_r2(r2, nterms, aov_n_eff);
+        } else {
+            magnitude = mode_uses_direct_eval_grid(params->mode) ? get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL)
+                                                                 : correct_ihs_res(buffer->power[i], nterms);
+        }
+        dst[i] = float_is_finite_bits(magnitude) ? magnitude : 0.0f;
+    }
+}
+
 void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch) {
     PROFILE_COUNT_TARGET();
     PROFILE_START(read);
@@ -267,6 +287,23 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         fprintf(stderr, "Failed to activate NuFFT plan for %s\n", in_file);
         goto cleanup;
     }
+    const bool spectrum_prewhiten = params->spectrum && params->prewhiten;
+    float *spectrum_matrix = NULL;
+    uint32_t spectrum_columns = 0U;
+    uint32_t spectrum_capacity = 0U;
+    if (spectrum_prewhiten) {
+        int requested_peaks = params->npeaks > 0 ? params->npeaks : 0;
+        spectrum_capacity = (uint32_t)requested_peaks + 1U;
+        if (nfreq == 0U) {
+            spectrum_matrix = malloc(sizeof(float));
+        } else if (spectrum_capacity > 0U && (size_t)nfreq <= SIZE_MAX / (size_t)spectrum_capacity / sizeof(float)) {
+            spectrum_matrix = malloc((size_t)nfreq * (size_t)spectrum_capacity * sizeof(float));
+        }
+        if (!spectrum_matrix) {
+            fprintf(stderr, "Failed to allocate prewhitened spectrum matrix for %s\n", in_file);
+            goto cleanup;
+        }
+    }
 
     if (!batch && params->debug) {
         printf("\tNumber of target frequencies: %u\n\n", nfreq);
@@ -282,7 +319,8 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
                 aov_streamed = true;
-                if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, params->spectrum, n, stringBuff) != 0) {
+                if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, params->spectrum && !spectrum_prewhiten, params->spectrum, true, n,
+                                      stringBuff) != 0) {
                     fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
                 }
             } else {
@@ -290,7 +328,14 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
             }
         }
 
-        if (params->spectrum && !aov_streamed) {
+        if (spectrum_prewhiten) {
+            PROFILE_START(spectrum);
+            if (spectrum_columns < spectrum_capacity) {
+                capture_spectrum_column(buffer, params, eval_method, use_aov, direct_eval_grid, aov_n_eff, fmin, fstep, nfreq, params->nterms, spectrum_matrix,
+                                        spectrum_columns++);
+            }
+            PROFILE_END(spectrum, PROFILE_PHASE_PEAK_SCAN);
+        } else if (params->spectrum && !aov_streamed) {
             PROFILE_START(spectrum);
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
@@ -372,6 +417,23 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         refresh_weighted_signal_buffer(buffer, params->epsilon);
     } while (params->prewhiten && selected_count < params->npeaks);
 
+    if (spectrum_prewhiten && selected_count > 0 && spectrum_columns == (uint32_t)selected_count && spectrum_columns < spectrum_capacity) {
+        bool final_aov_streamed = false;
+        if (!mode_uses_direct_gb_grid(params->mode)) {
+            if (use_aov) {
+                final_aov_streamed = true;
+                if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, false, true, false, n, stringBuff) != 0) {
+                    fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
+                }
+            } else {
+                execute_nufft_sweep(buffer, params, fmin, fstep, nfreq);
+            }
+        }
+        (void)final_aov_streamed;
+        capture_spectrum_column(buffer, params, eval_method, use_aov, direct_eval_grid, aov_n_eff, fmin, fstep, nfreq, params->nterms, spectrum_matrix,
+                                spectrum_columns++);
+    }
+
     if (params->prewhiten) {
         buffer->peaks = selected_peaks;
         buffer->nPeaks = (uint32_t)selected_count;
@@ -385,16 +447,22 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
             append_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
         }
         if (params->spectrum) {
-            write_tsv(buffer, in_file);
+            if (spectrum_prewhiten) {
+                write_spectrum_matrix_tsv(in_file, fmin, fstep, nfreq, spectrum_columns, spectrum_matrix, n, params->outputPeriod, stringBuff);
+            } else {
+                write_tsv(buffer, in_file);
+            }
         }
         PROFILE_END(output, PROFILE_PHASE_OUTPUT);
     }
+    free(spectrum_matrix);
     buffer->peaks = peak_base;
     buffer->nPeaks = 0;
     PROFILE_FLUSH_THREAD();
     return;
 
 cleanup:
+    free(spectrum_matrix);
     buffer->peaks = peak_base;
     buffer->nPeaks = 0;
     PROFILE_FLUSH_THREAD();

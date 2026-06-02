@@ -116,6 +116,40 @@ static inline void write_tsv(buffer_t *buffer, char *in_file) {
     sdsclear(buffer->spectrum);
 };
 
+static inline void write_spectrum_matrix_tsv(char *in_file, double fmin, double fstep, uint32_t nfreq, uint32_t ncols, const float *matrix, int precision,
+                                             bool outputPeriod, char *stringBuff) {
+    if (!matrix || nfreq == 0U || ncols == 0U) return;
+
+    char out_file[256];
+    strncpy(out_file, in_file, sizeof(out_file) - 1);
+    out_file[sizeof(out_file) - 1] = '\0';
+    char *dot = strrchr(out_file, '.');
+    if (dot) {
+        *dot = '\0';
+    }
+    strcat(out_file, ".tsv");
+
+    FILE *fp = fopen(out_file, "w");
+    if (fp == NULL) {
+        perror("Failed to open file for writing");
+        return;
+    }
+
+    for (uint32_t i = 0; i < nfreq; ++i) {
+        double freq = fmin + ((double)i * fstep);
+        custom_coordinate_dtoa(freq, outputPeriod, precision, stringBuff);
+        fputs(stringBuff, fp);
+        for (uint32_t col = 0; col < ncols; ++col) {
+            fputc('\t', fp);
+            custom_ftoa(matrix[((size_t)col * (size_t)nfreq) + (size_t)i], 2, stringBuff);
+            fputs(stringBuff, fp);
+        }
+        fputc('\n', fp);
+    }
+
+    fclose(fp);
+}
+
 static inline void append_spaces(sds *buffer, int count) {
     char spaces[64];
     while (count > 0) {

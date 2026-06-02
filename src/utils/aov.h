@@ -491,14 +491,15 @@ typedef struct {
 static inline void aov_append_peak(buffer_t *buffer, const parameters *params, double freq, float r2, double df);
 
 static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *buffer, const parameters *params, double freq, float value, uint32_t idx,
-                                         uint32_t nfreq, float threshold, double fstep, double df, char *stringBuff, int precision, bool write_spectrum) {
+                                         uint32_t nfreq, float threshold, double fstep, double df, char *stringBuff, int precision, bool write_spectrum,
+                                         bool scan_peaks) {
     if (write_spectrum) {
         float magnitude = aov_likelihood_from_r2(value, params->nterms, periodogram_effective_n(buffer));
         if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
         appendFreq(freq, magnitude, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
     }
 
-    if (stream->has_left && stream->has_center && stream->center_idx > 0U && idx < nfreq) {
+    if (scan_peaks && stream->has_left && stream->has_center && stream->center_idx > 0U && idx < nfreq) {
         double peak_freq = stream->center_freq;
         float peak_magnitude = stream->center_value;
         if (aov_quadratic_peak_position(stream->center_freq, fstep, stream->left_value, stream->center_value, value, params->oversamplingFactor, &peak_freq,
@@ -520,13 +521,14 @@ static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *bu
 }
 
 static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq, float threshold, double df,
-                                    bool write_spectrum, int precision, char *stringBuff) {
+                                    bool write_spectrum, bool store_power, bool scan_peaks, int precision, char *stringBuff) {
     if (nfreq == 0) return 0;
     if (!aov_target_has_dof(buffer, params->nterms)) {
-        if (write_spectrum) {
+        if (write_spectrum || store_power) {
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
-                appendFreq(freq, 0.0f, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
+                if (store_power) buffer->power[i] = 0.0f;
+                if (write_spectrum) appendFreq(freq, 0.0f, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
             }
         }
         return 0;
@@ -534,10 +536,11 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
 
     aov_reference_t ref;
     if (!aov_prepare_reference(buffer, params->epsilon, &ref)) {
-        if (write_spectrum) {
+        if (write_spectrum || store_power) {
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
-                appendFreq(freq, 0.0f, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
+                if (store_power) buffer->power[i] = 0.0f;
+                if (write_spectrum) appendFreq(freq, 0.0f, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
             }
         }
         return 0;
@@ -592,8 +595,9 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         for (uint32_t k = 0; k < count; ++k) {
             uint32_t idx = base + k;
             double freq = fmin + ((double)idx * fstep);
-            if (write_spectrum) buffer->power[idx] = block_power[k];
-            aov_stream_peak_value(&stream, buffer, params, freq, block_power[k], idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum);
+            if (store_power) buffer->power[idx] = block_power[k];
+            aov_stream_peak_value(&stream, buffer, params, freq, block_power[k], idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum,
+                                  scan_peaks);
         }
     }
 
