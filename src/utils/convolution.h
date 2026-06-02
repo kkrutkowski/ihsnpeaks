@@ -47,14 +47,7 @@ static inline int32_t wrapidx(int32_t idx, int32_t n) {
 // Extract key from the 64-bit value (16-bit key at the lower 16 bits)
 static inline uint16_t extract_key(uint64_t value) { return (uint16_t)value; }  // Assuming lowest 16 bits only on little endian
 
-static inline uint16_t phase_key_10(double phase) {
-    double frac = phase - floor(phase);
-    if (frac < 0.0) frac += 1.0;
-    int key = (int)(frac * 1024.0);
-    if (key < 0) key = 0;
-    if (key > 1023) key = 1023;
-    return (uint16_t)key;
-}
+static inline uint16_t phase_key_10(double phase) { return (uint16_t)(((uint16_t)(phase * 1024.0)) & 1023U); }
 
 static inline void csort64_10(uint64_t** array, size_t n, uint64_t** aux_buffer, size_t* indices) {
     // Clear the indices array (initialized to 0)
@@ -83,10 +76,7 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     for (int j = 0; j < n; j++) {
         out[j] = in[j].parts.val;
     }
-    double width = (2.0 * (double)r) + 1.0;
-    double inv_width = 1.0 / width;
-    double norm = inv_width * inv_width;
-    norm *= norm;
+    double norm = 1.0 / ((2 * r + 1) * (2 * r + 1) * (2 * r + 1) * (2 * r + 1));
 
     for (int i = 0; i <= 3; i++) {
         double val = 0.0;
