@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean format release release-linux release-x86 release-arm release-linux-x86_64-musl release-linux-arm64-musl clean-docker profile profile-run profile-clean
+.PHONY: all native check_compiler install clean format release release-linux release-x86 release-arm release-linux-x86_64-musl release-linux-arm64-musl clean-docker profile profile-run profile-clean FORCE
 
 CC ?= cc
 AR ?= ar
@@ -35,6 +35,7 @@ COMPAT_HDR := $(MAKEFILE_DIR)src/utils/compat.h
 NUFFT_OBJ := $(BUILD_DIR)/nufft1.o
 SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
+COMPILER_STAMP := $(BUILD_DIR)/compiler.stamp
 
 PROFILE_CC ?= musl-gcc
 PROFILE_ISA ?= native
@@ -135,7 +136,7 @@ else
     ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
 endif
 
-CFLAGS_BASE := -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native -flto -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR)
+CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native $(LTOFLAGS) -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR)
 LDFLAGS_BASE := -Wl,--gc-sections
 LDLIBS := -lm $(ALLOCATOR_LDLIBS)
 
@@ -201,21 +202,29 @@ ifneq ($(findstring gcc,$(CC_RESOLVED)),)
     CC_VERSION_NUMBER := $(shell $(CC) -dumpversion)
     MIN_VERSION := $(GCC_MIN_VERSION)
     OPTFLAGS := -Ofast
+    LTOFLAGS := -flto
+    SCALING_WARNFLAGS :=
 else ifneq ($(findstring clang,$(CC_RESOLVED)),)
     CC_TYPE := clang
     CC_VERSION_NUMBER := $(shell $(CC) --version | grep -oP '(?<=clang version )\d+\.\d+\.\d+' | head -n 1)
     MIN_VERSION := $(CLANG_MIN_VERSION)
-    OPTFLAGS := -O3 -Wno-nan-infinity-disabled
+    OPTFLAGS := -O3 -Wno-nan-infinity-disabled -Wno-unused-value
+    LTOFLAGS :=
+    SCALING_WARNFLAGS := -Wno-nan-infinity-disabled
 else ifneq ($(findstring icx,$(CC_RESOLVED)),)
     CC_TYPE := icx
     CC_VERSION_NUMBER := $(shell $(CC) --version | grep -oP '(?<=icx version )\d+\.\d+\.\d+' | head -n 1)
     MIN_VERSION := $(ICX_MIN_VERSION)
     OPTFLAGS := -O3 -Wno-nan-infinity-disabled
+    LTOFLAGS := -flto
+    SCALING_WARNFLAGS :=
 else
     CC_TYPE := unknown
     CC_VERSION_NUMBER := 0
     MIN_VERSION := 0
     OPTFLAGS := -O3
+    LTOFLAGS :=
+    SCALING_WARNFLAGS :=
 endif
 
 STDFLAG := $(shell if printf 'int main(void){return 0;}\n' | $(CC) -std=gnu23 -x c - -fsyntax-only >/dev/null 2>&1; then printf '%s\n' -std=gnu23; elif printf 'int main(void){return 0;}\n' | $(CC) -std=gnu11 -x c - -fsyntax-only >/dev/null 2>&1; then printf '%s\n' -std=gnu11; else printf '%s\n' -std=gnu99; fi)
@@ -237,6 +246,13 @@ check_compiler:
 $(BUILD_DIR):
 	@mkdir -p $@
 
+FORCE:
+
+$(COMPILER_STAMP): FORCE | $(BUILD_DIR)
+	@tmp="$@.tmp"; \
+	printf '%s\n' 'CC=$(CC_RESOLVED)' 'CC_TYPE=$(CC_TYPE)' 'STDFLAG=$(STDFLAG)' 'CFLAGS=$(CFLAGS)' > "$$tmp"; \
+	if [ ! -f "$@" ] || ! cmp -s "$$tmp" "$@"; then mv "$$tmp" "$@"; else rm "$$tmp"; fi
+
 $(MIMALLOC_COMPAT_HEADER): | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@printf '#include <mimalloc.h>\n' > $@
@@ -245,11 +261,11 @@ $(MIMALLOC_OVERRIDE_HEADER): $(MIMALLOC_COMPAT_HEADER) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@printf '#ifndef IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#define IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#include <mimalloc/mimalloc.h>\n#define malloc(n) mi_malloc(n)\n#define calloc(c,n) mi_calloc(c,n)\n#define realloc(p,n) mi_realloc(p,n)\n#define free(p) mi_free(p)\n#define strdup(s) mi_strdup(s)\n#define strndup(s,n) mi_strndup(s,n)\n#define realpath(f,n) mi_realpath(f,n)\n#define aligned_alloc(a,n) mi_aligned_alloc(a,n)\n#define posix_memalign(p,a,n) mi_posix_memalign(p,a,n)\n#define reallocarray(p,c,n) mi_reallocarray(p,c,n)\n#endif\n' > $@
 
-$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(MIMALLOC_HEADER_DEP) | $(BUILD_DIR)
+$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(MIMALLOC_HEADER_DEP) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
 
-$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) | $(BUILD_DIR)
-	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra -D_GNU_SOURCE -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
+$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
+	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra $(SCALING_WARNFLAGS) -D_GNU_SOURCE -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
 
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@
