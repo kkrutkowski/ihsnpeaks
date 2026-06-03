@@ -259,10 +259,8 @@ typedef struct {
 } eval_result_t;
 
 typedef struct {
-    double weight;
-    double wy;
-    double wy2;
     double y;
+    double y2;
 } bls_sums_t;
 
 static inline double bls_relative_width_at(const parameters* params, int idx) {
@@ -283,26 +281,17 @@ static inline uint64_t bls_pack_phase_index(uint16_t key, uint32_t idx) { return
 
 static inline uint32_t bls_unpack_index(uint64_t value) { return (uint32_t)(value >> 16U); }
 
-static inline double bls_point_weight(const buffer_t* buffer, uint32_t idx, double epsilon) {
-    double dy = (double)buffer->dy[idx];
-    double denom = (dy * dy) + epsilon;
-    return denom > 0.0 && double_is_finite_bits(denom) ? 1.0 / denom : 0.0;
-}
-
-static inline void bls_add_index(const buffer_t* buffer, uint32_t idx, double epsilon, double sign, bls_sums_t* sums) {
+static inline void bls_add_index(const buffer_t* buffer, uint32_t idx, double sign, bls_sums_t* sums) {
     double y = (double)buffer->y[idx];
-    double weight = bls_point_weight(buffer, idx, epsilon);
-    sums->weight += sign * weight;
-    sums->wy += sign * weight * y;
-    sums->wy2 += sign * weight * y * y;
     sums->y += sign * y;
+    sums->y2 += sign * y * y;
 }
 
-static inline void bls_add_sorted(const buffer_t* buffer, const uint64_t* sorted, int pos, double epsilon, double sign, bls_sums_t* sums) {
+static inline void bls_add_sorted(const buffer_t* buffer, const uint64_t* sorted, int pos, double sign, bls_sums_t* sums) {
     int n = (int)buffer->n;
     if (pos >= n) pos %= n;
     if (pos < 0) pos = wrapidx(pos, n);
-    bls_add_index(buffer, bls_unpack_index(sorted[pos]), epsilon, sign, sums);
+    bls_add_index(buffer, bls_unpack_index(sorted[pos]), sign, sums);
 }
 
 static inline float bls_float_value(double value) {
@@ -313,7 +302,7 @@ static inline float bls_float_value(double value) {
 
 static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
     eval_result_t result = {0};
-    if (!buffer || !params || !buffer->buf || !buffer->buf[0] || !buffer->buf[1] || !buffer->pidx || buffer->n < 2U) return result;
+    if (!buffer || !params || !buffer->buf || !buffer->buf[0] || !buffer->buf[1] || !buffer->pidx || buffer->n <= 2U) return result;
 
     int n = (int)buffer->n;
     uint64_t* input = (uint64_t*)buffer->buf[0];
@@ -324,12 +313,11 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
     for (int i = 0; i < n; ++i) {
         uint16_t key = phase_key_10(buffer->x[i] * freq);
         input[i] = bls_pack_phase_index(key, (uint32_t)i);
-        bls_add_index(buffer, (uint32_t)i, params->epsilon, 1.0, &total);
+        bls_add_index(buffer, (uint32_t)i, 1.0, &total);
     }
     csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);
 
-    if (!(total.weight > 0.0)) return result;
-    double ref_sse = total.wy2 - ((total.wy * total.wy) / total.weight);
+    double ref_sse = total.y2 - ((total.y * total.y) / (double)n);
     if (!(ref_sse > 0.0) || !double_is_finite_bits(ref_sse)) return result;
 
     int width_count = params->blsWidthCount > 0 ? params->blsWidthCount : 10;
@@ -350,15 +338,15 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
 
         bls_sums_t in = {0};
         for (int j = 0; j < width; ++j) {
-            bls_add_sorted(buffer, sorted, j, params->epsilon, 1.0, &in);
+            bls_add_sorted(buffer, sorted, j, 1.0, &in);
         }
 
+        int out_count = n - width;
         for (int start = 0; start < n; ++start) {
-            bls_sums_t out = {.weight = total.weight - in.weight, .wy = total.wy - in.wy, .wy2 = total.wy2 - in.wy2, .y = total.y - in.y};
-            int out_count = n - width;
-            if (in.weight > 0.0 && out.weight > 0.0 && out_count > 0) {
-                double in_sse = in.wy2 - ((in.wy * in.wy) / in.weight);
-                double out_sse = out.wy2 - ((out.wy * out.wy) / out.weight);
+            bls_sums_t out = {.y = total.y - in.y, .y2 = total.y2 - in.y2};
+            if (out_count > 0) {
+                double in_sse = in.y2 - ((in.y * in.y) / (double)width);
+                double out_sse = out.y2 - ((out.y * out.y) / (double)out_count);
                 if (in_sse < 0.0) in_sse = 0.0;
                 if (out_sse < 0.0) out_sse = 0.0;
                 double model_sse = in_sse + out_sse;
@@ -370,23 +358,23 @@ static inline eval_result_t get_bls_result(buffer_t* buffer, const parameters* p
                     if (best_r2 < 0.0) best_r2 = 0.0;
                     if (best_r2 > 1.0 - 1.0e-15) best_r2 = 1.0 - 1.0e-15;
                     best_amp = fabs((in.y / (double)width) - (out.y / (double)out_count));
-                    best_in_level = in.wy / in.weight;
-                    best_out_level = out.wy / out.weight;
+                    best_in_level = in.y / (double)width;
+                    best_out_level = out.y / (double)out_count;
                     best_start = start;
                     best_width = width;
                 }
             }
 
-            bls_add_sorted(buffer, sorted, start, params->epsilon, -1.0, &in);
-            bls_add_sorted(buffer, sorted, start + width, params->epsilon, 1.0, &in);
+            if (start + 1 < n) {
+                bls_add_sorted(buffer, sorted, start, -1.0, &in);
+                bls_add_sorted(buffer, sorted, start + width, 1.0, &in);
+            }
         }
     }
 
     if (best_start < 0) return result;
 
-    int n_eff = periodogram_effective_n(buffer);
-    if (n_eff <= 2) return result;
-    double best_nll = lnFAP(2, 1, best_r2, n_eff);
+    double best_nll = lnFAP(2, 1, best_r2, n);
     float likelihood = bls_float_value(best_nll);
     if (!float_is_finite_bits(likelihood) || likelihood <= 0.0f) return result;
 
