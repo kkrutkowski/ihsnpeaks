@@ -1,8 +1,40 @@
-FROM alpine:3.23
+FROM alpine:3.23 AS release-base
 
-RUN apk add --no-cache build-base python3 binutils file
+RUN apk add --no-cache build-base python3 binutils file zig llvm
 
 WORKDIR /work
 COPY . /work
 
+RUN chmod +x /work/dispatch/zig_musl_cc.sh \
+    && ln -sf /work/dispatch/zig_musl_cc.sh /usr/local/bin/aarch64-alpine-linux-musl-gcc \
+    && ln -sf /work/dispatch/zig_musl_cc.sh /usr/local/bin/aarch64-linux-musl-gcc \
+    && ln -sf /work/dispatch/zig_musl_cc.sh /usr/local/bin/x86_64-alpine-linux-musl-gcc \
+    && ln -sf /work/dispatch/zig_musl_cc.sh /usr/local/bin/x86_64-linux-musl-gcc \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-objcopy "$@"' > /usr/local/bin/aarch64-alpine-linux-musl-objcopy \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-objcopy "$@"' > /usr/local/bin/aarch64-linux-musl-objcopy \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-objcopy "$@"' > /usr/local/bin/x86_64-alpine-linux-musl-objcopy \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-objcopy "$@"' > /usr/local/bin/x86_64-linux-musl-objcopy \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-strip "$@"' > /usr/local/bin/aarch64-alpine-linux-musl-strip \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-strip "$@"' > /usr/local/bin/aarch64-linux-musl-strip \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-strip "$@"' > /usr/local/bin/x86_64-alpine-linux-musl-strip \
+    && printf '%s\n' '#!/bin/sh' 'exec llvm-strip "$@"' > /usr/local/bin/x86_64-linux-musl-strip \
+    && chmod +x /usr/local/bin/*-linux-musl-objcopy /usr/local/bin/*-linux-musl-strip
+
+FROM release-base AS build-x86
 RUN make release-linux-x86_64-musl
+
+FROM release-base AS build-arm
+RUN make release-linux-arm64-musl
+
+FROM alpine:3.23 AS release-all
+WORKDIR /work
+COPY --from=build-x86 /work/dist/ihsnpeaks-linux-x86_64 /work/dist/ihsnpeaks-linux-x86_64
+COPY --from=build-arm /work/dist/ihsnpeaks-linux-arm64 /work/dist/ihsnpeaks-linux-arm64
+
+FROM alpine:3.23 AS release-x86
+WORKDIR /work
+COPY --from=build-x86 /work/dist/ihsnpeaks-linux-x86_64 /work/dist/ihsnpeaks-linux-x86_64
+
+FROM alpine:3.23 AS release-arm
+WORKDIR /work
+COPY --from=build-arm /work/dist/ihsnpeaks-linux-arm64 /work/dist/ihsnpeaks-linux-arm64

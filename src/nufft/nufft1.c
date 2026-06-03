@@ -28,6 +28,29 @@ typedef float VECF __attribute__((vector_size(VEC_BYTES)));
 typedef uint32_t VECF_INT __attribute__((vector_size(VEC_BYTES)));
 typedef int32_t VECF_SINT __attribute__((vector_size(VEC_BYTES)));
 
+#if defined(__clang__)
+static inline VECF nanofft_shuffle1_vec(VECF a, VECF_INT mask) {
+    VECF out = {};
+    for (int i = 0; i < VECF_LEN; ++i) out[i] = a[mask[i]];
+    return out;
+}
+
+static inline VECF nanofft_shuffle2_vec(VECF a, VECF b, VECF_INT mask) {
+    VECF out = {};
+    for (int i = 0; i < VECF_LEN; ++i) {
+        uint32_t idx = mask[i];
+        out[i] = idx < VECF_LEN ? a[idx] : b[idx - VECF_LEN];
+    }
+    return out;
+}
+
+#    define NANOFFT_SHUFFLE1(a, ...) nanofft_shuffle1_vec((a), (__VA_ARGS__))
+#    define NANOFFT_SHUFFLE2(a, b, ...) nanofft_shuffle2_vec((a), (b), (__VA_ARGS__))
+#else
+#    define NANOFFT_SHUFFLE1(a, ...) __builtin_shuffle((a), (__VA_ARGS__))
+#    define NANOFFT_SHUFFLE2(a, b, ...) __builtin_shuffle((a), (b), (__VA_ARGS__))
+#endif
+
 #define LOAD_VEC(ptr) (*(const VECF *)(ptr))
 #define STORE_VEC(ptr, val) (*(VECF *)(ptr) = (val))
 
@@ -257,8 +280,8 @@ static const VECF imag_twiddles[4]
                                     {0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
                                     {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}};
 static inline void nanofft_vec_shuffle(VECF *a, VECF *b) {
-    VECF tmp = __builtin_shuffle(*a, *b, (VECF_INT){0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23});
-    *b = __builtin_shuffle(*a, *b, (VECF_INT){8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31});
+    VECF tmp = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23});
+    *b = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31});
     *a = tmp;
 }
 #    elif VECF_LEN == 8
@@ -273,8 +296,8 @@ static const VECF imag_twiddles[3]
                                     {0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
                                     {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}};
 static inline void nanofft_vec_shuffle(VECF *a, VECF *b) {
-    VECF tmp = __builtin_shuffle(*a, *b, (VECF_INT){0, 1, 2, 3, 8, 9, 10, 11});
-    *b = __builtin_shuffle(*a, *b, (VECF_INT){4, 5, 6, 7, 12, 13, 14, 15});
+    VECF tmp = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){0, 1, 2, 3, 8, 9, 10, 11});
+    *b = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){4, 5, 6, 7, 12, 13, 14, 15});
     *a = tmp;
 }
 #    elif VECF_LEN == 4
@@ -283,8 +306,8 @@ static const VECF_INT inv_permutations[2] __attribute__((aligned(64))) = {{0, 1,
 static const VECF real_twiddles[2] __attribute__((aligned(64))) = {{1.0f, 0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f, 1.0f}};
 static const VECF imag_twiddles[2] __attribute__((aligned(64))) = {{0.0f, 1.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 0.0f}};
 static inline void nanofft_vec_shuffle(VECF *a, VECF *b) {
-    VECF tmp = __builtin_shuffle(*a, *b, (VECF_INT){0, 1, 4, 5});
-    *b = __builtin_shuffle(*a, *b, (VECF_INT){2, 3, 6, 7});
+    VECF tmp = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){0, 1, 4, 5});
+    *b = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){2, 3, 6, 7});
     *a = tmp;
 }
 #    elif VECF_LEN == 2
@@ -293,18 +316,18 @@ static const VECF_INT inv_permutations[1] __attribute__((aligned(64))) = {{0, 1}
 static const VECF real_twiddles[1] __attribute__((aligned(64))) = {{1.0f, 1.0f}};
 static const VECF imag_twiddles[1] __attribute__((aligned(64))) = {{0.0f, 0.0f}};
 static inline void nanofft_vec_shuffle(VECF *a, VECF *b) {
-    VECF tmp = __builtin_shuffle(*a, *b, (VECF_INT){0, 2});
-    *b = __builtin_shuffle(*a, *b, (VECF_INT){1, 3});
+    VECF tmp = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){0, 2});
+    *b = NANOFFT_SHUFFLE2(*a, *b, (VECF_INT){1, 3});
     *a = tmp;
 }
 #    endif
 static inline void nanofft_vec_perm(VECF *a, VECF *b, uint32_t idx) {
-    *a = __builtin_shuffle(*a, permutations[idx]);
-    *b = __builtin_shuffle(*b, permutations[idx]);
+    *a = NANOFFT_SHUFFLE1(*a, permutations[idx]);
+    *b = NANOFFT_SHUFFLE1(*b, permutations[idx]);
 }
 static inline void nanofft_vec_inv_perm(VECF *a, VECF *b, uint32_t idx) {
-    *a = __builtin_shuffle(*a, inv_permutations[idx]);
-    *b = __builtin_shuffle(*b, inv_permutations[idx]);
+    *a = NANOFFT_SHUFFLE1(*a, inv_permutations[idx]);
+    *b = NANOFFT_SHUFFLE1(*b, inv_permutations[idx]);
 }
 #endif
 

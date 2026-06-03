@@ -7,12 +7,50 @@ import platform
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from variants import VARIANTS, Variant, host_supported_variants, repo_root
+from variants import repo_root
 
 
 MAX_TWIDDLE_REUSE = "8"
+
+
+@dataclass(frozen=True)
+class ArmVariant:
+    name: str
+    symbol: str
+    cflags: tuple[str, ...]
+    width: int
+    feature: str
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def build_name(self) -> str:
+        return self.symbol.replace("_", "-")
+
+
+ARM_VARIANTS: tuple[ArmVariant, ...] = (
+    ArmVariant("arm64", "arm64", ("-march=armv8-a",), 128, "generic", aliases=("aarch64",)),
+    ArmVariant("arm64-neon", "arm64_neon", ("-march=armv8-a+simd",), 128, "neon", aliases=("neon", "asimd")),
+    ArmVariant("arm64-sve128", "arm64_sve128", ("-march=armv8.2-a+sve", "-msve-vector-bits=128"), 128, "sve"),
+    ArmVariant("arm64-sve256", "arm64_sve256", ("-march=armv8.2-a+sve", "-msve-vector-bits=256"), 256, "sve"),
+    ArmVariant("arm64-sve512", "arm64_sve512", ("-march=armv8.2-a+sve", "-msve-vector-bits=512"), 512, "sve"),
+    ArmVariant("arm64-sve2-128", "arm64_sve2_128", ("-march=armv8.5-a+sve2", "-msve-vector-bits=128"), 128, "sve2"),
+    ArmVariant("arm64-sve2-256", "arm64_sve2_256", ("-march=armv8.5-a+sve2", "-msve-vector-bits=256"), 256, "sve2"),
+    ArmVariant("arm64-sve2-512", "arm64_sve2_512", ("-march=armv8.5-a+sve2", "-msve-vector-bits=512"), 512, "sve2"),
+)
+
+ARM_DISPATCH_ORDER = (
+    "arm64-sve2-512",
+    "arm64-sve512",
+    "arm64-sve2-256",
+    "arm64-sve256",
+    "arm64-sve2-128",
+    "arm64-sve128",
+    "arm64-neon",
+    "arm64",
+)
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -27,20 +65,13 @@ def first_existing_tool(candidates: tuple[str, ...]) -> str:
     return candidates[0]
 
 
-def default_target_tool(name: str) -> str:
-    machine = platform.machine().lower()
-    if machine in {"x86_64", "amd64"}:
-        return name
-    return first_existing_tool((f"x86_64-alpine-linux-musl-{name}", f"x86_64-linux-musl-{name}"))
-
-
 def resolve_tool(tool: str, role: str) -> str:
     resolved = shutil.which(tool)
     if resolved:
         return resolved
     raise SystemExit(
         f"Required {role} tool '{tool}' was not found. "
-        "Install the x86_64 musl cross toolchain or pass --cc/--objcopy/--strip explicitly."
+        "Install the aarch64 musl cross toolchain or pass --cc/--objcopy/--strip explicitly."
     )
 
 
@@ -111,16 +142,32 @@ def try_generate_proxy_scaling(root: Path, build_root: Path, host_cc: str, stdfl
         )
         run([str(scaling_gen), str(scaling_header)], root)
     except subprocess.CalledProcessError:
-        print(f"Scaling proxy {name} could not be generated; falling back if possible.", flush=True)
+        print(f"Scaling proxy {name} could not be generated.", flush=True)
         return None
 
     return scaling_header
 
 
-def arm_proxy_scaling_sources(root: Path, build_root: Path, host_cc: str, stdflag: str) -> dict[str, Path]:
+def x86_proxy_scaling_sources(root: Path, build_root: Path, host_cc: str, stdflag: str) -> dict[int, Path]:
+    proxies = {
+        128: try_generate_proxy_scaling(root, build_root, host_cc, stdflag, "x86-64-v2", ["-march=x86-64-v2", "-mtune=generic"]),
+        256: try_generate_proxy_scaling(root, build_root, host_cc, stdflag, "x86-64-v3", ["-march=x86-64-v3", "-mtune=generic"]),
+        512: try_generate_proxy_scaling(root, build_root, host_cc, stdflag, "x86-64-v4", ["-march=x86-64-v4", "-mtune=generic"]),
+    }
+    missing = [str(width) for width, path in proxies.items() if path is None]
+    if missing:
+        raise SystemExit(
+            "Unable to generate required x86 proxy scaling bucket(s) "
+            + ", ".join(missing)
+            + ". ARM64 cross release on x86 requires runnable x86-64-v2/v3/v4 proxy builds."
+        )
+    return {width: path for width, path in proxies.items() if path is not None}
+
+
+def arm_proxy_scaling_sources(root: Path, build_root: Path, host_cc: str, stdflag: str) -> dict[int, Path]:
     arm128 = try_generate_proxy_scaling(root, build_root, host_cc, stdflag, "arm128", ["-march=armv8-a+simd"])
     if arm128 is None:
-        raise SystemExit("Unable to generate ARM 128-bit proxy scaling for x86 release.")
+        raise SystemExit("Unable to generate ARM 128-bit scaling proxy.")
 
     arm256 = try_generate_proxy_scaling(root, build_root, host_cc, stdflag, "arm256", ["-march=armv8.2-a+sve", "-msve-vector-bits=256"])
     if arm256 is None:
@@ -132,27 +179,31 @@ def arm_proxy_scaling_sources(root: Path, build_root: Path, host_cc: str, stdfla
         arm512 = arm256
         print(f"Scaling proxy arm512: reusing shorter proxy {arm512}", flush=True)
 
-    return {
-        "x86-64": arm128,
-        "x86-64-v2": arm128,
-        "x86-64-v2+avx": arm128,
-        "x86-64-v3": arm256,
-        "x86-64-v4": arm512,
-    }
+    return {128: arm128, 256: arm256, 512: arm512}
 
 
-def variant_wrapper_source(variant: Variant) -> str:
-    return f"""/* Generated by dispatch/build_release.py. */
+def variant_wrapper_source(variant: ArmVariant) -> str:
+    return f"""/* Generated by dispatch/build_release_arm64.py. */
 #define main __attribute__((visibility("default"))) ihsnpeaks_main_{variant.symbol}
 #include "src/main.c"
 #include "src/nufft/nufft1.c"
 """
 
 
-def dispatcher_source(variants: list[Variant]) -> str:
+def support_function(variant: ArmVariant) -> str:
+    if variant.feature == "generic":
+        return "supports_arm64"
+    if variant.feature == "neon":
+        return "supports_arm64_neon"
+    return f"supports_{variant.symbol}"
+
+
+def dispatcher_source(variants: list[ArmVariant]) -> str:
+    by_name = {variant.name: variant for variant in variants}
+    ordered = [by_name[name] for name in ARM_DISPATCH_ORDER if name in by_name]
     prototypes = "\n".join(f"int ihsnpeaks_main_{variant.symbol}(int argc, char **argv);" for variant in variants)
     table_rows = "\n".join(
-        f'    {{"{variant.name}", "{variant.symbol}", ihsnpeaks_main_{variant.symbol}, supports_{variant.symbol}}},' for variant in reversed(variants)
+        f'    {{"{variant.name}", "{variant.symbol}", ihsnpeaks_main_{variant.symbol}, {support_function(variant)}}},' for variant in ordered
     )
     alias_rows: list[str] = []
     for variant in variants:
@@ -160,22 +211,39 @@ def dispatcher_source(variants: list[Variant]) -> str:
             alias_rows.append(f'    {{"{alias}", "{variant.name}"}},')
     aliases = "\n".join(alias_rows)
 
-    return f"""/* Generated by dispatch/build_release.py. */
-#include <cpuid.h>
+    return f"""/* Generated by dispatch/build_release_arm64.py. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
+#include <sys/prctl.h>
+
+#ifndef HWCAP_ASIMD
+#define HWCAP_ASIMD (1UL << 1)
+#endif
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1UL << 22)
+#endif
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1UL << 1)
+#endif
+#ifndef PR_SVE_GET_VL
+#define PR_SVE_GET_VL 51
+#endif
+#ifndef PR_SVE_VL_LEN_MASK
+#define PR_SVE_VL_LEN_MASK 0xffff
+#endif
 
 {prototypes}
 
 typedef int (*ihsnpeaks_entry_fn)(int argc, char **argv);
 
 typedef struct {{
-    int v2;
-    int v2_avx;
-    int v3;
-    int v4;
+    int asimd;
+    int sve;
+    int sve2;
+    int sve_bits;
 }} ihsnpeaks_cpu_features;
 
 typedef struct {{
@@ -190,90 +258,34 @@ typedef struct {{
     const char *canonical;
 }} ihsnpeaks_variant_alias;
 
-static uint64_t ihsnpeaks_xgetbv0(void) {{
-    uint32_t eax = 0;
-    uint32_t edx = 0;
-    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
-    return ((uint64_t)edx << 32) | eax;
-}}
-
 static ihsnpeaks_cpu_features ihsnpeaks_detect_cpu(void) {{
     ihsnpeaks_cpu_features features = {{0}};
-    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
-    unsigned int max_basic = __get_cpuid_max(0, NULL);
-    unsigned int max_extended = __get_cpuid_max(0x80000000U, NULL);
-
-    if (max_basic < 1 || !__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {{
-        return features;
+    unsigned long hwcap = getauxval(AT_HWCAP);
+    unsigned long hwcap2 = getauxval(AT_HWCAP2);
+    features.asimd = (hwcap & HWCAP_ASIMD) != 0;
+    features.sve = (hwcap & HWCAP_SVE) != 0;
+    features.sve2 = (hwcap2 & HWCAP2_SVE2) != 0;
+    if (features.sve) {{
+        long vl = prctl(PR_SVE_GET_VL);
+        if (vl > 0) features.sve_bits = (int)((vl & PR_SVE_VL_LEN_MASK) * 8L);
     }}
-
-    int has_ssse3 = (ecx & (1U << 9)) != 0;
-    int has_fma = (ecx & (1U << 12)) != 0;
-    int has_cx16 = (ecx & (1U << 13)) != 0;
-    int has_sse4_1 = (ecx & (1U << 19)) != 0;
-    int has_sse4_2 = (ecx & (1U << 20)) != 0;
-    int has_movbe = (ecx & (1U << 22)) != 0;
-    int has_popcnt = (ecx & (1U << 23)) != 0;
-    int has_xsave = (ecx & (1U << 26)) != 0;
-    int has_osxsave = (ecx & (1U << 27)) != 0;
-    int has_avx = (ecx & (1U << 28)) != 0;
-    int has_f16c = (ecx & (1U << 29)) != 0;
-    int has_lahf_lm = 0;
-    int has_lzcnt = 0;
-
-    if (max_extended >= 0x80000001U && __get_cpuid(0x80000001U, &eax, &ebx, &ecx, &edx)) {{
-        has_lahf_lm = (ecx & (1U << 0)) != 0;
-        has_lzcnt = (ecx & (1U << 5)) != 0;
-    }}
-
-    features.v2 = has_cx16 && has_lahf_lm && has_popcnt && has_sse4_1 && has_sse4_2 && has_ssse3;
-
-    uint64_t xcr0 = 0;
-    if (has_xsave && has_osxsave) {{
-        xcr0 = ihsnpeaks_xgetbv0();
-    }}
-    int has_avx_state = (xcr0 & 0x6U) == 0x6U;
-    features.v2_avx = features.v2 && has_avx && has_xsave && has_osxsave && has_avx_state;
-
-    if (max_basic >= 7 && __get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {{
-        int has_bmi1 = (ebx & (1U << 3)) != 0;
-        int has_avx2 = (ebx & (1U << 5)) != 0;
-        int has_bmi2 = (ebx & (1U << 8)) != 0;
-        int has_avx512f = (ebx & (1U << 16)) != 0;
-        int has_avx512dq = (ebx & (1U << 17)) != 0;
-        int has_avx512cd = (ebx & (1U << 28)) != 0;
-        int has_avx512bw = (ebx & (1U << 30)) != 0;
-        int has_avx512vl = (ebx & (1U << 31)) != 0;
-
-        features.v3 = features.v2_avx && has_avx2 && has_fma && has_bmi1 && has_bmi2 && has_f16c && has_lzcnt && has_movbe;
-
-        int has_avx512_state = (xcr0 & 0xE6U) == 0xE6U;
-        features.v4 = features.v3 && has_avx512f && has_avx512dq && has_avx512cd && has_avx512bw && has_avx512vl && has_avx512_state;
-    }}
-
     return features;
 }}
 
-static int supports_x86_64(const ihsnpeaks_cpu_features *features) {{
+static int supports_arm64(const ihsnpeaks_cpu_features *features) {{
     (void)features;
     return 1;
 }}
 
-static int supports_x86_64_v2(const ihsnpeaks_cpu_features *features) {{
-    return features->v2;
+static int supports_arm64_neon(const ihsnpeaks_cpu_features *features) {{
+    return features->asimd;
 }}
 
-static int supports_x86_64_v2_avx(const ihsnpeaks_cpu_features *features) {{
-    return features->v2_avx;
+{''.join(f'''
+static int supports_{variant.symbol}(const ihsnpeaks_cpu_features *features) {{
+    return features->{variant.feature} && features->sve_bits >= {variant.width};
 }}
-
-static int supports_x86_64_v3(const ihsnpeaks_cpu_features *features) {{
-    return features->v3;
-}}
-
-static int supports_x86_64_v4(const ihsnpeaks_cpu_features *features) {{
-    return features->v4;
-}}
+''' for variant in variants if variant.feature in {'sve', 'sve2'})}
 
 static const ihsnpeaks_variant_entry ihsnpeaks_variants[] = {{
 {table_rows}
@@ -344,68 +356,24 @@ def compile_variant(
     objcopy: str,
     stdflag: str,
     base_cflags: list[str],
-    variant: Variant,
-    scaling_source: Path | None = None,
+    variant: ArmVariant,
+    scaling_source: Path,
 ) -> Path:
     variant_dir = build_root / variant.build_name
     variant_dir.mkdir(parents=True, exist_ok=True)
-
-    scaling_nufft_obj = variant_dir / "nufft1.scaling.o"
-    scaling_gen = variant_dir / "scaling_gen"
     scaling_header = variant_dir / "scaling.h"
     wrapper_c = variant_dir / "ihsnpeaks_variant.c"
     variant_obj = variant_dir / "ihsnpeaks_variant.o"
-
-    common_flags = [stdflag, "-D_GNU_SOURCE", "-DHAS_MIMALLOC=0", f"-DMAX_TWIDDLE_REUSE={MAX_TWIDDLE_REUSE}", "-pthread"]
     include_flags = [f"-I{root / 'include'}", f"-I{root / 'src/nufft'}", f"-I{variant_dir}", f"-I{root}"]
-    variant_flags = list(variant.cflags)
 
-    if scaling_source is not None:
-        print(f"Scaling proxy for {variant.name}: {scaling_source}", flush=True)
-        shutil.copyfile(scaling_source, scaling_header)
-    else:
-        run(
-            [
-                cc,
-                *common_flags,
-                "-O3",
-                "-ffast-math",
-                "-fno-sanitize=all",
-                *variant_flags,
-                *include_flags,
-                "-c",
-                str(root / "src/nufft/nufft1.c"),
-                "-o",
-                str(scaling_nufft_obj),
-            ],
-            root,
-        )
-        run(
-            [
-                cc,
-                *common_flags,
-                "-O3",
-                "-ffast-math",
-                "-fno-sanitize=all",
-                *variant_flags,
-                *include_flags,
-                str(root / "src/nufft/scaling.c"),
-                str(scaling_nufft_obj),
-                "-static",
-                "-lm",
-                "-o",
-                str(scaling_gen),
-            ],
-            root,
-        )
-        run([str(scaling_gen), str(scaling_header)], root)
-
+    print(f"Scaling proxy for {variant.name}: {scaling_source}", flush=True)
+    shutil.copyfile(scaling_source, scaling_header)
     write_text(wrapper_c, variant_wrapper_source(variant))
     run(
         [
             cc,
             *base_cflags,
-            *variant_flags,
+            *variant.cflags,
             *include_flags,
             "-c",
             str(wrapper_c),
@@ -418,16 +386,22 @@ def compile_variant(
     return variant_obj
 
 
+def default_target_tool(name: str) -> str:
+    machine = platform.machine().lower()
+    if machine in {"aarch64", "arm64"}:
+        return name
+    return first_existing_tool((f"aarch64-alpine-linux-musl-{name}", f"aarch64-linux-musl-{name}"))
+
+
 def main(argv: list[str]) -> int:
     root = repo_root()
-    parser = argparse.ArgumentParser(description="Build the static Linux x86-64 release dispatcher.")
+    parser = argparse.ArgumentParser(description="Build the static Linux ARM64 release dispatcher.")
     parser.add_argument("--cc", default=os.environ.get("CC", default_target_tool("gcc")))
     parser.add_argument("--objcopy", default=os.environ.get("OBJCOPY", default_target_tool("objcopy")))
     parser.add_argument("--strip", default=os.environ.get("STRIP", default_target_tool("strip")))
     parser.add_argument("--host-cc", default=os.environ.get("HOST_CC", "cc"))
-    parser.add_argument("--build-dir", default=str(root / "build/release/linux-x86_64-musl"))
-    parser.add_argument("--output", default=str(root / "dist/ihsnpeaks-linux-x86_64"))
-    parser.add_argument("--force-all", action="store_true", help="Build every variant even if host flags do not report support.")
+    parser.add_argument("--build-dir", default=str(root / "build/release/linux-arm64-musl"))
+    parser.add_argument("--output", default=str(root / "dist/ihsnpeaks-linux-arm64"))
     args = parser.parse_args(argv)
 
     cc = resolve_tool(args.cc, "target compiler")
@@ -439,18 +413,17 @@ def main(argv: list[str]) -> int:
     build_root.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    cross_scaling: dict[str, Path] = {}
+    host_stdflag = detect_stdflag(host_cc, root)
     host_machine = platform.machine().lower()
     if host_machine in {"x86_64", "amd64"}:
-        variants = list(VARIANTS if args.force_all else host_supported_variants())
+        scaling_by_width = x86_proxy_scaling_sources(root, build_root, host_cc, host_stdflag)
     elif host_machine in {"aarch64", "arm64"}:
-        variants = list(VARIANTS)
-        host_stdflag = detect_stdflag(host_cc, root)
-        cross_scaling = arm_proxy_scaling_sources(root, build_root, host_cc, host_stdflag)
+        scaling_by_width = arm_proxy_scaling_sources(root, build_root, host_cc, host_stdflag)
     else:
-        raise SystemExit(f"release-linux-x86_64-musl requires x86_64 or arm64 host/proxy scaling, got {platform.machine()}")
-    print("Release variants: " + ", ".join(variant.name for variant in variants), flush=True)
+        raise SystemExit(f"release-linux-arm64-musl requires x86_64 or arm64 host/proxy scaling, got {platform.machine()}")
 
+    variants = list(ARM_VARIANTS)
+    print("Release variants: " + ", ".join(variant.name for variant in variants), flush=True)
     stdflag = detect_stdflag(cc, root)
     base_cflags = [
         stdflag,
@@ -466,7 +439,7 @@ def main(argv: list[str]) -> int:
     ]
 
     variant_objects = [
-        compile_variant(root, build_root, cc, objcopy, stdflag, base_cflags, variant, cross_scaling.get(variant.name)) for variant in variants
+        compile_variant(root, build_root, cc, objcopy, stdflag, base_cflags, variant, scaling_by_width[variant.width]) for variant in variants
     ]
 
     dispatcher_c = build_root / "dispatch_main.c"
@@ -481,8 +454,7 @@ def main(argv: list[str]) -> int:
             "-fno-sanitize=all",
             "-ffunction-sections",
             "-fdata-sections",
-            "-march=x86-64",
-            "-mtune=generic",
+            "-march=armv8-a",
             "-pthread",
             "-c",
             str(dispatcher_c),

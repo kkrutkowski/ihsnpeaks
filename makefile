@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean format release release-linux-x86_64-musl clean-docker profile profile-run profile-clean
+.PHONY: all native check_compiler install clean format release release-linux release-x86 release-arm release-linux-x86_64-musl release-linux-arm64-musl clean-docker profile profile-run profile-clean
 
 CC ?= cc
 AR ?= ar
@@ -20,9 +20,11 @@ ifeq ($(MIMALLOC),1)
     ALLOCATOR_BUILD := mimalloc
 endif
 BUILD_DIR := $(MAKEFILE_DIR)build/native/$(ALLOCATOR_BUILD)
-RELEASE_IMAGE ?= ihsnpeaks-release-linux-x86_64
+RELEASE_IMAGE ?= ihsnpeaks-release-linux
 RELEASE_CONTAINER ?= ihsnpeaks-release-extract
-RELEASE_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-x86_64
+RELEASE_X86_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-x86_64
+RELEASE_ARM_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-arm64
+RELEASE_BIN := $(RELEASE_X86_BIN)
 MIMALLOC_COMPAT_DIR := $(BUILD_DIR)/compat
 MIMALLOC_COMPAT_HEADER := $(MIMALLOC_COMPAT_DIR)/mimalloc/mimalloc.h
 MIMALLOC_OVERRIDE_HEADER := $(MIMALLOC_COMPAT_DIR)/ihsnpeaks-mimalloc-override.h
@@ -305,17 +307,42 @@ profile-run: profile
 profile-clean:
 	@rm -rf $(PROFILE_ROOT)
 
-release:
-	docker build -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE) $(MAKEFILE_DIR)
+release: release-linux
+
+release-linux:
+	docker build --target release-all -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE) $(MAKEFILE_DIR)
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
 	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE) >/dev/null
-	@mkdir -p $(dir $(RELEASE_BIN))
-	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_BIN)
+	@mkdir -p $(dir $(RELEASE_X86_BIN))
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_X86_BIN)
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-arm64 $(RELEASE_ARM_BIN)
 	docker rm $(RELEASE_CONTAINER) >/dev/null
-	@echo "Release binary: $(RELEASE_BIN)"
+	@echo "Release binary: $(RELEASE_X86_BIN)"
+	@echo "Release binary: $(RELEASE_ARM_BIN)"
+
+release-x86:
+	docker build --target release-x86 -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE)-x86 $(MAKEFILE_DIR)
+	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
+	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE)-x86 >/dev/null
+	@mkdir -p $(dir $(RELEASE_X86_BIN))
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_X86_BIN)
+	docker rm $(RELEASE_CONTAINER) >/dev/null
+	@echo "Release binary: $(RELEASE_X86_BIN)"
+
+release-arm:
+	docker build --target release-arm -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE)-arm $(MAKEFILE_DIR)
+	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
+	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE)-arm >/dev/null
+	@mkdir -p $(dir $(RELEASE_ARM_BIN))
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-arm64 $(RELEASE_ARM_BIN)
+	docker rm $(RELEASE_CONTAINER) >/dev/null
+	@echo "Release binary: $(RELEASE_ARM_BIN)"
 
 release-linux-x86_64-musl:
-	python3 $(MAKEFILE_DIR)dispatch/build_release.py --build-dir $(MAKEFILE_DIR)build/release/linux-x86_64-musl --output $(RELEASE_BIN)
+	python3 $(MAKEFILE_DIR)dispatch/build_release.py --build-dir $(MAKEFILE_DIR)build/release/linux-x86_64-musl --output $(RELEASE_X86_BIN)
+
+release-linux-arm64-musl:
+	python3 $(MAKEFILE_DIR)dispatch/build_release_arm64.py --build-dir $(MAKEFILE_DIR)build/release/linux-arm64-musl --output $(RELEASE_ARM_BIN)
 
 clean-docker:
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
