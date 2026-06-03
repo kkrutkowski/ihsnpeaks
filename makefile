@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean format release release-linux release-full release-x86 release-arm release-macos-arm release-linux-x86_64-musl release-linux-arm64-musl release-macos-arm64 clean-docker profile profile-run profile-clean FORCE
+.PHONY: all native check_compiler install clean format release release-linux release-full release-x86 release-arm release-macos release-linux-x86_64-musl release-linux-arm64-musl release-macos-universal clean-docker profile profile-run profile-clean FORCE
 
 CC ?= cc
 AR ?= ar
@@ -24,7 +24,7 @@ RELEASE_IMAGE ?= ihsnpeaks-release-linux
 RELEASE_CONTAINER ?= ihsnpeaks-release-extract
 RELEASE_X86_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-x86_64
 RELEASE_ARM_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-arm64
-RELEASE_MACOS_ARM_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-macos-arm64
+RELEASE_MACOS_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-macos
 RELEASE_BIN := $(RELEASE_X86_BIN)
 MACOS_MIN_VERSION ?= 12.0
 MACOS_SDK_PATH ?=
@@ -346,11 +346,11 @@ release-full:
 	@mkdir -p $(dir $(RELEASE_X86_BIN))
 	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_X86_BIN)
 	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-arm64 $(RELEASE_ARM_BIN)
-	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-macos-arm64 $(RELEASE_MACOS_ARM_BIN)
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-macos $(RELEASE_MACOS_BIN)
 	docker rm $(RELEASE_CONTAINER) >/dev/null
 	@echo "Release binary: $(RELEASE_X86_BIN)"
 	@echo "Release binary: $(RELEASE_ARM_BIN)"
-	@echo "Release binary: $(RELEASE_MACOS_ARM_BIN)"
+	@echo "Release binary: $(RELEASE_MACOS_BIN)"
 
 release-x86:
 	docker build --target release-x86 -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE)-x86 $(MAKEFILE_DIR)
@@ -370,14 +370,14 @@ release-arm:
 	docker rm $(RELEASE_CONTAINER) >/dev/null
 	@echo "Release binary: $(RELEASE_ARM_BIN)"
 
-release-macos-arm:
-	docker build --target release-macos-arm --build-arg MACOS_MIN_VERSION=$(MACOS_MIN_VERSION) --build-arg MACOS_SDK_PATH="$(MACOS_SDK_PATH)" -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE)-macos-arm $(MAKEFILE_DIR)
+release-macos:
+	docker build --target release-macos --build-arg MACOS_MIN_VERSION=$(MACOS_MIN_VERSION) --build-arg MACOS_SDK_PATH="$(MACOS_SDK_PATH)" -f $(MAKEFILE_DIR)Dockerfile.release -t $(RELEASE_IMAGE)-macos $(MAKEFILE_DIR)
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
-	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE)-macos-arm >/dev/null
-	@mkdir -p $(dir $(RELEASE_MACOS_ARM_BIN))
-	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-macos-arm64 $(RELEASE_MACOS_ARM_BIN)
+	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE)-macos >/dev/null
+	@mkdir -p $(dir $(RELEASE_MACOS_BIN))
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-macos $(RELEASE_MACOS_BIN)
 	docker rm $(RELEASE_CONTAINER) >/dev/null
-	@echo "Release binary: $(RELEASE_MACOS_ARM_BIN)"
+	@echo "Release binary: $(RELEASE_MACOS_BIN)"
 
 release-linux-x86_64-musl:
 	python3 $(MAKEFILE_DIR)dispatch/build_release.py --build-dir $(MAKEFILE_DIR)build/release/linux-x86_64-musl --output $(RELEASE_X86_BIN)
@@ -385,8 +385,8 @@ release-linux-x86_64-musl:
 release-linux-arm64-musl:
 	python3 $(MAKEFILE_DIR)dispatch/build_release_arm64.py --build-dir $(MAKEFILE_DIR)build/release/linux-arm64-musl --output $(RELEASE_ARM_BIN)
 
-release-macos-arm64:
-	MACOS_MIN_VERSION="$(MACOS_MIN_VERSION)" MACOS_SDK_PATH="$(MACOS_SDK_PATH)" python3 $(MAKEFILE_DIR)dispatch/build_release_macos_arm64.py --build-dir $(MAKEFILE_DIR)build/release/macos-arm64 --output $(RELEASE_MACOS_ARM_BIN) --macos-min-version "$(MACOS_MIN_VERSION)"
+release-macos-universal:
+	MACOS_MIN_VERSION="$(MACOS_MIN_VERSION)" MACOS_SDK_PATH="$(MACOS_SDK_PATH)" python3 $(MAKEFILE_DIR)dispatch/build_release_macos.py --build-dir $(MAKEFILE_DIR)build/release/macos --output $(RELEASE_MACOS_BIN) --macos-min-version "$(MACOS_MIN_VERSION)"
 
 clean-docker:
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true

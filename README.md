@@ -46,7 +46,7 @@ The expanded cross-platform release adds a macOS ARM64 Mach-O binary:
 make release-full
 ```
 
-This writes the two Linux artifacts plus `dist/ihsnpeaks-macos-arm64`. Use `make release-macos-arm` to build only the macOS ARM64 artifact. The macOS build uses `zig cc -target aarch64-macos`, links project code directly into one executable, and keeps only the normal macOS `libSystem` runtime dependency. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
+This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpeaks-macos`. Use `make release-macos` to build only the macOS artifact. The macOS build uses `zig cc -target x86_64-macos` and `zig cc -target aarch64-macos`, links project code directly into each thin executable, and merges them with `llvm-lipo`. The only normal runtime dependency is macOS `libSystem`. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
 
 ## Usage
 
@@ -76,7 +76,7 @@ Run `./ihsnpeaks --help` for the full option list.
 
 - The 1.0 CLI no longer depends on FFTW3 or mimalloc by default.
 - The Linux release binaries use musl static linking and runtime dispatch for x86-64 and ARM64.
-- The macOS ARM64 release binary is a Mach-O executable linked through the macOS `libSystem` ABI.
+- The macOS release binary is a universal Mach-O executable linked through the macOS `libSystem` ABI.
 - Dispatch can be forced for testing with `IHSNPEAKS_DISPATCH=<variant>`.
 - Stale local binaries are not release artifacts; rebuild with `make native` or `make release`.
 

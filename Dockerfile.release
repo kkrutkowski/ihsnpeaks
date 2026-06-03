@@ -26,12 +26,12 @@ RUN make release-linux-x86_64-musl
 FROM release-base AS build-arm
 RUN make release-linux-arm64-musl
 
-FROM release-base AS build-macos-arm
+FROM release-base AS build-macos
 ARG MACOS_MIN_VERSION=12.0
 ARG MACOS_SDK_PATH=
 ENV MACOS_MIN_VERSION=${MACOS_MIN_VERSION}
 ENV MACOS_SDK_PATH=${MACOS_SDK_PATH}
-RUN make release-macos-arm64 MACOS_MIN_VERSION="${MACOS_MIN_VERSION}" MACOS_SDK_PATH="${MACOS_SDK_PATH}"
+RUN make release-macos-universal MACOS_MIN_VERSION="${MACOS_MIN_VERSION}" MACOS_SDK_PATH="${MACOS_SDK_PATH}"
 
 FROM alpine:3.23 AS release-all
 WORKDIR /work
@@ -42,7 +42,7 @@ FROM alpine:3.23 AS release-full
 WORKDIR /work
 COPY --from=build-x86 /work/dist/ihsnpeaks-linux-x86_64 /work/dist/ihsnpeaks-linux-x86_64
 COPY --from=build-arm /work/dist/ihsnpeaks-linux-arm64 /work/dist/ihsnpeaks-linux-arm64
-COPY --from=build-macos-arm /work/dist/ihsnpeaks-macos-arm64 /work/dist/ihsnpeaks-macos-arm64
+COPY --from=build-macos /work/dist/ihsnpeaks-macos /work/dist/ihsnpeaks-macos
 
 FROM alpine:3.23 AS release-x86
 WORKDIR /work
@@ -52,6 +52,6 @@ FROM alpine:3.23 AS release-arm
 WORKDIR /work
 COPY --from=build-arm /work/dist/ihsnpeaks-linux-arm64 /work/dist/ihsnpeaks-linux-arm64
 
-FROM alpine:3.23 AS release-macos-arm
+FROM alpine:3.23 AS release-macos
 WORKDIR /work
-COPY --from=build-macos-arm /work/dist/ihsnpeaks-macos-arm64 /work/dist/ihsnpeaks-macos-arm64
+COPY --from=build-macos /work/dist/ihsnpeaks-macos /work/dist/ihsnpeaks-macos
