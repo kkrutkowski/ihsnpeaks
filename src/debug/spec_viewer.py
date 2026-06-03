@@ -21,15 +21,7 @@ SPLINE_SAMPLES_PER_PIXEL = 6.0
 SPLINE_MARGIN_POINTS = 6
 
 
-def load_two_column_file(path):
-    data = np.loadtxt(path, dtype=np.float64)
-
-    if data.ndim != 2 or data.shape[1] < 2:
-        raise ValueError("expected at least two numeric columns")
-
-    x = data[:, 0]
-    y = data[:, 1]
-
+def sanitize_xy_columns(x, y):
     finite = np.isfinite(x) & np.isfinite(y)
     x = x[finite]
     y = y[finite]
@@ -55,6 +47,23 @@ def load_two_column_file(path):
         raise ValueError("need at least two unique x-values")
 
     return x, y
+
+
+def load_spectrum_file(path):
+    data = np.loadtxt(path, dtype=np.float64)
+
+    if data.ndim != 2 or data.shape[1] < 2:
+        raise ValueError("expected at least two numeric columns")
+
+    x = data[:, 0]
+    columns = []
+
+    for col_idx in range(1, data.shape[1]):
+        y = data[:, col_idx]
+        col_x, col_y = sanitize_xy_columns(x, y)
+        columns.append((col_idx - 1, col_x, col_y))
+
+    return columns
 
 
 def visible_indices(x, xmin, xmax):
@@ -115,30 +124,39 @@ def main():
         print(f"usage: {sys.argv[0]} file.tsv [file2.tsv ...]")
         return 1
 
-    datasets = []
+    dataset_groups = []
 
     for path in sys.argv[1:]:
         try:
-            x, y = load_two_column_file(path)
+            columns = load_spectrum_file(path)
         except Exception as exc:
             print(f"failed to load {path!r}: {exc}")
             return 1
 
-        label = Path(path).name
-        datasets.append(
-            {
-                "path": path,
-                "label": label,
-                "x": x,
-                "y": y,
-                "y_max": float(np.nanmax(y)),
-                "curve": None,
-                "mode": None,
-            }
-        )
-        print(f"loaded {label}: {len(x):,} unique finite points")
+        file_label = Path(path).name
+        multi_column = len(columns) > 1
+        group = []
 
-    datasets.sort(key=lambda dataset: dataset["y_max"], reverse=True)
+        for iteration, x, y in columns:
+            label = f"{file_label} iter {iteration}" if multi_column else file_label
+            group.append(
+                {
+                    "path": path,
+                    "label": label,
+                    "x": x,
+                    "y": y,
+                    "y_max": float(np.nanmax(y)),
+                    "curve": None,
+                    "mode": None,
+                }
+            )
+            print(f"loaded {label}: {len(x):,} unique finite points")
+
+        group_y_max = max(dataset["y_max"] for dataset in group)
+        dataset_groups.append((group_y_max, group))
+
+    dataset_groups.sort(key=lambda item: item[0], reverse=True)
+    datasets = [dataset for _, group in dataset_groups for dataset in group]
 
     app = QtWidgets.QApplication([])
 
