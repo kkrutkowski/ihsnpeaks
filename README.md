@@ -10,7 +10,7 @@ The repository additionally contain `photview` and `spec_viewer` Python utilitie
 
 - Built-in PSWF NuFFT backend; FFTW3 is no longer downloaded or linked.
 - No mimalloc dependency in the default build path.
-- Full static musl Linux x86-64 and ARM64 release builds with runtime dispatch.
+- Full static musl Linux x86-64 and ARM64 release builds with runtime dispatch, plus a Docker-built macOS ARM64 artifact.
 - Runtime dispatch variants for `x86-64`, `x86-64-v2`, `x86-64-v2+avx`, `x86-64-v3`, and `x86-64-v4` when supported by the build host.
 - ARM64 release dispatch variants for generic ARM64, NEON, SVE 128/256/512, and SVE2 128/256/512.
 - Native source builds prefer GNU C23, with fallback to GNU C11 and GNU C99 standards.
@@ -40,6 +40,14 @@ make release
 
 This writes `dist/ihsnpeaks-linux-x86_64` and `dist/ihsnpeaks-linux-arm64`. Use `make release-x86` or `make release-arm` to build only one architecture. `dist/` is ignored by git, so release binaries should be regenerated as part of the release process rather than treated as tracked source artifacts.
 
+The expanded cross-platform release adds a macOS ARM64 Mach-O binary:
+
+```sh
+make release-full
+```
+
+This writes the two Linux artifacts plus `dist/ihsnpeaks-macos-arm64`. Use `make release-macos-arm` to build only the macOS ARM64 artifact. The macOS build uses `zig cc -target aarch64-macos`, links project code directly into one executable, and keeps only the normal macOS `libSystem` runtime dependency. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
+
 ## Usage
 
 ```sh
@@ -67,7 +75,8 @@ Run `./ihsnpeaks --help` for the full option list.
 ## Release Notes
 
 - The 1.0 CLI no longer depends on FFTW3 or mimalloc by default.
-- The release binaries use musl static linking and runtime dispatch for x86-64 and ARM64.
+- The Linux release binaries use musl static linking and runtime dispatch for x86-64 and ARM64.
+- The macOS ARM64 release binary is a Mach-O executable linked through the macOS `libSystem` ABI.
 - Dispatch can be forced for testing with `IHSNPEAKS_DISPATCH=<variant>`.
 - Stale local binaries are not release artifacts; rebuild with `make native` or `make release`.
 

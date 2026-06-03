@@ -356,8 +356,10 @@ static inline void read_dat(const char* in_file, buffer_t* buffer) {
     }
     size_t file_size = file_stat.st_size;
 
-    // Advise the kernel about sequential access
+    // Advise the kernel about sequential access when the platform exposes it.
+#if defined(__linux__) && defined(POSIX_FADV_SEQUENTIAL)
     posix_fadvise(fd, 0, file_size, POSIX_FADV_SEQUENTIAL);
+#endif
 
     // Use existing buffer to avoid reallocation
     char* dataBuffer = buffer->readBuf;

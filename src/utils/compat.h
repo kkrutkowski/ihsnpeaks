@@ -10,7 +10,7 @@
 #    endif
 #endif
 
-#if (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L) && !defined(aligned_alloc)
+#if defined(__APPLE__) || ((!defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L) && !defined(aligned_alloc))
 static inline size_t ihsnpeaks_bitceil_size(size_t n) {
     size_t out = sizeof(void *);
     while (out < n) out <<= 1U;

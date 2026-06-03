@@ -65,29 +65,33 @@ static void *kt_fp_worker(void *data) {
     pthread_exit(0);
 }
 
-#ifdef __GLIBC__
+#if defined(__GLIBC__) || defined(__APPLE__)
 void *kt_forpool_init(int n_threads, bool idle) {
     kt_forpool_t *fp;
     int i;
 
+#    if defined(__linux__)
     // Set the scheduling policy for the entire process
     struct sched_param param;
     param.sched_priority = 0;
-#    ifdef SCHED_IDLE
+#        ifdef SCHED_IDLE
     if (idle) {
         if (sched_setscheduler(getpid(), SCHED_IDLE, &param) != 0) {
             perror("sched_setscheduler (SCHED_IDLE)");
             exit(EXIT_FAILURE);
         }
     }
-#    endif
-#    ifdef SCHED_BATCH
+#        endif
+#        ifdef SCHED_BATCH
     if (!idle) {
         if (sched_setscheduler(getpid(), SCHED_BATCH, &param) != 0) {
             perror("sched_setscheduler (SCHED_BATCH)");
             exit(EXIT_FAILURE);
         }
     }
+#        endif
+#    else
+    (void)idle;
 #    endif
 
     // Initialize the thread pool
@@ -113,7 +117,7 @@ void *kt_forpool_init(int n_threads, bool idle) {
     pthread_mutex_unlock(&fp->mutex);
     return fp;
 }
-#else  // MUSL
+#else  // Linux non-glibc
 void *kt_forpool_init(int n_threads, bool idle) {
     kt_forpool_t *fp;
     int i;
@@ -131,6 +135,7 @@ void *kt_forpool_init(int n_threads, bool idle) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
 
+#    ifdef SCHED_IDLE
         // Set the scheduling policy based on the `idle` flag
         if (idle) {
             // Use SCHED_IDLE if the `idle` flag is true
@@ -145,8 +150,15 @@ void *kt_forpool_init(int n_threads, bool idle) {
                 exit(EXIT_FAILURE);
             }
         }
+#    else
+        (void)idle;
+#    endif
 #    ifdef SCHED_BATCH
+#        ifdef SCHED_IDLE
         else {
+#        else
+        if (!idle) {
+#        endif
             // Use SCHED_BATCH if the `idle` flag is false and SCHED_BATCH is defined
             struct sched_param param;
             param.sched_priority = 0;  // Priority for SCHED_BATCH
