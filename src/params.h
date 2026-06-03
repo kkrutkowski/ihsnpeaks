@@ -433,6 +433,7 @@ static inline double correct_aov_threshold(const double threshold, const int deg
 static inline double correct_threshold(const parameters *params, const buffer_t *buffer) {
     const bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     const eval_method_t *method = eval_method_for_params(params);
+    if (mode_uses_direct_eval_grid(params->mode)) return params->threshold;
     if (eval_method_uses_direct_grid(method, use_aov, params->mode)) return params->threshold;
     if (periodogram_uses_aov(params->periodogramMethod)) {
         return correct_aov_threshold(params->threshold, params->nterms, periodogram_effective_n(buffer));

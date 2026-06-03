@@ -39,6 +39,10 @@ int main(int argc, char *argv[]) {
     }
     parameters params = read_parameters(argc, argv);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
+    if (nThreads < 1) nThreads = 1;
+    if (params.jobs < nThreads && params.jobs > 0) {
+        nThreads = params.jobs;
+    }
 
     if (params.debug) {
         print_parameters(&params);
@@ -51,10 +55,15 @@ int main(int argc, char *argv[]) {
         // printf("Single file mode\n");
         buffer_t buffer = {0};           // initalize the pointers to NULL to avoid segfaults
         alloc_buffer(&buffer, &params);  //, params.avgLen
-        process_target(kv_A(params.targets, 0).path, &buffer, &params, false);
+        kt_forpool_t *directPool = NULL;
+        if (mode_uses_direct_eval_grid(params.mode) && nThreads > 1) {
+            directPool = kt_forpool_init(nThreads, params.idle);
+        }
+        process_target(kv_A(params.targets, 0).path, &buffer, &params, false, directPool);
         // print_buffer(&buffer);
         // process the data here
         profile_report(&params);
+        if (directPool) kt_forpool_destroy(directPool);
         free_buffer(&buffer);
         free_parameters(&params);
         return 0;
@@ -100,11 +109,43 @@ int main(int argc, char *argv[]) {
         printf("Output file's path: %s\n", outputFilePath);
         fflush(stdout);
 
-        if (kv_size(params.targets) < nThreads) {
-            nThreads = kv_size(params.targets);
+        size_t targetCount = kv_size(params.targets);
+        bool splitDirectBatch = false;
+        if (mode_uses_direct_eval_grid(params.mode) && nThreads > 0) {
+            size_t filesPerWorker = (targetCount + (size_t)nThreads - 1U) / (size_t)nThreads;
+            splitDirectBatch = filesPerWorker < 5U;
         }
-        if (params.jobs < nThreads && params.jobs > 0) {
-            nThreads = params.jobs;
+
+        if (splitDirectBatch) {
+            params.nbuffers = 1;
+            alloc_buffers(&params);
+            kt_forpool_t *directPool = NULL;
+            if (nThreads > 1) {
+                directPool = kt_forpool_init(nThreads, params.idle);
+            }
+            int permile = (int)targetCount / 1000;
+            if (permile == 0) permile = 1;
+            if (!params.buffers[0]->allocated) {
+                alloc_buffer(params.buffers[0], &params);
+            }
+            for (size_t i = 0; i < targetCount; ++i) {
+                int current = (int)i + 1;
+                if (current % permile == 0 || (size_t)current == targetCount) {
+                    float progress = (float)current * 100.0f / (float)targetCount;
+                    printf("Computation in progress: %.1f%% complete\r", progress);
+                    fflush(stdout);
+                }
+                process_target(kv_A(params.targets, i).path, params.buffers[0], &params, true, directPool);
+                fprint_buffer(params.buffers[0], &params);
+            }
+            profile_report(&params);
+            if (directPool) kt_forpool_destroy(directPool);
+            free_parameters(&params);
+            return 0;
+        }
+
+        if (targetCount < (size_t)nThreads) {
+            nThreads = (int)targetCount;
         }
         params.nbuffers = nThreads;
         alloc_buffers(&params);

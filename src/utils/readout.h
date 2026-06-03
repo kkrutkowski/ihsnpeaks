@@ -137,7 +137,7 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->readBuf = aligned_alloc(64, round_buffer(params->maxSize));
     }
     if (!buffer->readBuf) goto error;
-    bool needs_power_grid = !periodogram_uses_aov(params->periodogramMethod) || params->spectrum;
+    bool needs_power_grid = mode_uses_direct_eval_grid(params->mode) || !periodogram_uses_aov(params->periodogramMethod) || params->spectrum;
     if (needs_power_grid && !buffer->power) {
         buffer->power = aligned_alloc(64, round_buffer(((size_t)params->maxFreqCount + 2U) * sizeof(float)));
     }

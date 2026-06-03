@@ -238,20 +238,293 @@ static inline void capture_spectrum_column(buffer_t *buffer, const parameters *p
     for (uint32_t i = 0; i < nfreq; ++i) {
         double freq = fmin + ((double)i * fstep);
         float magnitude;
-        if (direct_eval_grid) {
-            magnitude = get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+        if (mode_uses_direct_eval_grid(params->mode)) {
+            if (direct_eval_grid) {
+                magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+            } else if (use_aov) {
+                float r2 = buffer->power ? buffer->power[i] : aov_get_stat(buffer, params, freq);
+                magnitude = aov_likelihood_from_r2(r2, nterms, aov_n_eff);
+            } else {
+                magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+            }
         } else if (use_aov) {
-            float r2 = mode_uses_direct_eval_grid(params->mode) ? aov_get_stat(buffer, params, freq) : buffer->power[i];
+            float r2 = buffer->power[i];
             magnitude = aov_likelihood_from_r2(r2, nterms, aov_n_eff);
         } else {
-            magnitude = mode_uses_direct_eval_grid(params->mode) ? get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL)
-                                                                 : correct_ihs_res(buffer->power[i], nterms);
+            magnitude = correct_ihs_res(buffer->power[i], nterms);
         }
         dst[i] = float_is_finite_bits(magnitude) ? magnitude : 0.0f;
     }
 }
 
-void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch) {
+typedef struct {
+    uint32_t core_begin;
+    uint32_t core_end;
+    uint32_t eval_begin;
+    uint32_t eval_end;
+    float *values;
+    peak_t *peaks;
+    uint32_t nPeaks;
+    sds spectrum;
+    int status;
+} direct_grid_workset_t;
+
+typedef struct {
+    buffer_t *buffer;
+    parameters *params;
+    const eval_method_t *eval_method;
+    bool threshold_valid;
+    bool scan_peaks;
+    bool write_spectrum;
+    float threshold;
+    double fmin;
+    double fstep;
+    double df;
+    uint32_t nfreq;
+    int precision;
+    buffer_t *scratch;
+    direct_grid_workset_t *worksets;
+} direct_grid_context_t;
+
+static inline uint32_t direct_grid_chunk_size(uint32_t n) {
+    uint32_t chunk = 1U;
+    uint64_t product = (uint64_t)n;
+    while (product <= (UINT64_C(1) << 20) && chunk < (UINT32_MAX >> 1U)) {
+        chunk <<= 1U;
+        product = (uint64_t)chunk * (uint64_t)n;
+    }
+    if (chunk < 128U) chunk = 128U;
+    return chunk;
+}
+
+static inline float direct_grid_scan_value(buffer_t *buffer, const parameters *params, const eval_method_t *eval_method, double freq) {
+    return get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+}
+
+static inline float direct_grid_spectrum_value(float scan_value) { return float_is_finite_bits(scan_value) ? scan_value : 0.0f; }
+
+static inline int alloc_direct_scratch(buffer_t *scratch, const buffer_t *source, const parameters *params, bool use_aov) {
+    memset(scratch, 0, sizeof(*scratch));
+    scratch->allocated = true;
+    scratch->len = source->len;
+    scratch->n = source->n;
+    scratch->terms = source->terms;
+    scratch->neff = source->neff;
+    scratch->amp_neff = source->amp_neff;
+    scratch->magnitude = source->magnitude;
+    scratch->maxFreqCount = source->maxFreqCount;
+    scratch->x = source->x;
+    scratch->y = source->y;
+    scratch->dy = source->dy;
+    scratch->wy = source->wy;
+    scratch->pidx = (size_t *)malloc(1024U * sizeof(size_t));
+    if (!scratch->pidx) return -1;
+
+    scratch->buf = calloc(3U, sizeof(void *));
+    if (!scratch->buf) return -1;
+    for (int i = 0; i < 3; ++i) {
+        scratch->buf[i] = aligned_alloc(64, round_buffer((size_t)params->maxLen * sizeof(uint64_t)));
+        if (!scratch->buf[i]) return -1;
+    }
+
+    if (use_aov) {
+        scratch->aovScratchLen = params->nterms > 0 ? (size_t)(26 * params->nterms + 16) : 0U;
+        if (scratch->aovScratchLen > 0U) {
+            scratch->aovScratch = aligned_alloc(64, round_buffer(scratch->aovScratchLen * sizeof(float)));
+            if (!scratch->aovScratch) return -1;
+        }
+    }
+    return 0;
+}
+
+static inline void free_direct_scratch(buffer_t *scratch) {
+    free(scratch->pidx);
+    scratch->pidx = NULL;
+    if (scratch->buf) {
+        for (int i = 0; i < 3; ++i) {
+            free(scratch->buf[i]);
+            scratch->buf[i] = NULL;
+        }
+        free(scratch->buf);
+        scratch->buf = NULL;
+    }
+    free(scratch->aovScratch);
+    scratch->aovScratch = NULL;
+    scratch->aovScratchLen = 0U;
+    scratch->x = NULL;
+    scratch->y = NULL;
+    scratch->dy = NULL;
+    scratch->wy = NULL;
+    scratch->peaks = NULL;
+    scratch->nPeaks = 0U;
+    scratch->allocated = false;
+}
+
+static inline float direct_merge_rank(const parameters *params, const eval_method_t *method, const peak_t *peak) {
+    return mode_defers_peak_evaluation(params->mode) ? peak->p : eval_peak_rank(method, peak);
+}
+
+static inline void direct_merge_peak_stable(peak_t *dst, uint32_t *dst_count, int max_peaks, const peak_t *peak, const parameters *params,
+                                            const eval_method_t *method) {
+    if (max_peaks <= 0 || !peak) return;
+    float rank = direct_merge_rank(params, method, peak);
+    if (!float_is_finite_bits(rank)) return;
+    uint32_t count = *dst_count;
+    if (count >= (uint32_t)max_peaks) {
+        float last_rank = direct_merge_rank(params, method, &dst[max_peaks - 1]);
+        if (rank <= last_rank) return;
+    }
+
+    uint32_t idx = count;
+    while (idx > 0U && rank > direct_merge_rank(params, method, &dst[idx - 1U])) {
+        --idx;
+    }
+    if (count < (uint32_t)max_peaks) {
+        ++count;
+        *dst_count = count;
+    }
+    for (uint32_t i = count - 1U; i > idx; --i) dst[i] = dst[i - 1U];
+    if (idx < (uint32_t)max_peaks) dst[idx] = *peak;
+}
+
+static inline void direct_grid_worker(void *data, long i, int thread_id) {
+    direct_grid_context_t *ctx = (direct_grid_context_t *)data;
+    direct_grid_workset_t *work = &ctx->worksets[i];
+    buffer_t *scratch = &ctx->scratch[thread_id];
+    char stringBuff[64];
+    scratch->peaks = work->peaks;
+    scratch->nPeaks = 0U;
+
+    for (uint32_t idx = work->eval_begin; idx < work->eval_end; ++idx) {
+        double freq = ctx->fmin + ((double)idx * ctx->fstep);
+        float value = direct_grid_scan_value(scratch, ctx->params, ctx->eval_method, freq);
+        work->values[idx - work->eval_begin] = value;
+        if (idx >= work->core_begin && idx < work->core_end) {
+            ctx->buffer->power[idx] = value;
+            if (ctx->write_spectrum) {
+                appendFreq(freq, direct_grid_spectrum_value(value), ctx->precision, ctx->params->outputPeriod, &work->spectrum, stringBuff);
+            }
+        }
+    }
+
+    if (ctx->scan_peaks) {
+        for (uint32_t idx = work->core_begin; idx < work->core_end; ++idx) {
+            if (idx == 0U || idx + 1U >= ctx->nfreq) continue;
+            float left = work->values[(idx - 1U) - work->eval_begin];
+            float center = work->values[idx - work->eval_begin];
+            float right = work->values[(idx + 1U) - work->eval_begin];
+            double freq = ctx->fmin + ((double)idx * ctx->fstep);
+            double peak_freq = freq;
+            float peak_magnitude = center;
+            if (!quadratic_peak_position(freq, ctx->fstep, left, center, right, ctx->params->oversamplingFactor, &peak_freq, &peak_magnitude)) continue;
+            if (center > left && center > right && (center > ctx->threshold || (ctx->threshold_valid && mode_evaluates_all_local_peaks(ctx->params->mode)))) {
+                append_peak(scratch, ctx->params, peak_freq, peak_magnitude, ctx->df);
+            }
+        }
+    }
+
+    work->nPeaks = scratch->nPeaks;
+    work->status = 0;
+}
+
+static inline bool execute_direct_grid(buffer_t *buffer, parameters *params, const eval_method_t *eval_method, kt_forpool_t *direct_pool, double fmin,
+                                       double fstep, uint32_t nfreq, float threshold, bool threshold_valid, double df, int precision, bool scan_peaks,
+                                       bool write_spectrum) {
+    if (!buffer->power) return false;
+    uint32_t chunk = direct_grid_chunk_size(buffer->n);
+    uint32_t nworksets = chunk > 0U ? (nfreq + chunk - 1U) / chunk : 0U;
+    if (nworksets == 0U) return true;
+    int nthreads = (direct_pool && direct_pool->n_threads > 1) ? direct_pool->n_threads : 1;
+    if (nthreads < 1) nthreads = 1;
+
+    direct_grid_workset_t *worksets = calloc(nworksets, sizeof(*worksets));
+    buffer_t *scratch = calloc((size_t)nthreads, sizeof(*scratch));
+    if (!worksets || !scratch) {
+        free(worksets);
+        free(scratch);
+        return false;
+    }
+
+    bool ok = true;
+    for (int t = 0; t < nthreads; ++t) {
+        if (alloc_direct_scratch(&scratch[t], buffer, params, false) != 0) {
+            ok = false;
+            break;
+        }
+    }
+
+    int max_peaks = params->npeaks > 0 ? params->npeaks : 0;
+    for (uint32_t w = 0; ok && w < nworksets; ++w) {
+        uint32_t core_begin = w * chunk;
+        uint32_t core_end = core_begin + chunk;
+        if (core_end > nfreq) core_end = nfreq;
+        uint32_t eval_begin = core_begin > 0U ? core_begin - 1U : core_begin;
+        uint32_t eval_end = core_end < nfreq ? core_end + 1U : core_end;
+        worksets[w].core_begin = core_begin;
+        worksets[w].core_end = core_end;
+        worksets[w].eval_begin = eval_begin;
+        worksets[w].eval_end = eval_end;
+        worksets[w].status = -1;
+        worksets[w].spectrum = write_spectrum ? sdsempty() : NULL;
+        worksets[w].values = malloc((size_t)(eval_end - eval_begin) * sizeof(float));
+        worksets[w].peaks = max_peaks > 0 ? calloc((size_t)max_peaks, sizeof(peak_t)) : NULL;
+        if (!worksets[w].values || (write_spectrum && !worksets[w].spectrum) || (max_peaks > 0 && !worksets[w].peaks)) ok = false;
+    }
+
+    if (ok) {
+        direct_grid_context_t ctx = {.buffer = buffer,
+                                     .params = params,
+                                     .eval_method = eval_method,
+                                     .threshold_valid = threshold_valid,
+                                     .scan_peaks = scan_peaks,
+                                     .write_spectrum = write_spectrum,
+                                     .threshold = threshold,
+                                     .fmin = fmin,
+                                     .fstep = fstep,
+                                     .df = df,
+                                     .nfreq = nfreq,
+                                     .precision = precision,
+                                     .scratch = scratch,
+                                     .worksets = worksets};
+        if (direct_pool && nthreads > 1) {
+            kt_forpool(direct_pool, direct_grid_worker, &ctx, (long)nworksets);
+        } else {
+            for (uint32_t w = 0; w < nworksets; ++w) direct_grid_worker(&ctx, (long)w, 0);
+        }
+        for (uint32_t w = 0; w < nworksets; ++w) {
+            if (worksets[w].status != 0) ok = false;
+        }
+    }
+
+    if (ok) {
+        buffer->nPeaks = 0U;
+        if (scan_peaks && max_peaks > 0) {
+            for (uint32_t w = 0; w < nworksets; ++w) {
+                for (uint32_t p = 0; p < worksets[w].nPeaks; ++p) {
+                    direct_merge_peak_stable(buffer->peaks, &buffer->nPeaks, max_peaks, &worksets[w].peaks[p], params, eval_method);
+                }
+            }
+        }
+        if (write_spectrum) {
+            sdsclear(buffer->spectrum);
+            for (uint32_t w = 0; w < nworksets; ++w) {
+                buffer->spectrum = sdscatsds(buffer->spectrum, worksets[w].spectrum);
+            }
+        }
+    }
+
+    for (uint32_t w = 0; w < nworksets; ++w) {
+        sdsfree(worksets[w].spectrum);
+        free(worksets[w].values);
+        free(worksets[w].peaks);
+    }
+    for (int t = 0; t < nthreads; ++t) free_direct_scratch(&scratch[t]);
+    free(worksets);
+    free(scratch);
+    return ok;
+}
+
+void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch, kt_forpool_t *direct_pool) {
     PROFILE_COUNT_TARGET();
     PROFILE_START(read);
     read_dat(in_file, buffer);
@@ -269,7 +542,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     double fmin = effective_grid_fmin(params, buffer->x[buffer->n - 1]);
     const bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     const eval_method_t *eval_method = eval_method_for_params(params);
-    const bool direct_eval_grid = eval_method_uses_direct_grid(eval_method, use_aov, params->mode);
+    const bool direct_eval_grid = mode_uses_direct_eval_grid(params->mode);
     const int aov_n_eff = periodogram_effective_n(buffer);
     const bool aov_valid = !use_aov || aov_target_has_dof(buffer, params->nterms);
     const bool threshold_valid = direct_eval_grid || aov_valid;
@@ -316,7 +589,16 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         aov_streamed = false;
         buffer->peaks = candidate_peaks;
         buffer->nPeaks = 0;
-        if (!mode_uses_direct_gb_grid(params->mode)) {
+        bool direct_grid_evaluated = false;
+        if (mode_uses_direct_eval_grid(params->mode)) {
+            direct_grid_evaluated = true;
+            PROFILE_START(peak_scan);
+            if (!execute_direct_grid(buffer, params, eval_method, direct_pool, fmin, fstep, nfreq, threshold, threshold_valid, df, n, true,
+                                     params->spectrum && !spectrum_prewhiten)) {
+                fprintf(stderr, "Direct evaluation grid failed for %s\n", in_file);
+            }
+            PROFILE_END(peak_scan, PROFILE_PHASE_PEAK_SCAN);
+        } else if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
                 aov_streamed = true;
                 if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, params->spectrum && !spectrum_prewhiten, params->spectrum, true, n,
@@ -335,7 +617,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                                         spectrum_columns++);
             }
             PROFILE_END(spectrum, PROFILE_PHASE_PEAK_SCAN);
-        } else if (params->spectrum && !aov_streamed) {
+        } else if (params->spectrum && !aov_streamed && !direct_grid_evaluated) {
             PROFILE_START(spectrum);
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
@@ -355,7 +637,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
             PROFILE_END(spectrum, PROFILE_PHASE_PEAK_SCAN);
         }
 
-        if (!aov_streamed) {
+        if (!aov_streamed && !direct_grid_evaluated) {
             PROFILE_START(peak_scan);
             for (uint32_t i = 1; i + 1 < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
@@ -419,7 +701,11 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
 
     if (spectrum_prewhiten && selected_count > 0 && spectrum_columns == (uint32_t)selected_count && spectrum_columns < spectrum_capacity) {
         bool final_aov_streamed = false;
-        if (!mode_uses_direct_gb_grid(params->mode)) {
+        if (mode_uses_direct_eval_grid(params->mode)) {
+            if (!execute_direct_grid(buffer, params, eval_method, direct_pool, fmin, fstep, nfreq, threshold, threshold_valid, df, n, false, false)) {
+                fprintf(stderr, "Direct evaluation grid failed for %s\n", in_file);
+            }
+        } else if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
                 final_aov_streamed = true;
                 if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, false, true, false, n, stringBuff) != 0) {
@@ -487,7 +773,7 @@ void process_targets(void *data, long i, int thread_id) {
     if (!params->buffers[thread_id]->allocated) {
         alloc_buffer(params->buffers[thread_id], params);
     }
-    process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true);
+    process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true, NULL);
 }
 
 #endif
