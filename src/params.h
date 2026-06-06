@@ -130,14 +130,14 @@ void print_help(char **argv) {
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
+    printf("  -p, --prewhiten           Attenuate detected variability modes\n");
+    printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
     printf("\n");
     printf("      --debug               Print parameters before the computation (default: false)\n");
-    printf("      --prewhiten           Attenuate detected variability modes\n");
-    printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --period              Print periods instead of frequencies (not recommended; frequency output is preferred)\n\n");
     printf("  -h, --help                Display this help message and exit\n\n");
     printf("Example:\n");
@@ -261,7 +261,7 @@ static bool parse_eval(const char *arg, parameters *params) {
 static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
 
-    enum { OPT_PERIOD = 0xF8, OPT_EPSILON = 0xF9, OPT_NUFFT = 0xFA, OPT_PREWHITEN = 0xFB, OPT_DEBUG = 0xFC, OPT_STRIP = 0xFD, OPT_PACK = 0xFE };
+    enum { OPT_PERIOD = 0xF8, OPT_EPSILON = 0xF9, OPT_NUFFT = 0xFA, OPT_DEBUG = 0xFC, OPT_STRIP = 0xFD, OPT_PACK = 0xFE };  // OPT_PREWHITEN = 0xFB,
 
     // Define long options
     static ko_longopt_t longopts[] = {// impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
@@ -285,8 +285,8 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"spectrum", ko_no_argument, 's'},
                                       {"corrected", ko_no_argument, 'c'},  // apply the logarithmic correction, not fully implemented
                                       {"idle", ko_no_argument, 'i'},
+                                      {"prewhiten", ko_no_argument, 'p'},
                                       {"help", ko_no_argument, 'h'},
-                                      {"prewhiten", ko_no_argument, OPT_PREWHITEN},
                                       {"debug", ko_no_argument, OPT_DEBUG},
                                       {"period", ko_no_argument, OPT_PERIOD},
                                       // Negative cases, corresponding to long arguments only;
@@ -354,7 +354,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                     exit(EXIT_FAILURE);
                 }
                 break;
-            case OPT_PREWHITEN:
+            case 'p':
                 params.prewhiten = true;
                 // printf("Prewhitening\n");
                 break;

@@ -426,7 +426,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--strip", default=os.environ.get("STRIP", default_target_tool("strip")))
     parser.add_argument("--host-cc", default=os.environ.get("HOST_CC", "cc"))
     parser.add_argument("--build-dir", default=str(root / "build/release/linux-x86_64-musl"))
-    parser.add_argument("--output", default=str(root / "dist/ihsnpeaks-linux-x86_64"))
+    parser.add_argument("--output", default=str(root / "dist/ihsnpeaks-linux-x86-64"))
     parser.add_argument("--force-all", action="store_true", help="Build every variant even if host flags do not report support.")
     args = parser.parse_args(argv)
 
