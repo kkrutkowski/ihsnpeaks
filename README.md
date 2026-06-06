@@ -4,7 +4,37 @@
 
 The tool is meant first and foremost as a more performant (and stable) replacement for [FNPEAKS/MPEAKS](http://helas.astro.uni.wroc.pl/deliverables.php?lang=en&active=fnpeaks), [aovdist](https://users.camk.edu.pl/alex/#software), and [FastChi2 v1.03](https://web.archive.org/web/20250525051459/http://public.lanl.gov/palmer/fastchi.html) CLI utilities.
 
-The repository additionally contains `photview` and `spec_viewer` Python scripts meant for debugging purposes, which are not a part of the release
+The repository additionally contains `photview` and `spec_viewer` Python scripts meant for debugging purposes, which are not a part of the release.
+
+## Installation of precompiled release binaries
+As of 1.0 release, the `ihsnpeaks` package contains pre-compiled, runtime multiple dispatch binaries, which are the recommended distribution channel for most use cases. The installation is generally limited to downloading the correct binary and allowing the operating system to execute it. The list below contains typical commands used to complete the installation process given supported operating system and macroarchitecture.
+
+### Linux
+The release builds now supports both of the mainstream CPU architectures - **x86-64** as well as **ARM**. If you are not sure about the instruction set supported by your CPU, you can check it by running
+```sh
+sh -c 'case $(uname -m) in x86_64|amd64) echo "\nx86-64";; aarch64|armv*|arm64) echo "\nARM";; *) echo "\nUnsupported CPU architecture";; esac'
+```
+#### x86-64
+To install the **x86-64** release binary, run:
+```sh
+sudo curl -fL -o /usr/local/bin/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.0.0/ihsnpeaks-linux-x86-64"
+sudo chmod 0755 /usr/local/bin/ihsnpeaks
+```
+#### ARM64
+Analogically, to install the **ARM64** release, run:
+```sh
+sudo curl -fL -o /usr/local/bin/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.0.0/ihsnpeaks-linux-arm64"
+sudo chmod 0755 /usr/local/bin/ihsnpeaks
+```
+### MacOS
+Unlike Linux executables, the MacOS release contains a single 'fat' precompiled binary. As such, the installation is generally architecture-independent and can be performed by executing the commands below.
+```sh
+curl -fL -o /tmp/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.0.0/ihsnpeaks-macos"
+sudo install -m 0755 /tmp/ihsnpeaks /usr/local/bin/ihsnpeaks
+sudo xattr -d com.apple.quarantine /usr/local/bin/ihsnpeaks 2>/dev/null || true
+```
+### Windows
+As a result of reliance on ``pthreads``, the release binary currently does not support the native Windows executable format. As such, the recommended path for Windows users is to install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and follow the Linux installation instructions.
 
 ## Usage
 
@@ -12,11 +42,21 @@ The repository additionally contains `photview` and `spec_viewer` Python scripts
 ./ihsnpeaks target fmax [options]
 ```
 
-Self-contained example usec ase:
+Self-contained example use case:
 ```sh
 wget https://www.astrouw.edu.pl/ogle/ogle4/OCVS/BLAP/phot/phot_ogle4/I/OGLE-BLAP-035.dat
-./ihsnpeaks test_data/OGLE-BLAP-035.dat 1000 -n3
+./ihsnpeaks OGLE-BLAP-035.dat 1000 -n3
 ```
+
+### Useful options:
+
+- `-d, --degree, --terms`: number of harmonics.
+- `-m, --mode`: peak evaluation/refinement mode.
+- `-g, --grid`: periodogram method: default `ihs` or phase-coherent `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2` (all phase-coherent keys are aliases of the same method).
+- `-s, --save, --spectrum`: write generated spectra to `.tsv` files.
+- `-j, --jobs`: limit worker threads (default:0 - unlimited threads)
+
+Run `./ihsnpeaks --help` for the full option list.
 
 
 ## Features
@@ -52,16 +92,6 @@ make release-full
 Which uses Docker to save multiple dispatch `ihsnpeaks-linux-x86_64`, `ihsnpeaks-linux-arm64` and `ihsnpeaks-macos` into `dist/` subdirectory.
 
 This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpeaks-macos`. Use `make release-macos` to build only the macOS artifact. The macOS build uses `zig cc -target x86_64-macos` and `zig cc -target aarch64-macos`, links project code directly into each thin executable, and merges them with `llvm-lipo`. The only normal runtime dependency is macOS `libSystem`. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
-
-Useful options:
-
-- `-d, --degree, --terms`: number of harmonics.
-- `-m, --mode`: peak evaluation/refinement mode.
-- `-g, --grid`: periodogram method: default `ihs` or phase-coherent `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2` (all phase-coherent keys are aliases of the same method).
-- `-s, --save, --spectrum`: write generated spectra to `.tsv` files.
-- `-j, --jobs`: limit worker threads (default:0 - unlimited threads)
-
-Run `./ihsnpeaks --help` for the full option list.
 
 ## Release Notes
 
