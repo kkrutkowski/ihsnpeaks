@@ -39,13 +39,13 @@ As a result of reliance on ``pthreads``, the release binary currently does not s
 ## Usage
 
 ```sh
-./ihsnpeaks target fmax [options]
+ihsnpeaks target fmax [options]
 ```
 
 Self-contained example use case:
 ```sh
 wget https://www.astrouw.edu.pl/ogle/ogle4/OCVS/BLAP/phot/phot_ogle4/I/OGLE-BLAP-035.dat
-./ihsnpeaks OGLE-BLAP-035.dat 1000 -n3
+ihsnpeaks OGLE-BLAP-035.dat 100
 ```
 
 ### Useful options:
