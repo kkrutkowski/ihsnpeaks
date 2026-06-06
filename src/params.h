@@ -354,7 +354,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                     exit(EXIT_FAILURE);
                 }
                 break;
-            case OPT_PREWHITEN:
+            case 'p':
                 params.prewhiten = true;
                 // printf("Prewhitening\n");
                 break;
