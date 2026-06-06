@@ -1,5 +1,5 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
-#define IHSNPEAKS_VERSION "v1.0.0-preview"
+#define IHSNPEAKS_VERSION "v1.0.0"
 
 #include <klib/kthread.h>
 #include <libgen.h>
