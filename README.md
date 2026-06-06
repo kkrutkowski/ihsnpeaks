@@ -2,18 +2,17 @@
 
 `ihsnpeaks` is a C command-line periodogram utility for astronomical light-curve analysis. The 1.0 release line is focused on the CLI: high-performance multi-harmonic IHS/Rayleigh-style periodograms, AoVMH(W)/FastChi^2 periodogram's implementation, and Gaussian blur-based Supersmoother-like periodogram, with ANCOVA and F-test for inequality of variance available for reevaluation, as well, as batch processing of OGLE-format `.dat` photometric files (with native multithreading support).
 
-The tool is meant first and foremost as a more performant (and stable) replacement for [FNPEAKS/MPEAKS](http://helas.astro.uni.wroc.pl/deliverables.php?lang=en&active=fnpeaks), [aovdist](https://users.camk.edu.pl/alex/#software) and [FastChi2 v1.03](https://web.archive.org/web/20250525051459/http://public.lanl.gov/palmer/fastchi.html) CLI utilities.
+The tool is meant first and foremost as a more performant (and stable) replacement for [FNPEAKS/MPEAKS](http://helas.astro.uni.wroc.pl/deliverables.php?lang=en&active=fnpeaks), [aovdist](https://users.camk.edu.pl/alex/#software), and [FastChi2 v1.03](https://web.archive.org/web/20250525051459/http://public.lanl.gov/palmer/fastchi.html) CLI utilities.
 
-The repository additionally contain `photview` and `spec_viewer` Python utilities meant for debugging purposes, which are not a part of 
+The repository additionally contains `photview` and `spec_viewer` Python scripts meant for debugging purposes, which are not a part of the release
 
 ## Features
 
-- Built-in PSWF NuFFT backend; FFTW3 is no longer downloaded or linked.
-- No mimalloc dependency in the default build path.
+- Built-in (NU)FFT backend; FFTW3 is no longer downloaded or linked.
 - Full static musl Linux x86-64 and ARM64 release builds with runtime dispatch, plus a Docker-built macOS ARM64 artifact.
 - Runtime dispatch variants for `x86-64`, `x86-64-v2`, `x86-64-v2+avx`, `x86-64-v3`, and `x86-64-v4` when supported by the build host.
 - ARM64 release dispatch variants for generic ARM64, NEON, SVE 128/256/512, and SVE2 128/256/512.
-- Native source builds prefer GNU C23, with fallback to GNU C11 and GNU C99 standards.
+- Native source builds prefer GNU C23, with fallbacks to GNU C11 and GNU C99 standards.
 - C99-compatible aligned allocation fallback is kept for systems without C11 `aligned_alloc`.
 
 ## Building
@@ -21,30 +20,23 @@ The repository additionally contain `photview` and `spec_viewer` Python utilitie
 The default source build targets the current machine:
 
 ```sh
+git clone --depth=1 https://github.com/kkrutkowski/ihsnpeaks
+cd ihsnpeaks
 make native
 ```
-
-`make` is an alias for `make native`. The native build requires a POSIX-like environment, `make`, `readlink`, and a GNU-compatible C compiler. Newer compilers generally produce faster binaries, but the makefile probes the compiler and chooses `-std=gnu23`, `-std=gnu11`, or `-std=gnu99`.
-
-Install the native binary with:
-
+Which can be 'installed' into the system path by following it with
 ```sh
 sudo make install
 ```
 
-The static Linux release binaries are generated with Docker:
+`make` currently is an alias for `make native`. The native build requires a POSIX-like environment, `make`, `readlink`, and a GNU-compatible C compiler. Newer compilers are expected to produce more performant code, but fallbacks from the default `GNU23` C standard to `GNU11` and `GNU99` are included in the codebase..
 
-```sh
-make release
-```
 
-This writes `dist/ihsnpeaks-linux-x86_64` and `dist/ihsnpeaks-linux-arm64`. Use `make release-x86` or `make release-arm` to build only one architecture. `dist/` is ignored by git, so release binaries should be regenerated as part of the release process rather than treated as tracked source artifacts.
-
-The expanded cross-platform release adds a macOS ARM64 Mach-O binary:
-
+The release-type multiple dispatch binaries can be compiled by:
 ```sh
 make release-full
 ```
+Which uses Docker to save multiple dispatch `ihsnpeaks-linux-x86_64`, `ihsnpeaks-linux-arm64` and `ihsnpeaks-macos` into `dist/` subdirectory.
 
 This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpeaks-macos`. Use `make release-macos` to build only the macOS artifact. The macOS build uses `zig cc -target x86_64-macos` and `zig cc -target aarch64-macos`, links project code directly into each thin executable, and merges them with `llvm-lipo`. The only normal runtime dependency is macOS `libSystem`. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
 
@@ -54,13 +46,13 @@ This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpe
 ./ihsnpeaks target fmax [options]
 ```
 
-Examples:
-
+Self-contained example usec ase:
 ```sh
-./ihsnpeaks test_data/OGLE-BLAP-035.dat 10 -n 3 -d 5
-./ihsnpeaks /path/to/photometry_directory 40 -d 1 -m 0 -j 16
-./ihsnpeaks target.dat 20 --save --degree 10
+wget https://www.astrouw.edu.pl/ogle/ogle4/OCVS/BLAP/phot/phot_ogle4/I/OGLE-BLAP-035.dat
+./ihsnpeaks test_data/OGLE-BLAP-035.dat 1000 -n3
 ```
+
+
 
 Useful options:
 
