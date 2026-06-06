@@ -22,7 +22,7 @@ endif
 BUILD_DIR := $(MAKEFILE_DIR)build/native/$(ALLOCATOR_BUILD)
 RELEASE_IMAGE ?= ihsnpeaks-release-linux
 RELEASE_CONTAINER ?= ihsnpeaks-release-extract
-RELEASE_X86_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-x86_64
+RELEASE_X86_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-x86-64
 RELEASE_ARM_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-linux-arm64
 RELEASE_MACOS_BIN := $(MAKEFILE_DIR)dist/ihsnpeaks-macos
 RELEASE_BIN := $(RELEASE_X86_BIN)
@@ -333,7 +333,7 @@ release-linux:
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
 	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE) >/dev/null
 	@mkdir -p $(dir $(RELEASE_X86_BIN))
-	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_X86_BIN)
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86-64 $(RELEASE_X86_BIN)
 	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-arm64 $(RELEASE_ARM_BIN)
 	docker rm $(RELEASE_CONTAINER) >/dev/null
 	@echo "Release binary: $(RELEASE_X86_BIN)"
@@ -344,7 +344,7 @@ release-full:
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
 	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE)-full >/dev/null
 	@mkdir -p $(dir $(RELEASE_X86_BIN))
-	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_X86_BIN)
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86-64 $(RELEASE_X86_BIN)
 	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-arm64 $(RELEASE_ARM_BIN)
 	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-macos $(RELEASE_MACOS_BIN)
 	docker rm $(RELEASE_CONTAINER) >/dev/null
@@ -357,7 +357,7 @@ release-x86:
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
 	docker create --name $(RELEASE_CONTAINER) $(RELEASE_IMAGE)-x86 >/dev/null
 	@mkdir -p $(dir $(RELEASE_X86_BIN))
-	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86_64 $(RELEASE_X86_BIN)
+	docker cp $(RELEASE_CONTAINER):/work/dist/ihsnpeaks-linux-x86-64 $(RELEASE_X86_BIN)
 	docker rm $(RELEASE_CONTAINER) >/dev/null
 	@echo "Release binary: $(RELEASE_X86_BIN)"
 
