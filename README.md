@@ -6,6 +6,19 @@ The tool is meant first and foremost as a more performant (and stable) replaceme
 
 The repository additionally contains `photview` and `spec_viewer` Python scripts meant for debugging purposes, which are not a part of the release
 
+## Usage
+
+```sh
+./ihsnpeaks target fmax [options]
+```
+
+Self-contained example usec ase:
+```sh
+wget https://www.astrouw.edu.pl/ogle/ogle4/OCVS/BLAP/phot/phot_ogle4/I/OGLE-BLAP-035.dat
+./ihsnpeaks test_data/OGLE-BLAP-035.dat 1000 -n3
+```
+
+
 ## Features
 
 - Built-in (NU)FFT backend; FFTW3 is no longer downloaded or linked.
@@ -15,7 +28,7 @@ The repository additionally contains `photview` and `spec_viewer` Python scripts
 - Native source builds prefer GNU C23, with fallbacks to GNU C11 and GNU C99 standards.
 - C99-compatible aligned allocation fallback is kept for systems without C11 `aligned_alloc`.
 
-## Building
+## Building from source
 
 The default source build targets the current machine:
 
@@ -39,20 +52,6 @@ make release-full
 Which uses Docker to save multiple dispatch `ihsnpeaks-linux-x86_64`, `ihsnpeaks-linux-arm64` and `ihsnpeaks-macos` into `dist/` subdirectory.
 
 This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpeaks-macos`. Use `make release-macos` to build only the macOS artifact. The macOS build uses `zig cc -target x86_64-macos` and `zig cc -target aarch64-macos`, links project code directly into each thin executable, and merges them with `llvm-lipo`. The only normal runtime dependency is macOS `libSystem`. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
-
-## Usage
-
-```sh
-./ihsnpeaks target fmax [options]
-```
-
-Self-contained example usec ase:
-```sh
-wget https://www.astrouw.edu.pl/ogle/ogle4/OCVS/BLAP/phot/phot_ogle4/I/OGLE-BLAP-035.dat
-./ihsnpeaks test_data/OGLE-BLAP-035.dat 1000 -n3
-```
-
-
 
 Useful options:
 
