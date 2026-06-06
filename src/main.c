@@ -23,6 +23,25 @@
 #include "process.h"
 #include "utils/readout.h"
 
+static void build_batch_output_path(const char *target, char *out_file, size_t out_file_size) {
+    char target_path[PATH_MAX];
+    strncpy(target_path, target, sizeof(target_path) - 1U);
+    target_path[sizeof(target_path) - 1U] = '\0';
+
+    size_t len = strlen(target_path);
+    while (len > 1U && target_path[len - 1U] == '/') {
+        target_path[--len] = '\0';
+    }
+
+    char *slash = strrchr(target_path, '/');
+    char *dot = strrchr(target_path, '.');
+    if (dot && (!slash || dot > slash)) {
+        *dot = '\0';
+    }
+
+    snprintf(out_file, out_file_size, "%s.tsv", target_path);
+}
+
 int main(int argc, char *argv[]) {
     if (argc > 1) {
         if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "h") == 0) {
@@ -71,16 +90,10 @@ int main(int argc, char *argv[]) {
 
     // to avoid asigning more, than 1 thread per target
     else {
-        // Extract the parent directory of params.target[0]
-        char targetPath[256];
-        strcpy(targetPath, params.target);      // Copy the target path to a modifiable buffer
-        char *parentDir = dirname(targetPath);  // Get the parent directory
+        char outputFilePath[PATH_MAX];
+        build_batch_output_path(params.target, outputFilePath, sizeof(outputFilePath));
 
-        // Construct the full path for output.tsv
-        char outputFilePath[256];
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/output.tsv", parentDir);
-
-        // Create the output.tsv file
+        // Create the output file
         FILE *outputFile = fopen(outputFilePath, "w");
         if (outputFile == NULL) {
             perror("Failed to create the output file");
