@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <klib/kvec.h>
 #include <math.h>
+#include <qfits/qfits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,6 +87,61 @@ static int pswf_backend(nufft1_mode mode) { return mode == NUFFT1_PSWF21 ? 2 : 1
 static bool has_dat_suffix(const char *path) {
     size_t len = strlen(path);
     return len >= 4U && strcmp(path + len - 4U, ".dat") == 0;
+}
+
+static bool has_fits_suffix(const char *path) {
+    size_t len = strlen(path);
+    return (len >= 5U && strcmp(path + len - 5U, ".fits") == 0) || (len >= 4U && strcmp(path + len - 4U, ".fit") == 0);
+}
+
+static void inspect_fits_file(const char *path, uint32_t *line_count, double *time_span) {
+    qfits_table *table = qfits_table_open(path, 1);
+    if (!table) {
+        *line_count = 0;
+        *time_span = 0.0;
+        return;
+    }
+
+    int col_time = -1;
+    for (int i = 0; i < table->nc; i++) {
+        if (strcmp(table->col[i].tlabel, "TIME") == 0) {
+            col_time = i;
+            break;
+        }
+    }
+
+    *line_count = (uint32_t)table->nr;
+
+    if (col_time >= 0) {
+        double null_time = 0.0;
+        void *time_data = qfits_query_column_data(table, col_time, NULL, &null_time);
+        if (time_data) {
+            tfits_type t_type = table->col[col_time].atom_type;
+            double first_x = 0.0, last_x = 0.0;
+            int valid_count = 0;
+            for (int i = 0; i < table->nr; i++) {
+                double t = 0.0;
+                if (t_type == TFITS_BIN_TYPE_D)
+                    t = ((double *)time_data)[i];
+                else if (t_type == TFITS_BIN_TYPE_E)
+                    t = ((float *)time_data)[i];
+
+                if (!isnan(t) && !isinf(t) && t != null_time) {
+                    if (valid_count == 0) first_x = t;
+                    last_x = t;
+                    valid_count++;
+                }
+            }
+            *time_span = valid_count > 1 ? last_x - first_x : 0.0;
+            free(time_data);
+        } else {
+            *time_span = 0.0;
+        }
+    } else {
+        *time_span = 0.0;
+    }
+
+    qfits_table_close(table);
 }
 
 static uint32_t nufft_output_len_for_grid(uint32_t grid_len, nufft1_mode mode) {
@@ -208,7 +264,11 @@ static bool process_path(parameters *params) {
         params->maxSize = file_stat.st_size + 1;
         uint32_t newline_count = 0;
         double time_span = 0.0;
-        inspect_dat_file(params->target, &newline_count, &time_span);
+        if (has_dat_suffix(params->target)) {
+            inspect_dat_file(params->target, &newline_count, &time_span);
+        } else if (has_fits_suffix(params->target)) {
+            inspect_fits_file(params->target, &newline_count, &time_span);
+        }
         params->maxLen = newline_count;
         params->maxTimeSpan = time_span;
         params->maxFreqCount = estimate_frequency_count(params, params->maxTimeSpan);
@@ -226,7 +286,7 @@ static bool process_path(parameters *params) {
         char largest_path[256] = {0};
 
         while ((entry = readdir(dir)) != NULL) {
-            if (entry->d_type == DT_REG && has_dat_suffix(entry->d_name)) {
+            if (entry->d_type == DT_REG && (has_dat_suffix(entry->d_name) || has_fits_suffix(entry->d_name))) {
                 // Construct the full path for each file
                 char full_path[256];
                 snprintf(full_path, sizeof(full_path), "%s/%s", params->target, entry->d_name);
@@ -256,15 +316,32 @@ static bool process_path(parameters *params) {
         closedir(dir);
 
         if (largest_path[0] == '\0') {
-            fprintf(stderr, "No regular .dat files found in '%s'\n", params->target);
+            fprintf(stderr, "No regular .dat or .fits files found in '%s'\n", params->target);
             exit(EXIT_FAILURE);
         }
 
-        uint32_t newline_count = 0;
-        double time_span = 0.0;
-        inspect_dat_file(largest_path, &newline_count, &time_span);
-        params->maxLen = newline_count;
-        params->maxTimeSpan = time_span;
+        // Inspect ALL files to find the true maximum row count and time span
+        uint32_t max_newline_count = 0;
+        double max_time_span = 0.0;
+        for (size_t i = 0; i < kv_size(params->targets); i++) {
+            const char *fpath = kv_A(params->targets, i).path;
+            uint32_t count = 0;
+            double span = 0.0;
+            if (has_dat_suffix(fpath)) {
+                inspect_dat_file(fpath, &count, &span);
+            } else if (has_fits_suffix(fpath)) {
+                inspect_fits_file(fpath, &count, &span);
+            }
+            if (count > max_newline_count) {
+                max_newline_count = count;
+            }
+            if (span > max_time_span) {
+                max_time_span = span;
+            }
+        }
+
+        params->maxLen = max_newline_count;
+        params->maxTimeSpan = max_time_span;
 
         // approximate an near-optimal transform size
         params->avgLen /= DEFAULT_MEASUREMENT_SIZE * kv_size(params->targets);

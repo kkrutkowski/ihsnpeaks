@@ -10,3 +10,4 @@ output.tsv
 .codex
 __pycache__/
 tmp/*
+.qwen/*

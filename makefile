@@ -40,6 +40,12 @@ SCALING_GEN := $(BUILD_DIR)/scaling_gen
 SCALING_HEADER := $(BUILD_DIR)/scaling.h
 COMPILER_STAMP := $(BUILD_DIR)/compiler.stamp
 
+# qfits integration for native builds
+QFITS_SRC := $(MAKEFILE_DIR)tmp/qfits_test/qfits.c
+QFITS_GEN_CONFIG := $(MAKEFILE_DIR)tmp/qfits_test/gen_config.sh
+QFITS_CONFIG := $(BUILD_DIR)/config.h
+QFITS_OBJ := $(BUILD_DIR)/qfits.o
+
 PROFILE_CC ?= musl-gcc
 PROFILE_ISA ?= native
 PROFILE_ROOT := $(MAKEFILE_DIR)build/profile
@@ -273,8 +279,15 @@ $(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) $(C
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@
 
+$(QFITS_CONFIG): FORCE | $(BUILD_DIR)
+	@cd $(MAKEFILE_DIR)tmp/qfits_test && CC="$(CC)" CFLAGS="$(STDFLAG) -O3" ./gen_config.sh
+	@cp $(MAKEFILE_DIR)tmp/qfits_test/config.h $@
+
+$(QFITS_OBJ): $(QFITS_SRC) $(QFITS_CONFIG) | $(BUILD_DIR)
+	$(CC) $(STDFLAG) -O3 -D_GNU_SOURCE -I$(MAKEFILE_DIR)include -I$(BUILD_DIR) -c $< -o $@
+
 native: $(NUFFT_OBJ) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP)
-	@echo "Compiling ihsnpeaks with PSWF NuFFT"
+	@echo "Compiling ihsnpeaks with PSWF NuFFT and qfits"
 	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(STATIC_LDFLAGS) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
 	strip -s ihsnpeaks
 	@echo "Compilation complete"

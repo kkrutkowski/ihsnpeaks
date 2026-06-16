@@ -527,7 +527,11 @@ static inline bool execute_direct_grid(buffer_t *buffer, parameters *params, con
 void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch, kt_forpool_t *direct_pool) {
     PROFILE_COUNT_TARGET();
     PROFILE_START(read);
-    read_dat(in_file, buffer);
+    if (has_fits_suffix(in_file)) {
+        read_fits(in_file, buffer);
+    } else {
+        read_dat(in_file, buffer);
+    }
     PROFILE_END(read, PROFILE_PHASE_READ);
     PROFILE_START(preprocess);
     preprocess_buffer(buffer, params->epsilon, params->mode);

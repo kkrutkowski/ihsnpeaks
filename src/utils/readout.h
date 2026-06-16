@@ -4,6 +4,8 @@
 #include <errno.h>
 #include <fast_convert.h>
 #include <fcntl.h>
+#include <math.h>
+#include <qfits/qfits.h>
 #include <sds.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -337,6 +339,88 @@ static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode)
     }
     buffer->neff = wsqsum > 0.0 ? ((wsum * wsum) / wsqsum) - 2.0 : 0.0;
     refresh_weighted_signal_buffer(buffer, epsilon);
+}
+
+static inline void read_fits(const char* in_file, buffer_t* buffer) {
+    qfits_table* table = qfits_table_open(in_file, 1);
+    if (!table) {
+        fprintf(stderr, "Failed to open FITS table in %s\n", in_file);
+        buffer->n = 0;
+        return;
+    }
+
+    int col_time = -1, col_flux = -1, col_fluxerr = -1;
+    for (int i = 0; i < table->nc; i++) {
+        if (strcmp(table->col[i].tlabel, "TIME") == 0)
+            col_time = i;
+        else if (strstr(table->col[i].tlabel, "PDCSAP_FLUX") != NULL || strcmp(table->col[i].tlabel, "SAP_FLUX") == 0 ||
+                 strcmp(table->col[i].tlabel, "FLUX") == 0)
+            col_flux = i;
+        else if (strstr(table->col[i].tlabel, "PDCSAP_FLUX_ERR") != NULL || strcmp(table->col[i].tlabel, "SAP_FLUX_ERR") == 0 ||
+                 strcmp(table->col[i].tlabel, "FLUX_ERR") == 0)
+            col_fluxerr = i;
+    }
+
+    if (col_time < 0 || col_flux < 0 || col_fluxerr < 0) {
+        fprintf(stderr, "Failed to find required columns (TIME, FLUX, FLUX_ERR) in %s\n", in_file);
+        qfits_table_close(table);
+        buffer->n = 0;
+        return;
+    }
+
+    double null_time = 0.0, null_flux = 0.0, null_fluxerr = 0.0;
+    void* time_data = qfits_query_column_data(table, col_time, NULL, &null_time);
+    void* flux_data = qfits_query_column_data(table, col_flux, NULL, &null_flux);
+    void* fluxerr_data = qfits_query_column_data(table, col_fluxerr, NULL, &null_fluxerr);
+
+    if (!time_data || !flux_data || !fluxerr_data) {
+        fprintf(stderr, "Failed to read column data from %s\n", in_file);
+        free(time_data);
+        free(flux_data);
+        free(fluxerr_data);
+        qfits_table_close(table);
+        buffer->n = 0;
+        return;
+    }
+
+    tfits_type t_type = table->col[col_time].atom_type;
+    tfits_type f_type = table->col[col_flux].atom_type;
+    tfits_type fe_type = table->col[col_fluxerr].atom_type;
+
+    size_t idx = 0;
+    for (int i = 0; i < table->nr && idx < buffer->len; i++) {
+        double t = 0.0, f = 0.0, fe = 0.0;
+
+        if (t_type == TFITS_BIN_TYPE_D)
+            t = ((double*)time_data)[i];
+        else if (t_type == TFITS_BIN_TYPE_E)
+            t = ((float*)time_data)[i];
+
+        if (f_type == TFITS_BIN_TYPE_D)
+            f = ((double*)flux_data)[i];
+        else if (f_type == TFITS_BIN_TYPE_E)
+            f = ((float*)flux_data)[i];
+
+        if (fe_type == TFITS_BIN_TYPE_D)
+            fe = ((double*)fluxerr_data)[i];
+        else if (fe_type == TFITS_BIN_TYPE_E)
+            fe = ((float*)fluxerr_data)[i];
+
+        if (isnan(t) || isinf(t) || isnan(f) || isinf(f) || isnan(fe) || isinf(fe)) continue;
+        if (t == null_time || f == null_flux || fe == null_fluxerr) continue;
+
+        buffer->x[idx] = t;
+        buffer->y[idx] = (float)f;
+        buffer->dy[idx] = (float)fe;
+        idx++;
+    }
+
+    buffer->n = idx;
+
+    free(time_data);
+    free(flux_data);
+    free(fluxerr_data);
+    qfits_table_close(table);
 }
 
 static inline void read_dat(const char* in_file, buffer_t* buffer) {
