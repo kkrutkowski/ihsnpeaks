@@ -23,11 +23,12 @@
  * $Date: 2006/02/17 10:24:52 $
  * $Revision: 1.5 $
  * $Name: qfits-6_2_0 $
+ *
+ * $Modified: 16.06.2026 by kkrutkowski
  */
 
 #ifndef QFITS_DEFS
 #define QFITS_DEFS
-#define _POSIX_C_SOURCE 200809L
 
 #include <stddef.h>
 #include <stdio.h>
@@ -57,7 +58,7 @@
 
 #define QFITS_INVALIDTABLE            0
 #define QFITS_BINTABLE                1
-#define QFITS_ASCIITABLE            2
+#define QFITS_ASCIITABLE              2
 
 /*-----------------------------------------------------------------------------
                                    New types

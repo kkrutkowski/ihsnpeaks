@@ -5,6 +5,8 @@
  * <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
  * option. This file may not be copied, modified, or distributed
  * except according to those terms.
+ *
+ * $Modified: 16.06.2026 by kkrutkowski
  */
 
 #ifndef __FAST_STDIO_H

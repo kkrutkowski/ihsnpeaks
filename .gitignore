@@ -9,3 +9,4 @@ output.tsv
 .agents
 .codex
 __pycache__/
+tmp/*
