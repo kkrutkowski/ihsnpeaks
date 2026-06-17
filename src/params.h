@@ -41,6 +41,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.r2_threshold = 0.05;
     params.periodogramMethod = PERIODOGRAM_IHS;
     params.gbEvalMode = GB_EVAL_GBLS;
+    params.bind_mode = BIND_AUTO;
 
     return params;
 }
@@ -68,6 +69,10 @@ void print_parameters(parameters *params) {
     printf("\tOutput period: %s\n", params->outputPeriod ? "true" : "false");
     printf("\tIs file: %s\n", params->isFile ? "true" : "false");
     printf("\tIDLE: %s\n", params->idle ? "true" : "false");
+    printf("\tBind: %s\n", params->bind_mode == BIND_FALSE    ? "false"
+                           : params->bind_mode == BIND_STRICT ? "strict"
+                           : params->bind_mode == BIND_CACHE  ? "cache"
+                                                              : "auto");
     printf("\tLargest file's length: %i\n", params->maxLen);
     printf("\tRead buffer size: %i\n", params->maxSize);
     printf("\tNuFFT grid: pswf%i\n", params->gridMode);
@@ -131,6 +136,8 @@ void print_help(char **argv) {
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
+    printf("  -b, --bind                Thread binding: 0|false (OS scheduling), 1|strict (hwloc PU pinning), 2|auto (default), 3|cache (L3 die affinity);\n");
+    printf("                            shortcuts: -bs=strict, -bc=cache; auto: strict if multi-NUMA, false otherwise\n");
     printf("  -p, --prewhiten           Attenuate detected variability modes\n");
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
@@ -291,6 +298,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"nufft", ko_required_argument, OPT_NUFFT},
                                       {"nufft1", ko_required_argument, OPT_NUFFT},
                                       {"jobs", ko_required_argument, 'j'},
+                                      {"bind", ko_required_argument, 'b'},
                                       {"save", ko_no_argument, 's'},
                                       {"spectrum", ko_no_argument, 's'},
                                       {"corrected", ko_no_argument, 'c'},  // apply the logarithmic correction, not fully implemented
@@ -310,7 +318,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2;  // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:g:sich", longopts)) != -1) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:g:b:sich", longopts)) != -1) {
         // printf("argument: %c", c);
         switch (c) {
             case 'o':
@@ -336,6 +344,20 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'j':
                 params.jobs = atoi(opt.arg);
+                break;
+            case 'b':
+                if (strcmp(opt.arg, "0") == 0 || strcmp(opt.arg, "false") == 0 || strcmp(opt.arg, "no") == 0) {
+                    params.bind_mode = BIND_FALSE;
+                } else if (strcmp(opt.arg, "1") == 0 || strcmp(opt.arg, "true") == 0 || strcmp(opt.arg, "strict") == 0 || strcmp(opt.arg, "s") == 0) {
+                    params.bind_mode = BIND_STRICT;
+                } else if (strcmp(opt.arg, "2") == 0 || strcmp(opt.arg, "auto") == 0) {
+                    params.bind_mode = BIND_AUTO;
+                } else if (strcmp(opt.arg, "3") == 0 || strcmp(opt.arg, "cache") == 0 || strcmp(opt.arg, "c") == 0) {
+                    params.bind_mode = BIND_CACHE;
+                } else {
+                    fprintf(stderr, "Invalid bind mode '%s'. Expected 0|false, 1|strict, 2|auto, or 3|cache.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
                 break;
             case 'm':
                 errno = 0;

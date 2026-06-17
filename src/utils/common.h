@@ -25,6 +25,11 @@ typedef enum {
 
 typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW, GB_EVAL_BLS } gb_eval_mode;
 
+#define BIND_FALSE 0
+#define BIND_STRICT 1
+#define BIND_AUTO 2
+#define BIND_CACHE 3
+
 static inline bool float_is_nan_bits(float value) {
     union {
         float f;
@@ -223,6 +228,7 @@ typedef struct {
     bool prewhiten;
     bool outputPeriod;
     bool generate;
+    int bind_mode;
     pthread_mutex_t mutex;
     pthread_mutex_t counter_mutex;
     int iter_count;

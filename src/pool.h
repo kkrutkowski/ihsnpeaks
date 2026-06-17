@@ -42,7 +42,11 @@ static void pool_process_targets(void* data, long i, int thread_id) {
     pool_context_t* ctx = (pool_context_t*)data;
 
     if (!ctx->worker_bound[thread_id]) {
-        bind_thread_pu(ctx->topo, ctx->pool_idx, thread_id);
+        if (ctx->params->bind_mode == BIND_STRICT) {
+            bind_thread_pu(ctx->topo, ctx->pool_idx, thread_id);
+        } else {
+            bind_thread_l3_domain(ctx->topo, ctx->pool_idx);
+        }
         if (!ctx->buffers[thread_id]->allocated) {
             alloc_buffer(ctx->buffers[thread_id], ctx->params);
         }

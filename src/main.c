@@ -78,22 +78,62 @@ int main(int argc, char *argv[]) {
 
     // Probe hardware topology (L3 domains, cores, SMT).
     // Auto-saves ~/.ihsnpeaks/hwloc_config on first run.
-    topo_config_t *topo = load_or_probe_topology(params.generate, nThreads);
-    if (!topo) {
-        fprintf(stderr, "Failed to probe hardware topology via hwloc\n");
-        return 1;
+    topo_config_t *topo = NULL;
+    bool topology_probed = false;
+    if (params.bind_mode == BIND_FALSE) {
+        // bind=false: skip hwloc probe entirely (OS handles scheduling).
+        topology_probed = false;
+    } else {
+        topo = load_or_probe_topology(params.generate, nThreads);
+        if (!topo) {
+            fprintf(stderr, "Failed to probe hardware topology via hwloc\n");
+            return 1;
+        }
+        topology_probed = true;
     }
+
     if (params.generate) {
-        free_topology(topo);
+        if (topo) free_topology(topo);
         free_parameters(&params);
         return 0;
     }
-    nThreads = topo->total_workers;
-    if (nThreads < 1) nThreads = 1;
+
+    // Resolve effective bind mode for batch dispatch.
+    bool use_hwloc_bind = true;
+    if (params.bind_mode == BIND_FALSE) {
+        use_hwloc_bind = false;
+    } else if (params.bind_mode == BIND_AUTO) {
+        if (!topology_probed) {
+            topo = load_or_probe_topology(false, nThreads);
+            if (!topo) {
+                fprintf(stderr, "Failed to probe hardware topology via hwloc\n");
+                return 1;
+            }
+            topology_probed = true;
+        }
+        if (topo->num_numa_nodes > 1) {
+            use_hwloc_bind = true;
+            params.bind_mode = BIND_STRICT;  // Multi-NUMA: default to strict PU pinning
+        } else {
+            use_hwloc_bind = false;
+        }
+    }
+
+    if (topology_probed) {
+        nThreads = topo->total_workers;
+        if (nThreads < 1) nThreads = 1;
+    }
 
     if (params.debug) {
-        print_topology_summary(topo);
+        if (topology_probed) print_topology_summary(topo);
         print_parameters(&params);
+        const char *bind_label = "false (OS scheduling)";
+        if (params.bind_mode == BIND_STRICT) {
+            bind_label = "strict (hwloc PU pinning)";
+        } else if (params.bind_mode == BIND_CACHE) {
+            bind_label = "cache (L3 die affinity)";
+        }
+        printf("\tEffective bind: %s\n", bind_label);
     }
     // Output results
     // for (size_t i = 0; i < kv_size(params.targets); i++) {printf("File: %s\n", kv_A(params.targets, i).path);}
@@ -113,7 +153,7 @@ int main(int argc, char *argv[]) {
         profile_report(&params);
         if (directPool) kt_forpool_destroy(directPool);
         free_buffer(&buffer);
-        free_topology(topo);
+        if (topo) free_topology(topo);
         free_parameters(&params);
         return 0;
     }  // end the program's execution here if only one target is provided'
@@ -155,6 +195,24 @@ int main(int argc, char *argv[]) {
         size_t targetCount = kv_size(params.targets);
         clock_gettime(CLOCK_MONOTONIC, &params.batch_start_time);
         params.iter_count = 0;
+
+        if (!use_hwloc_bind) {
+            params.nbuffers = nThreads;
+            alloc_buffers(&params);
+            kt_forpool_t *batchPool = NULL;
+            if (nThreads > 1) {
+                batchPool = kt_forpool_init(nThreads, params.idle);
+            }
+            kt_forpool(batchPool, process_targets, &params, (long)targetCount);
+            for (int i = 0; i < params.nbuffers; i++) {
+                fprint_buffer(params.buffers[i], &params);
+            }
+            profile_report(&params);
+            if (batchPool) kt_forpool_destroy(batchPool);
+            if (topo) free_topology(topo);
+            free_parameters(&params);
+            return 0;
+        }
 
         bool splitDirectBatch = false;
         if (mode_uses_direct_eval_grid(params.mode) && nThreads > 0) {

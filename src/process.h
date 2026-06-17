@@ -762,23 +762,28 @@ cleanup:
 void process_targets(void *data, long i, int thread_id) {
     parameters *params = (parameters *)data;
 
-    int permile = kv_size(params->targets) / 1000;
-    if (permile == 0) {
-        permile += 1;
-    }
-    pthread_mutex_lock(&params->counter_mutex);
-    params->iter_count += 1;
-    int current_iter = params->iter_count;
-    if (current_iter % permile == 0 || current_iter == kv_size(params->targets)) {
-        float progress = (float)(current_iter) * 100.0f / (float)kv_size(params->targets);
-        printf("Computation in progress: %.1f%% complete\r", progress);
-        fflush(stdout);
-    }
-    pthread_mutex_unlock(&params->counter_mutex);
     if (!params->buffers[thread_id]->allocated) {
         alloc_buffer(params->buffers[thread_id], params);
     }
     process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true, NULL);
+
+    int total = (int)kv_size(params->targets);
+    int permile = total / 1000;
+    if (permile == 0) permile = 1;
+    int current = __sync_add_and_fetch(&params->iter_count, 1);
+    if (current % permile == 0 || current >= total) {
+        float progress = (float)current * 100.0f / (float)total;
+        double elapsed = elapsed_seconds_since(&params->batch_start_time);
+        char time_buf[64];
+        if (elapsed > 0.001 && current > 0) {
+            double remaining_sec = (double)(total - current) * elapsed / (double)current;
+            format_time_remaining(remaining_sec, time_buf, sizeof(time_buf));
+        } else {
+            snprintf(time_buf, sizeof(time_buf), "calculating...");
+        }
+        printf("\rComputation in progress: %.1f%% complete | %s%s", progress, time_buf, current >= total ? "\n" : "");
+        fflush(stdout);
+    }
 }
 
 #endif

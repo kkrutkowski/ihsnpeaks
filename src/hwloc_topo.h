@@ -46,6 +46,8 @@ typedef struct topo_config {
     int all_bindings_count[MAX_L3_POOLS];
     int total_cores;
     int total_physical_pus;
+    int num_numa_nodes;
+    int l3_depth;
     int chunk_size;
     hwloc_topology_t topo;
 } topo_config_t;
@@ -60,6 +62,11 @@ static void topo_build_domains(hwloc_topology_t topology, topo_config_t* cfg) {
     cfg->total_cores = 0;
     cfg->total_physical_pus = 0;
     cfg->smt_per_core = 0;
+    cfg->l3_depth = l3_depth;
+
+    int numa_depth = hwloc_get_type_depth(topology, HWLOC_OBJ_NUMANODE);
+    cfg->num_numa_nodes = (numa_depth != HWLOC_TYPE_DEPTH_UNKNOWN) ? hwloc_get_nbobjs_by_depth(topology, numa_depth) : 1;
+    if (cfg->num_numa_nodes < 1) cfg->num_numa_nodes = 1;
 
     for (int d = 0; d < cfg->num_pools; d++) {
         l3_domain_t* dom = &cfg->domains[d];
@@ -220,6 +227,7 @@ static topo_config_t* probe_topology(int max_total_threads) {
 
 static void print_topology_summary(const topo_config_t* cfg) {
     printf("Hardware topology:\n");
+    printf("  NUMA nodes:                     %d\n", cfg->num_numa_nodes);
     printf("  L3 cache domains (threadpools): %d\n", cfg->num_pools);
     printf("  Total physical cores:           %d\n", cfg->total_cores);
     printf("  Total PUs (incl. SMT):          %d\n", cfg->total_physical_pus);
@@ -296,6 +304,25 @@ static void bind_thread_pu(const topo_config_t* cfg, int pool_idx, int worker_id
         fprintf(stderr, "Warning: cpubind failed for pool %d worker %d (PU %d)\n", pool_idx, worker_idx, b->os_pu_index);
     }
     hwloc_bitmap_free(cpuset);
+}
+
+static void bind_thread_l3_domain(const topo_config_t* cfg, int pool_idx) {
+    if (pool_idx < 0 || pool_idx >= cfg->num_pools) return;
+
+    hwloc_cpuset_t cpuset = NULL;
+    if (cfg->l3_depth != HWLOC_TYPE_DEPTH_UNKNOWN) {
+        hwloc_obj_t l3_obj = hwloc_get_obj_by_depth(cfg->topo, cfg->l3_depth, (unsigned)pool_idx);
+        if (l3_obj) cpuset = l3_obj->cpuset;
+    }
+    if (!cpuset) {
+        hwloc_obj_t machine = hwloc_get_obj_by_type(cfg->topo, HWLOC_OBJ_MACHINE, 0);
+        if (machine) cpuset = machine->cpuset;
+    }
+    if (!cpuset) return;
+
+    if (hwloc_set_cpubind(cfg->topo, cpuset, HWLOC_CPUBIND_THREAD) != 0) {
+        fprintf(stderr, "Warning: L3-domain cpubind failed for pool %d\n", pool_idx);
+    }
 }
 
 static void free_topology(topo_config_t* cfg) {
