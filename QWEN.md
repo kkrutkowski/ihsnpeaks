@@ -104,7 +104,7 @@ make release-macos      # macOS universal binary only
 Linux artifacts use Docker (Alpine 3.23) with zig cross-compilation for musl static linking.
 The macOS build uses `zig cc` + `llvm-lipo` to create a universal Mach-O binary.
 
-**hwloc is built from source (v2.12.0) for each release target.** Each `dispatch/build_release*.py` downloads the hwloc tarball into the variant's build directory and compiles `libhwloc.a` with the target cross-compiler (zig musl for Linux, zig darwin for macOS per-arch slices). The native makefile follows the same pattern in `build/native/<allocator>/`.
+**hwloc is built from source (v2.14.0) for each release target.** Each `dispatch/build_release*.py` downloads the hwloc tarball into the variant's build directory and compiles `libhwloc.a` with the target cross-compiler (zig musl for Linux, zig darwin for macOS per-arch slices). The native makefile follows the same pattern in `build/native/<allocator>/`.
 
 ### Profile build
 

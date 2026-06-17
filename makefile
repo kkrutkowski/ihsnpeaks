@@ -47,9 +47,9 @@ QFITS_CONFIG := $(BUILD_DIR)/config.h
 QFITS_OBJ := $(BUILD_DIR)/qfits.o
 
 # hwloc integration - static build from source for musl static linking
-HWLOC_VERSION := 2.12.0
+HWLOC_VERSION := 2.14.0
 HWLOC_TARBALL := hwloc-$(HWLOC_VERSION).tar.gz
-HWLOC_URL := https://download.open-mpi.org/release/hwloc/v2.12/$(HWLOC_TARBALL)
+HWLOC_URL := https://download.open-mpi.org/release/hwloc/v2.14/$(HWLOC_TARBALL)
 HWLOC_TARBALL_PATH := $(BUILD_DIR)/$(HWLOC_TARBALL)
 HWLOC_EXTRACTED := $(BUILD_DIR)/hwloc-$(HWLOC_VERSION)
 HWLOC_EXTRACTED_STAMP := $(BUILD_DIR)/.hwloc_extracted

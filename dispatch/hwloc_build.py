@@ -19,8 +19,8 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-HWLOC_VERSION = "2.12.0"
-HWLOC_TARBALL_URL = f"https://download.open-mpi.org/release/hwloc/v2.12/hwloc-{HWLOC_VERSION}.tar.gz"
+HWLOC_VERSION = "2.14.0"
+HWLOC_TARBALL_URL = f"https://download.open-mpi.org/release/hwloc/v2.14/hwloc-{HWLOC_VERSION}.tar.gz"
 
 
 def _download_hwloc_tarball(tarball: Path) -> None:
