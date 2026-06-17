@@ -158,7 +158,7 @@ else
     ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
 endif
 
-CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native $(LTOFLAGS) -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -I$(HWLOC_INC)
+CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native $(LTOFLAGS) -fno-sanitize=all -Wno-stringop-overflow -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -I$(HWLOC_INC)
 LDFLAGS_BASE := -Wl,--gc-sections
 LDLIBS := -lm $(ALLOCATOR_LDLIBS)
 
@@ -219,7 +219,14 @@ ifneq ($(filter x86_64 amd64,$(UNAME_M)),)
     endif
 endif
 
-ifneq ($(findstring gcc,$(CC_RESOLVED)),)
+ifneq ($(findstring musl,$(CC_RESOLVED)),)
+    CC_TYPE := musl
+    CC_VERSION_NUMBER := $(shell $(CC) -dumpversion)
+    MIN_VERSION := $(GCC_MIN_VERSION)
+    OPTFLAGS := -Ofast
+    LTOFLAGS :=
+    SCALING_WARNFLAGS :=
+else ifneq ($(findstring gcc,$(CC_RESOLVED)),)
     CC_TYPE := gcc
     CC_VERSION_NUMBER := $(shell $(CC) -dumpversion)
     MIN_VERSION := $(GCC_MIN_VERSION)

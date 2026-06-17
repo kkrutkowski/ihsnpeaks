@@ -153,6 +153,9 @@ int main(int argc, char *argv[]) {
         fflush(stdout);
 
         size_t targetCount = kv_size(params.targets);
+        clock_gettime(CLOCK_MONOTONIC, &params.batch_start_time);
+        params.iter_count = 0;
+
         bool splitDirectBatch = false;
         if (mode_uses_direct_eval_grid(params.mode) && nThreads > 0) {
             size_t filesPerWorker = (targetCount + (size_t)nThreads - 1U) / (size_t)nThreads;
@@ -172,14 +175,22 @@ int main(int argc, char *argv[]) {
                 alloc_buffer(params.buffers[0], &params);
             }
             for (size_t i = 0; i < targetCount; ++i) {
+                process_target(kv_A(params.targets, i).path, params.buffers[0], &params, true, directPool);
+                fprint_buffer(params.buffers[0], &params);
                 int current = (int)i + 1;
                 if (current % permile == 0 || (size_t)current == targetCount) {
                     float progress = (float)current * 100.0f / (float)targetCount;
-                    printf("Computation in progress: %.1f%% complete\r", progress);
+                    double elapsed = elapsed_seconds_since(&params.batch_start_time);
+                    char time_buf[64];
+                    if (elapsed > 0.001 && current > 0) {
+                        double remaining_sec = (double)(targetCount - (size_t)current) * elapsed / (double)current;
+                        format_time_remaining(remaining_sec, time_buf, sizeof(time_buf));
+                    } else {
+                        snprintf(time_buf, sizeof(time_buf), "calculating...");
+                    }
+                    printf("\rComputation in progress: %.1f%% complete | %s%s", progress, time_buf, (size_t)current == targetCount ? "\n" : "");
                     fflush(stdout);
                 }
-                process_target(kv_A(params.targets, i).path, params.buffers[0], &params, true, directPool);
-                fprint_buffer(params.buffers[0], &params);
             }
             profile_report(&params);
             if (directPool) kt_forpool_destroy(directPool);
@@ -202,6 +213,8 @@ int main(int argc, char *argv[]) {
         }
 
         // L3-aware dispatch: one pool per L3 domain, chunked file distribution
+        clock_gettime(CLOCK_MONOTONIC, &params.batch_start_time);
+        params.iter_count = 0;
         l3_dispatcher_t *disp = l3_dispatcher_create(&params, topo);
 
         // Distribute processing of all targets across L3-local pools

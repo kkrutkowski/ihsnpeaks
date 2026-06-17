@@ -8,6 +8,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <time.h>
 
 #include "../nufft/nufft1.h"
 
@@ -224,6 +226,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_mutex_t counter_mutex;
     int iter_count;
+    struct timespec batch_start_time;
 
     // Variables used to estimate optimal hyperparameters from metadata
     uint32_t gridRatio;
@@ -248,5 +251,30 @@ typedef struct {
     buffer_t** buffers;
     int nbuffers;
 } parameters;
+
+static inline double elapsed_seconds_since(const struct timespec* start) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)(now.tv_sec - start->tv_sec) + (double)(now.tv_nsec - start->tv_nsec) * 1e-9;
+}
+
+static inline void format_time_remaining(double remaining_sec, char* buf, size_t bufsize) {
+    if (remaining_sec < 0.0) remaining_sec = 0.0;
+    if (remaining_sec >= 86400.0) {
+        int days = (int)(remaining_sec / 86400.0);
+        int hours = (int)((remaining_sec - days * 86400.0) / 3600.0);
+        snprintf(buf, bufsize, "%dd %dh left", days, hours);
+    } else if (remaining_sec >= 3600.0) {
+        int hours = (int)(remaining_sec / 3600.0);
+        int mins = (int)((remaining_sec - hours * 3600.0) / 60.0);
+        snprintf(buf, bufsize, "%dh %dm left", hours, mins);
+    } else if (remaining_sec >= 60.0) {
+        int mins = (int)(remaining_sec / 60.0);
+        int secs = (int)(remaining_sec - mins * 60.0);
+        snprintf(buf, bufsize, "%dm %ds left", mins, secs);
+    } else {
+        snprintf(buf, bufsize, "%.2fs left", remaining_sec);
+    }
+}
 
 #endif  // COMMON_H

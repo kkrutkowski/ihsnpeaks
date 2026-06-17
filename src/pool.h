@@ -51,6 +51,24 @@ static void pool_process_targets(void* data, long i, int thread_id) {
 
     long global_i = ctx->chunk_offset + i;
     process_target(kv_A(ctx->params->targets, global_i).path, ctx->buffers[thread_id], ctx->params, true, NULL);
+
+    int total = (int)ctx->disp->total_files;
+    int permile = total / 1000;
+    if (permile == 0) permile = 1;
+    int current = __sync_add_and_fetch(&ctx->params->iter_count, 1);
+    if (current % permile == 0 || current >= total) {
+        float progress = (float)current * 100.0f / (float)total;
+        double elapsed = elapsed_seconds_since(&ctx->params->batch_start_time);
+        char time_buf[64];
+        if (elapsed > 0.001 && current > 0) {
+            double remaining_sec = (double)(total - current) * elapsed / (double)current;
+            format_time_remaining(remaining_sec, time_buf, sizeof(time_buf));
+        } else {
+            snprintf(time_buf, sizeof(time_buf), "calculating...");
+        }
+        printf("\rComputation in progress: %.1f%% complete | %s%s", progress, time_buf, current >= total ? "\n" : "");
+        fflush(stdout);
+    }
 }
 
 static void* pool_manager_thread(void* arg) {
@@ -67,20 +85,6 @@ static void* pool_manager_thread(void* arg) {
 
         ctx->chunk_offset = start;
         kt_forpool(ctx->pool, pool_process_targets, ctx, count);
-
-        // Update progress counter (mutex-protected)
-        pthread_mutex_lock(&ctx->params->counter_mutex);
-        ctx->params->iter_count += (int)count;
-        int current = ctx->params->iter_count;
-        int total = (int)d->total_files;
-        int permile = total / 1000;
-        if (permile == 0) permile = 1;
-        if (current % permile == 0 || current >= total) {
-            float progress = (float)current * 100.0f / (float)total;
-            printf("Computation in progress: %.1f%% complete\r", progress);
-            fflush(stdout);
-        }
-        pthread_mutex_unlock(&ctx->params->counter_mutex);
     }
     return NULL;
 }
@@ -88,7 +92,6 @@ static void* pool_manager_thread(void* arg) {
 static l3_dispatcher_t* l3_dispatcher_create(parameters* params, topo_config_t* topo) {
     l3_dispatcher_t* d = (l3_dispatcher_t*)calloc(1, sizeof(l3_dispatcher_t));
     if (!d) return NULL;
-    d->num_pools = topo->num_pools;
     d->total_files = (long)kv_size(params->targets);
     d->chunk_size = topo->chunk_size;
     d->next_chunk = 0;
@@ -103,8 +106,10 @@ static l3_dispatcher_t* l3_dispatcher_create(parameters* params, topo_config_t* 
     }
 
     int running_offset = 0;
-    for (int p = 0; p < d->num_pools; p++) {
-        pool_context_t* ctx = &d->pools[p];
+    d->num_pools = 0;
+    for (int p = 0; p < topo->num_pools; p++) {
+        if (topo->threads_per_pool[p] == 0) continue;
+        pool_context_t* ctx = &d->pools[d->num_pools];
         ctx->pool_idx = p;
         ctx->n_workers = topo->threads_per_pool[p];
         ctx->params = params;
@@ -118,9 +123,10 @@ static l3_dispatcher_t* l3_dispatcher_create(parameters* params, topo_config_t* 
         if (ctx->n_workers > 1) {
             ctx->pool = (kt_forpool_t*)kt_forpool_init(ctx->n_workers, params->idle);
         } else {
-            ctx->pool = NULL;  // single-worker pool: kt_forpool falls back to direct call
+            ctx->pool = NULL;
         }
         running_offset += ctx->n_workers;
+        d->num_pools++;
     }
     return d;
 }
