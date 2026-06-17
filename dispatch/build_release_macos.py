@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from variants import repo_root
+from hwloc_build import ensure_hwloc
 
 
 MAX_TWIDDLE_REUSE = "8"
@@ -153,6 +154,8 @@ def build_slice(
     scaling_source: Path,
     macos_min_version: str,
     sdk_path: str | None,
+    hwloc_inc: Path,
+    hwloc_lib: Path,
 ) -> Path:
     target_cmd = target_cc_command(zig, target, macos_min_version, sdk_path)
     target_stdflag = detect_stdflag_cmd(target_cmd, root)
@@ -167,7 +170,7 @@ def build_slice(
     thin = variant_dir / f"ihsnpeaks_macos_{arch_name}"
     write_text(wrapper, variant_wrapper_source())
 
-    include_flags = [f"-I{root / 'include'}", f"-I{root / 'src/nufft'}", f"-I{variant_dir}", f"-I{root}"]
+    include_flags = [f"-I{root / 'include'}", f"-I{root / 'src/nufft'}", f"-I{variant_dir}", f"-I{root}", f"-I{hwloc_inc}"]
     common_flags = [
         target_stdflag,
         "-D_DARWIN_C_SOURCE",
@@ -184,7 +187,7 @@ def build_slice(
     ]
 
     run([*target_cmd, *common_flags, "-c", str(wrapper), "-o", str(obj)], root)
-    run([*target_cmd, "-Wl,-dead_strip", str(obj), "-lm", "-o", str(thin)], root)
+    run([*target_cmd, "-Wl,-dead_strip", str(obj), str(hwloc_lib), "-lm", "-o", str(thin)], root)
     try:
         run([strip, "-x", str(thin)], root)
     except subprocess.CalledProcessError:
@@ -223,8 +226,25 @@ def main() -> None:
     print(f"Host C standard: {host_stdflag}", flush=True)
 
     scaling_source = macos_scaling_source(root, build_root, host_cc, host_stdflag)
+
+    # Build hwloc per arch slice — each arch needs its own static lib built
+    # with the correct zig cc target flags.
+    hwloc_by_arch: dict[str, tuple[Path, Path]] = {}
+    for arch_name, target in MACOS_ARCHES:
+        arch_build_root = build_root / arch_name
+        arch_build_root.mkdir(parents=True, exist_ok=True)
+        cc_cmd = target_cc_command(zig, target, args.macos_min_version, sdk_path)
+        hwloc_triple = "x86_64-apple-darwin" if "x86_64" in target else "aarch64-apple-darwin"
+        hwloc_by_arch[arch_name] = ensure_hwloc(
+            root,
+            arch_build_root,
+            cc_cmd,
+            host=hwloc_triple,
+            stamp_name=f".hwloc_built_{arch_name}",
+        )
+
     thin_outputs = [
-        build_slice(root, build_root, zig, strip, arch_name, target, scaling_source, args.macos_min_version, sdk_path)
+        build_slice(root, build_root, zig, strip, arch_name, target, scaling_source, args.macos_min_version, sdk_path, *hwloc_by_arch[arch_name])
         for arch_name, target in MACOS_ARCHES
     ]
 

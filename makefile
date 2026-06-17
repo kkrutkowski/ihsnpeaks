@@ -327,8 +327,8 @@ $(HWLOC_BUILD_DIR)/Makefile: $(HWLOC_EXTRACTED_STAMP) | $(BUILD_DIR)
 
 $(HWLOC_STAMP): $(HWLOC_BUILD_DIR)/Makefile
 	@echo "Building hwloc..."
-	$(MAKE) -C $(HWLOC_BUILD_DIR)
-	$(MAKE) -C $(HWLOC_BUILD_DIR) install
+	$(MAKE) -C $(HWLOC_BUILD_DIR) SUBDIRS="include hwloc"
+	$(MAKE) -C $(HWLOC_BUILD_DIR) SUBDIRS="include hwloc" install
 	@touch $@
 
 $(HWLOC_LIB): $(HWLOC_STAMP)

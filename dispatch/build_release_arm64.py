@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from variants import repo_root
+from hwloc_build import ensure_hwloc
 
 
 MAX_TWIDDLE_REUSE = "8"
@@ -425,6 +426,12 @@ def main(argv: list[str]) -> int:
     variants = list(ARM_VARIANTS)
     print("Release variants: " + ", ".join(variant.name for variant in variants), flush=True)
     stdflag = detect_stdflag(cc, root)
+    hwloc_inc, hwloc_lib = ensure_hwloc(
+        root,
+        build_root,
+        cc,
+        host="aarch64-unknown-linux-musl",
+    )
     base_cflags = [
         stdflag,
         "-D_GNU_SOURCE",
@@ -436,6 +443,7 @@ def main(argv: list[str]) -> int:
         "-fdata-sections",
         "-fvisibility=hidden",
         "-pthread",
+        f"-I{hwloc_inc}",
     ]
 
     variant_objects = [
@@ -456,6 +464,7 @@ def main(argv: list[str]) -> int:
             "-fdata-sections",
             "-march=armv8-a",
             "-pthread",
+            f"-I{hwloc_inc}",
             "-c",
             str(dispatcher_c),
             "-o",
@@ -471,6 +480,7 @@ def main(argv: list[str]) -> int:
             "-Wl,--gc-sections",
             str(dispatcher_o),
             *(str(obj) for obj in variant_objects),
+            str(hwloc_lib),
             "-lm",
             "-o",
             str(output),

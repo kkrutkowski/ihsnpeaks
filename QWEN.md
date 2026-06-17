@@ -11,7 +11,9 @@
 - BLS (Box Least Squares) transit search
 - ANCOVA and F-test for inequality-of-variance reevaluation
 - Batch processing of OGLE-format `.dat` photometric files
-- Native multithreading (pthreads) with thread-pool for parallel batch processing
+- MAST/TESS FITS light-curve input (PDCSAP_FLUX/SAP_FLUX/FLUX via qfits), mixed `.dat`+`.fits` batches
+- hwloc-based L3-cache-aware thread pools with per-PU CPU binding and first-touch NUMA placement
+- Native multithreading (pthreads) with L3-aware per-pool chunked dispatch and work-stealing
 - Built-in PSWF-based NuFFT backend (no FFTW3 dependency)
 
 **Architecture:**
@@ -21,6 +23,9 @@
 - SIMD vectorization via GCC/Clang vector extensions (`src/utils/simd.h`)
 - Uses klib (kvec, kthread, ketopt, kopen) for data structures and helpers
 - Uses sds (Redis dynamic strings) for string handling
+- Uses qfits (header-only) for FITS light-curve reading (`src/utils/readout.h` `read_fits()`)
+- Uses hwloc (statically linked, built from source) for L3 topology discovery and CPU binding (`src/hwloc_topo.h`)
+- L3-aware dispatcher (`src/pool.h`) creates one `kt_forpool` per L3 die, distributes files in chunks via a shared atomic counter
 - Runtime dispatch: single binary selects the optimal CPU feature variant at startup
 - Static musl builds for Linux; universal Mach-O binary for macOS
 
@@ -29,11 +34,13 @@
 ```
 .
 ├── src/
-│   ├── main.c           — Entry point, CLI argument parsing
+│   ├── main.c           — Entry point, CLI argument parsing, batch orchestration
 │   ├── params.h         — Parameter struct, init, parsing, help text
 │   ├── metadata.h       — File discovery, NuFFT plan sizing, plan cache init
 │   ├── process.h        — Core periodogram evaluation pipeline (780+ lines, main logic)
 │   ├── profile.h        — Instrumentation/profiling macros (IHSNPEAKS_PROFILE)
+│   ├── hwloc_topo.h     — hwloc topology probing, L3 domain enumeration, per-PU CPU binding, XML export to ~/.ihsnpeaks/hwloc_config
+│   ├── pool.h           — L3-aware thread-pool dispatcher: per-pool buffer sets, chunked atomic file dispatch
 │   ├── nufft/           — PSWF-based non-uniform FFT backend
 │   │   ├── nufft1.c     — NuFFT implementation
 │   │   ├── nufft1.h     — NuFFT public API
@@ -43,7 +50,7 @@
 │   │   ├── simd.h       — GCC vector extension SIMD wrappers (ln_ps, correctPower)
 │   │   ├── aov.h        — AoV-based periodogram helpers
 │   │   ├── convolution.h — Gaussian blur / BLS direct evaluation
-│   │   ├── readout.h    — Buffer allocation, I/O, peak output formatting
+│   │   ├── readout.h    — Buffer allocation, I/O (read_dat/read_fits), peak output formatting
 │   │   ├── compat.h     — C11 aligned_alloc fallback for C99
 │   │   ├── trig.h       — Trig utilities (sin2pif_tls, cos2pif_tls)
 │   │   ├── spectrum.h   — Spectrum column capture
@@ -53,18 +60,18 @@
 │       └── spec_viewer.py — Python spectrum viewer
 ├── include/
 │   ├── klib/            — External klib headers (kvec, kthread, ketopt, kopen)
-│   ├── qfits/           — qfits library header
+│   ├── qfits/           — qfits library header (header-only, reads MAST FITS tables)
 │   ├── fast_convert.h   — Fast float parsing
 │   ├── fdist.h          — F-distribution CDF
 │   └── sds.h            — Redis SDS dynamic strings
 ├── dispatch/
 │   ├── variants.py      — Runtime dispatch variant definitions
-│   ├── build_release.py — x86-64 musl release builder
-│   ├── build_release_arm64.py — ARM64 musl release builder
-│   ├── build_release_macos.py — macOS universal binary builder
+│   ├── build_release.py — x86-64 musl release builder (builds hwloc per target)
+│   ├── build_release_arm64.py — ARM64 musl release builder (builds hwloc per target)
+│   ├── build_release_macos.py — macOS universal binary builder (per-arch hwloc)
 │   └── zig_musl_cc.sh   — Zig-based cross-compilation wrapper
 ├── Dockerfile.release   — Multi-stage Docker build for release artifacts
-├── makefile             — Primary build system (GNU Make)
+├── makefile             — Primary build system (GNU Make; fetches+builds hwloc 2.12 from source)
 └── README.md            — User-facing documentation
 ```
 
@@ -97,6 +104,8 @@ make release-macos      # macOS universal binary only
 Linux artifacts use Docker (Alpine 3.23) with zig cross-compilation for musl static linking.
 The macOS build uses `zig cc` + `llvm-lipo` to create a universal Mach-O binary.
 
+**hwloc is built from source (v2.12.0) for each release target.** Each `dispatch/build_release*.py` downloads the hwloc tarball into the variant's build directory and compiles `libhwloc.a` with the target cross-compiler (zig musl for Linux, zig darwin for macOS per-arch slices). The native makefile follows the same pattern in `build/native/<allocator>/`.
+
 ### Profile build
 
 ```sh
@@ -122,7 +131,7 @@ make check_compiler       # Print detected compiler, C standard, CPU features
 ihsnpeaks <target> <fmax> [options]
 ```
 
-- `target`: path to a `.dat` file or a directory of `.dat` files
+- `target`: path to a `.dat` or `.fits` file, or a directory of `.dat`/`.fits` files (mixed batches are supported)
 - `fmax`: upper frequency bound for the periodogram grid
 
 **Common options:**
@@ -137,11 +146,12 @@ ihsnpeaks <target> <fmax> [options]
 | `-n N` | Max number of peaks to report (default: 10) |
 | `-s` | Save full spectrum to `.tsv` files |
 | `-p` | Prewhiten (subtract detected signals before finding next peaks) |
-| `-j N` | Limit worker threads (default: 0 = all available) |
+| `-j N` | Limit worker threads (default: 0 = all available PUs) |
 | `-o N` | Oversampling factor (default: 5.0) |
 | `-f FMIN` | Lower frequency bound (default: 2/delta_t) |
 | `--period` | Output periods instead of frequencies |
 | `--nufft MODE` | NuFFT backend: `43`/`pswf43` (default) or `21`/`pswf21` |
+| `--generate` | Probe hardware topology via hwloc, save to `~/.ihsnpeaks/hwloc_config`, and exit |
 | `--debug` | Print parsed parameters before computation |
 | `-h` | Print help |
 
@@ -159,7 +169,9 @@ ihsnpeaks <target> <fmax> [options]
 - **SIMD abstraction:** Vector code uses GCC/Clang vector extensions via `src/utils/simd.h` — auto-scales between SSE (128-bit), AVX (256-bit), and AVX-512 (512-bit) through `VEC_BYTES`.
 - **Profiling:** Compile with `-DIHSNPEAKS_PROFILE=1` to enable cycle-accurate phase profiling. Thread-local accumulators get flushed atomically. The `profile_report()` function dumps timing and working-set estimates to stderr.
 - **Memory management:** Uses system allocator by default. Optionally links mimalloc (`MIMALLOC=1`). For simplicitly within the hot path, the code allocates and reuses pre-sized buffers per thread rather than frequent malloc/free.
-- **Batch mode:** When a directory is provided as target, files are inspected to size the NuFFT plan based on the largest file. Parallel batch processing uses a kthread thread pool.
+- **Batch mode:** When a directory is provided as target, the metadata pass discovers all matching `.dat`/`.fits` files, but **inspects only the largest `.dat` file and the largest `.fits` file** (one per format, by `stat` size) to size the NuFFT plan. Buffer sizes are derived from these two files only.
+- **Batch metadata scan performance (IMPORTANT):** The metadata pass must NOT loop over all files calling `inspect_dat_file()` or `inspect_fits_file()`. Doing so introduces severe startup latency on large directories (e.g., 10+ seconds on 15 000+ files where < 1 second is acceptable). The current implementation in `metadata.h::process_path()` tracks `largest_dat_path` / `largest_fits_path` during `readdir()` and opens at most two files after the loop. Any refactor must preserve this property.
+- **Threading / hwloc:** At startup, `load_or_probe_topology()` probes the hardware via hwloc (or loads the cached topology from `~/.ihsnpeaks/hwloc_config`). One worker thread pool is created per active L3 domain; workers are pinned to specific PUs via `hwloc_set_cpubind(HWLOC_CPUBIND_THREAD)` before their per-thread `buffer_t` is allocated, so first-touch NUMA placement puts the per-thread buffers on the local node. Shared NuFFT twiddle arrays (`nufftTwiddleReal/Imag`) are allocated before workers exist, so the OS kernel distributes them across NUMA nodes by default (acceptable for read-mostly data).
 - **Testing:** No test framework is currently set up in the repository. The `src/debug/` directory contains Python debugging/viewer scripts.
 - **No warnings policy:** Compilation with `-Wall -Wextra` is expected to be clean. The makefile adds specific `-Wno-*` flags for certain compiler quirks.
 - **Version:** Defined as `IHSNPEAKS_VERSION "v1.1.0-preview"` (work in progress) in `src/main.c`.

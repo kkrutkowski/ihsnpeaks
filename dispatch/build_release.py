@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from variants import VARIANTS, Variant, host_supported_variants, repo_root
+from hwloc_build import ensure_hwloc
 
 
 MAX_TWIDDLE_REUSE = "8"
@@ -452,6 +453,7 @@ def main(argv: list[str]) -> int:
     print("Release variants: " + ", ".join(variant.name for variant in variants), flush=True)
 
     stdflag = detect_stdflag(cc, root)
+    hwloc_inc, hwloc_lib = ensure_hwloc(root, build_root, cc)
     base_cflags = [
         stdflag,
         "-D_GNU_SOURCE",
@@ -463,6 +465,7 @@ def main(argv: list[str]) -> int:
         "-fdata-sections",
         "-fvisibility=hidden",
         "-pthread",
+        f"-I{hwloc_inc}",
     ]
 
     variant_objects = [
@@ -484,6 +487,7 @@ def main(argv: list[str]) -> int:
             "-march=x86-64",
             "-mtune=generic",
             "-pthread",
+            f"-I{hwloc_inc}",
             "-c",
             str(dispatcher_c),
             "-o",
@@ -499,6 +503,7 @@ def main(argv: list[str]) -> int:
             "-Wl,--gc-sections",
             str(dispatcher_o),
             *(str(obj) for obj in variant_objects),
+            str(hwloc_lib),
             "-lm",
             "-o",
             str(output),
