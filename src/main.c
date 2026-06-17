@@ -23,6 +23,9 @@
 #include "process.h"
 #include "utils/readout.h"
 
+#include "hwloc_topo.h"
+#include "pool.h"
+
 static void build_batch_output_path(const char *target, char *out_file, size_t out_file_size) {
     char target_path[PATH_MAX];
     strncpy(target_path, target, sizeof(target_path) - 1U);
@@ -47,8 +50,18 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "h") == 0) {
             print_help(argv);
             return 0;
-        } else if (strcmp(argv[1], "generate") == 0 || strcmp(argv[1], "-h") == 0) {
-            generate_plans(argv);
+        } else if (strcmp(argv[1], "generate") == 0 || strcmp(argv[1], "--generate") == 0) {
+            // Early-exit topology generation (no target/fmax required)
+            int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
+            if (nThreads < 1) nThreads = 1;
+            topo_config_t *topo = probe_topology(nThreads);
+            if (topo) {
+                save_topology_config(topo);  // prints summary internally
+                free_topology(topo);
+            } else {
+                fprintf(stderr, "Failed to probe hardware topology\n");
+                return 1;
+            }
             return 0;
         }
     }
@@ -63,7 +76,23 @@ int main(int argc, char *argv[]) {
         nThreads = params.jobs;
     }
 
+    // Probe hardware topology (L3 domains, cores, SMT).
+    // Auto-saves ~/.ihsnpeaks/hwloc_config on first run.
+    topo_config_t *topo = load_or_probe_topology(params.generate, nThreads);
+    if (!topo) {
+        fprintf(stderr, "Failed to probe hardware topology via hwloc\n");
+        return 1;
+    }
+    if (params.generate) {
+        free_topology(topo);
+        free_parameters(&params);
+        return 0;
+    }
+    nThreads = topo->total_workers;
+    if (nThreads < 1) nThreads = 1;
+
     if (params.debug) {
+        print_topology_summary(topo);
         print_parameters(&params);
     }
     // Output results
@@ -84,6 +113,7 @@ int main(int argc, char *argv[]) {
         profile_report(&params);
         if (directPool) kt_forpool_destroy(directPool);
         free_buffer(&buffer);
+        free_topology(topo);
         free_parameters(&params);
         return 0;
     }  // end the program's execution here if only one target is provided'
@@ -153,28 +183,38 @@ int main(int argc, char *argv[]) {
             }
             profile_report(&params);
             if (directPool) kt_forpool_destroy(directPool);
+            free_topology(topo);
             free_parameters(&params);
             return 0;
         }
 
-        if (targetCount < (size_t)nThreads) {
-            nThreads = (int)targetCount;
+        if (targetCount < (size_t)topo->total_workers) {
+            // Fewer files than total workers: use direct single-pool approach
+            // to avoid empty pools. Re-probe with capped thread count.
+            free_topology(topo);
+            topo = probe_topology((int)(targetCount > INT32_MAX ? INT32_MAX : (long)targetCount));
+            if (!topo) {
+                fprintf(stderr, "Failed to re-probe topology for small batch\n");
+                return 1;
+            }
+            nThreads = topo->total_workers;
+            if (nThreads < 1) nThreads = 1;
         }
-        params.nbuffers = nThreads;
-        alloc_buffers(&params);
-        kt_forpool_t *pool = kt_forpool_init(nThreads, params.idle);
 
-        // distribute processing of all of the targets on multiple threads
-        kt_forpool(pool, process_targets, &params, kv_size(params.targets));
+        // L3-aware dispatch: one pool per L3 domain, chunked file distribution
+        l3_dispatcher_t *disp = l3_dispatcher_create(&params, topo);
+
+        // Distribute processing of all targets across L3-local pools
+        l3_dispatcher_run(disp);
+
         for (int i = 0; i < params.nbuffers; i++) {
             fprint_buffer(params.buffers[i], &params);
-        }  // free the buffers before freeing
+        }
 
         profile_report(&params);
 
-        // Kill the worker threads before exiting
-        kt_forpool_destroy(pool);
-        // Free the allocated memory
+        l3_dispatcher_destroy(disp);
+        free_topology(topo);
         free_parameters(&params);
 
         return 0;

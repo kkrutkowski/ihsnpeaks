@@ -9,8 +9,9 @@
 #include <string.h>
 
 #include "params.h"
-#include "profile.h"
 #include "utils/readout.h"
+
+#include "profile.h"
 #include "utils/simd.h"
 #include "utils/strings.h"
 #include "utils/trig.h"

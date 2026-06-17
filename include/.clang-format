@@ -5,7 +5,7 @@ IndentPPDirectives: AfterHash
 SortIncludes: true
 
 # 1. Stop clang-format from treating "ixbutil.h" as the "main" header
-IncludeIsMainRegex: '_never_match_' 
+IncludeIsMainRegex: '_never_match_'
 
 # 2. Define custom sorting priorities (lower Priority number goes first)
 IncludeCategories:
@@ -15,5 +15,7 @@ IncludeCategories:
     Priority: 2
   - Regex:    '^<.*>'   # Standard system headers (e.g., <stdio.h>)
     Priority: 3
-  - Regex:    '^".*"'   # Local project headers (e.g., "ixbutil.h")
+  - Regex:    '^"(metadata|params|process|utils/readout)\.h"'  # Core dependencies before pool.h
     Priority: 4
+  - Regex:    '^".*"'   # Local project headers (e.g., "ixbutil.h")
+    Priority: 5

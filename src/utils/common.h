@@ -220,6 +220,7 @@ typedef struct {
     bool idle;
     bool prewhiten;
     bool outputPeriod;
+    bool generate;
     pthread_mutex_t mutex;
     pthread_mutex_t counter_mutex;
     int iter_count;

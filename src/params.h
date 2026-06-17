@@ -13,8 +13,9 @@
 #include <string.h>
 
 #include "metadata.h"
-#include "utils/common.h"
 #include "utils/readout.h"
+
+#include "utils/common.h"
 
 // Function to initialize parameters with default values
 static parameters init_parameters(int argc, char *argv[]) {
@@ -138,7 +139,8 @@ void print_help(char **argv) {
     printf("\n");
     printf("\n");
     printf("      --debug               Print parameters before the computation (default: false)\n");
-    printf("      --period              Print periods instead of frequencies (not recommended; frequency output is preferred)\n\n");
+    printf("      --period              Print periods instead of frequencies (not recommended; frequency output is preferred)\n");
+    printf("      --generate            Probe hardware topology via hwloc, save to ~/.ihsnpeaks/hwloc_config, and exit\n\n");
     printf("  -h, --help                Display this help message and exit\n\n");
     printf("Example:\n");
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
@@ -261,7 +263,15 @@ static bool parse_eval(const char *arg, parameters *params) {
 static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
 
-    enum { OPT_PERIOD = 0xF8, OPT_EPSILON = 0xF9, OPT_NUFFT = 0xFA, OPT_DEBUG = 0xFC, OPT_STRIP = 0xFD, OPT_PACK = 0xFE };  // OPT_PREWHITEN = 0xFB,
+    enum {
+        OPT_PERIOD = 0xF8,
+        OPT_EPSILON = 0xF9,
+        OPT_NUFFT = 0xFA,
+        OPT_DEBUG = 0xFC,
+        OPT_STRIP = 0xFD,
+        OPT_PACK = 0xFE,
+        OPT_GENERATE = 0xFB
+    };  // OPT_PREWHITEN = 0xFB,
 
     // Define long options
     static ko_longopt_t longopts[] = {// impement the "generate mode" separately, precomputing the FFTW plans and saving them to /opt/ihnspeaks
@@ -292,6 +302,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       // Negative cases, corresponding to long arguments only;
                                       {"strip", ko_no_argument, OPT_STRIP},
                                       {"pack", ko_no_argument, OPT_PACK},
+                                      {"generate", ko_no_argument, OPT_GENERATE},
                                       {NULL, 0, 0}};
 
     // Initialize ketopt, skipping the first two positional arguments
@@ -381,6 +392,9 @@ static parameters read_parameters(int argc, char *argv[]) {
             case OPT_STRIP:
                 print_help(argv);
                 exit(0);
+                break;
+            case OPT_GENERATE:
+                params.generate = true;
                 break;
             case '?':
                 fprintf(stderr, "Unknown option: -%c\n", opt.opt ? opt.opt : '?');

@@ -284,6 +284,11 @@ static bool process_path(parameters *params) {
         struct dirent *entry;
         off_t largest_size = 0;
         char largest_path[256] = {0};
+        off_t largest_dat_size = 0;
+        char largest_dat_path[256] = {0};
+        off_t largest_fits_size = 0;
+        char largest_fits_path[256] = {0};
+        size_t file_count = 0;
 
         while ((entry = readdir(dir)) != NULL) {
             if (entry->d_type == DT_REG && (has_dat_suffix(entry->d_name) || has_fits_suffix(entry->d_name))) {
@@ -299,12 +304,25 @@ static bool process_path(parameters *params) {
                 }
 
                 params->avgLen += file_stat.st_size;
+                file_count++;
 
-                // Check if it's the largest file so far
+                // Track largest file overall (for readBuf sizing)
                 if (file_stat.st_size > largest_size) {
                     largest_size = file_stat.st_size;
                     params->maxSize = largest_size + 1;
                     snprintf(largest_path, sizeof(largest_path), "%s", full_path);
+                }
+
+                // Track largest .dat file (for metadata inspection)
+                if (has_dat_suffix(entry->d_name) && file_stat.st_size > largest_dat_size) {
+                    largest_dat_size = file_stat.st_size;
+                    snprintf(largest_dat_path, sizeof(largest_dat_path), "%s", full_path);
+                }
+
+                // Track largest .fits file (for metadata inspection)
+                if (has_fits_suffix(entry->d_name) && file_stat.st_size > largest_fits_size) {
+                    largest_fits_size = file_stat.st_size;
+                    snprintf(largest_fits_path, sizeof(largest_fits_path), "%s", full_path);
                 }
 
                 // Allocate and populate a target struct with the file path and params pointer
@@ -320,31 +338,32 @@ static bool process_path(parameters *params) {
             exit(EXIT_FAILURE);
         }
 
-        // Inspect ALL files to find the true maximum row count and time span
+        // Inspect at most 1 file per format (the largest of each) to estimate
+        // row count and time span. Avoids scanning all 10k+ files in large batches.
         uint32_t max_newline_count = 0;
         double max_time_span = 0.0;
-        for (size_t i = 0; i < kv_size(params->targets); i++) {
-            const char *fpath = kv_A(params->targets, i).path;
+
+        if (largest_dat_path[0] != '\0') {
             uint32_t count = 0;
             double span = 0.0;
-            if (has_dat_suffix(fpath)) {
-                inspect_dat_file(fpath, &count, &span);
-            } else if (has_fits_suffix(fpath)) {
-                inspect_fits_file(fpath, &count, &span);
-            }
-            if (count > max_newline_count) {
-                max_newline_count = count;
-            }
-            if (span > max_time_span) {
-                max_time_span = span;
-            }
+            inspect_dat_file(largest_dat_path, &count, &span);
+            if (count > max_newline_count) max_newline_count = count;
+            if (span > max_time_span) max_time_span = span;
+        }
+        if (largest_fits_path[0] != '\0') {
+            uint32_t count = 0;
+            double span = 0.0;
+            inspect_fits_file(largest_fits_path, &count, &span);
+            if (count > max_newline_count) max_newline_count = count;
+            if (span > max_time_span) max_time_span = span;
         }
 
         params->maxLen = max_newline_count;
         params->maxTimeSpan = max_time_span;
 
         // approximate an near-optimal transform size
-        params->avgLen /= DEFAULT_MEASUREMENT_SIZE * kv_size(params->targets);
+        if (file_count == 0) file_count = 1;
+        params->avgLen /= DEFAULT_MEASUREMENT_SIZE * file_count;
         params->maxFreqCount = estimate_frequency_count(params, params->maxTimeSpan);
         initialize_nufft_plan(params);
     }

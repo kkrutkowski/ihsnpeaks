@@ -46,6 +46,19 @@ QFITS_GEN_CONFIG := $(MAKEFILE_DIR)tmp/qfits_test/gen_config.sh
 QFITS_CONFIG := $(BUILD_DIR)/config.h
 QFITS_OBJ := $(BUILD_DIR)/qfits.o
 
+# hwloc integration - static build from source for musl static linking
+HWLOC_VERSION := 2.12.0
+HWLOC_TARBALL := hwloc-$(HWLOC_VERSION).tar.gz
+HWLOC_URL := https://download.open-mpi.org/release/hwloc/v2.12/$(HWLOC_TARBALL)
+HWLOC_TARBALL_PATH := $(BUILD_DIR)/$(HWLOC_TARBALL)
+HWLOC_EXTRACTED := $(BUILD_DIR)/hwloc-$(HWLOC_VERSION)
+HWLOC_EXTRACTED_STAMP := $(BUILD_DIR)/.hwloc_extracted
+HWLOC_BUILD_DIR := $(BUILD_DIR)/hwloc-build
+HWLOC_INSTALL_DIR := $(BUILD_DIR)/hwloc-install
+HWLOC_LIB := $(HWLOC_INSTALL_DIR)/lib/libhwloc.a
+HWLOC_INC := $(HWLOC_INSTALL_DIR)/include
+HWLOC_STAMP := $(BUILD_DIR)/.hwloc_built
+
 PROFILE_CC ?= musl-gcc
 PROFILE_ISA ?= native
 PROFILE_ROOT := $(MAKEFILE_DIR)build/profile
@@ -145,7 +158,7 @@ else
     ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
 endif
 
-CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native $(LTOFLAGS) -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR)
+CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native $(LTOFLAGS) -fno-sanitize=all -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -I$(HWLOC_INC)
 LDFLAGS_BASE := -Wl,--gc-sections
 LDLIBS := -lm $(ALLOCATOR_LDLIBS)
 
@@ -286,9 +299,43 @@ $(QFITS_CONFIG): FORCE | $(BUILD_DIR)
 $(QFITS_OBJ): $(QFITS_SRC) $(QFITS_CONFIG) | $(BUILD_DIR)
 	$(CC) $(STDFLAG) -O3 -D_GNU_SOURCE -I$(MAKEFILE_DIR)include -I$(BUILD_DIR) -c $< -o $@
 
-native: $(NUFFT_OBJ) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP)
-	@echo "Compiling ihsnpeaks with PSWF NuFFT and qfits"
-	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(STATIC_LDFLAGS) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
+# hwloc static build rules
+$(HWLOC_TARBALL_PATH): | $(BUILD_DIR)
+	@echo "Downloading hwloc $(HWLOC_VERSION)..."
+	curl -fSL -o $@ $(HWLOC_URL)
+
+$(HWLOC_EXTRACTED_STAMP): $(HWLOC_TARBALL_PATH) | $(BUILD_DIR)
+	@echo "Extracting hwloc source..."
+	tar xzf $< -C $(BUILD_DIR)
+	@touch $@
+
+$(HWLOC_BUILD_DIR)/Makefile: $(HWLOC_EXTRACTED_STAMP) | $(BUILD_DIR)
+	@echo "Configuring hwloc (static, CC=$(CC))..."
+	@mkdir -p $(HWLOC_BUILD_DIR)
+	cd $(HWLOC_BUILD_DIR) && CC="$(CC)" CFLAGS="-O2" \
+		$(abspath $(HWLOC_EXTRACTED))/configure \
+			--prefix=$(abspath $(HWLOC_INSTALL_DIR)) \
+			--enable-static --disable-shared \
+			--disable-libxml2 \
+			--disable-pci \
+			--disable-libnuma \
+			--disable-cairo \
+			--disable-libudev \
+			--disable-cuda --disable-opencl \
+			--disable-levelzero --disable-nvml --disable-rsmi \
+			--disable-valgrind --disable-ncurses
+
+$(HWLOC_STAMP): $(HWLOC_BUILD_DIR)/Makefile
+	@echo "Building hwloc..."
+	$(MAKE) -C $(HWLOC_BUILD_DIR)
+	$(MAKE) -C $(HWLOC_BUILD_DIR) install
+	@touch $@
+
+$(HWLOC_LIB): $(HWLOC_STAMP)
+
+native: $(NUFFT_OBJ) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP) $(HWLOC_LIB)
+	@echo "Compiling ihsnpeaks with PSWF NuFFT, qfits, and hwloc"
+	$(CC) $(CFLAGS) $(MAKEFILE_DIR)src/main.c $(NUFFT_OBJ) $(HWLOC_LIB) -lpthread $(STATIC_LDFLAGS) $(LDFLAGS_BASE) $(LDLIBS) -o ihsnpeaks
 	strip -s ihsnpeaks
 	@echo "Compilation complete"
 
