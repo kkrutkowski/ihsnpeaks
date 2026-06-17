@@ -112,3 +112,4 @@ This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpe
 7. [qfits](https://www.eso.org/sci/software/eclipse/qfits/html/index.html)
 8. [GNU Scientific Library](https://www.gnu.org/software/gsl/)
 9. [fast_convert](https://github.com/hermantb/fast_convert)
+10. [hwloc](https://www.open-mpi.org/projects/hwloc/)
