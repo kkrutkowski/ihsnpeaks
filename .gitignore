@@ -11,3 +11,4 @@ output.tsv
 __pycache__/
 tmp/*
 .qwen/*
+downstream/cuihsnpeaks/refs/*
