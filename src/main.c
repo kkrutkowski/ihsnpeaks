@@ -1,6 +1,13 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
 #define IHSNPEAKS_VERSION "v1.1.0-preview"
 
+#if __STDC_VERSION__ < 202311L  // If C23 is not available
+#    define constexpr const
+#endif
+#if (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L)
+#    define aligned_alloc aligned_alloc_fallback
+#endif /* aligned_alloc */
+
 #include <klib/kthread.h>
 #include <libgen.h>
 #include <limits.h>
