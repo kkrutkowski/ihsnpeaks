@@ -23,6 +23,24 @@ void generate_data(int M, double *x, float *y_real, float *y_imag) {
     }
 }
 
+int get_physical_cores() {
+    FILE *fp = fopen("/proc/cpuinfo", "r");
+    if (!fp) return 1;
+    char line[256];
+    int cores = 1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "cpu cores", 9) == 0) {
+            char *colon = strchr(line, ':');
+            if (colon) {
+                cores = atoi(colon + 1);
+                break;
+            }
+        }
+    }
+    fclose(fp);
+    return cores > 0 ? cores : 1;
+}
+
 void run_benchmark(cunufft_mode mode_type) {
     const int Mpoints = 1000;
     const int freq_factor = 32;
@@ -35,16 +53,17 @@ void run_benchmark(cunufft_mode mode_type) {
     #pragma omp parallel
     { volatile int dummy = omp_get_thread_num(); (void)dummy; }
 
-    int num_threads = omp_get_max_threads();
-    if (num_threads > freq_factor) num_threads = freq_factor;
+    int physical_cores = get_physical_cores();
+    int num_threads = 1; // Run CPU on a single thread to avoid memory bus contention
 
     printf("\n=====================================================================================================================\n");
-    printf("              M = %d points, %d transform batches, %d OpenMP threads, Mode = %s\n",
-           Mpoints, freq_factor, num_threads,
-           (mode_type == CUNUFFT_PSWF21) ? "PSWF21" : "PSWF43");
+    printf("              M = %d points, %d transform batches, Mode = %s (CPU Est. scaled by %d physical cores)\n",
+           Mpoints, freq_factor,
+           (mode_type == CUNUFFT_PSWF21) ? "PSWF21" : "PSWF43",
+           physical_cores);
     printf("=====================================================================================================================\n");
     printf("%-7s | %-8s | %-14s | %-14s | %-14s | %-10s | %-10s | %-10s\n",
-           "Log2(N)", "Nfft", "CPU OMP (ms)", "GPU Kern (ms)", "GPU Total (ms)", "Speedup(D)", "Max Err", "Avg Err");
+           "Log2(N)", "Nfft", "CPU Est (ms)", "GPU Kern (ms)", "GPU Total (ms)", "Speedup(D)", "Max Err", "Avg Err");
     printf("---------------------------------------------------------------------------------------------------------------------\n");
 
     double *x = (double *)malloc(Mpoints * sizeof(double));
@@ -167,7 +186,7 @@ void run_benchmark(cunufft_mode mode_type) {
                 cpu_end = get_time_ms();
             }
         }
-        double cpu_time = cpu_end - cpu_start;
+        double cpu_time = (cpu_end - cpu_start) / (double)physical_cores;
 
         /* =========== GPU warm-up & timed run =========== */
         cunufft_execute_batch(gpu_ws, y_real, y_imag, gpu_out_r, gpu_out_i);
