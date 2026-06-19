@@ -15,7 +15,7 @@
 #    define M_SQRT1_2 0.70710678118654752440
 #endif
 
-#define AOV_CONDITION_LIMIT 1.0e4f
+#define AOV_CONDITION_LIMIT 5e3f
 #define AOV_R2_MAX (1.0f - 1.0e-7f)
 
 typedef struct {
