@@ -72,7 +72,7 @@ __host__ __device__ static inline float expf_remez_scalar(float x) {
 
 __host__ __device__ static inline float pswf0_scalar(float z, cunufft_mode mode) {
     float c = (mode == CUNUFFT_PSWF43) ? 15.658f
-              : (float)(3.14159265358979323846 * 8.0 * 0.75 - 0.05);
+    : (float)(3.14159265358979323846 * 8.0 * 0.75 - 0.05);
     float z2 = z * z;
     float poly;
     if (mode == CUNUFFT_PSWF43) {
@@ -492,7 +492,7 @@ float cunufft_execute_batch(const cunufft_workspace *ws,
             ws->d_fft_real, ws->d_fft_imag, p->d_deconv,
             p->Nfft, p->Nout, p->output_shift,
             ws->d_out_real + (size_t)fi * (size_t)p->Nout,
-            ws->d_out_imag + (size_t)fi * (size_t)p->Nout);
+                                                          ws->d_out_imag + (size_t)fi * (size_t)p->Nout);
     }
 
     cudaEventRecord(t1);

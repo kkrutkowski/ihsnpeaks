@@ -158,33 +158,33 @@ void run_benchmark(cunufft_mode mode_type) {
         #pragma omp parallel num_threads(num_threads)
         {
             int tid = omp_get_thread_num();
-            
+
             /* 1. Warm-up run */
             #pragma omp for schedule(static)
             for (int f = 1; f <= freq_factor; ++f)
                 nufft1_execute(tws[tid], y_real, y_imag,
                                cpu_out_r + (f-1)*Nout,
                                cpu_out_i + (f-1)*Nout, f);
-                               
-            #pragma omp barrier
-            #pragma omp master
-            {
-                cpu_start = get_time_ms();
-            }
-            #pragma omp barrier
-            
-            /* 2. Timed run */
-            #pragma omp for schedule(static)
-            for (int f = 1; f <= freq_factor; ++f)
-                nufft1_execute(tws[tid], y_real, y_imag,
-                               cpu_out_r + (f-1)*Nout,
-                               cpu_out_i + (f-1)*Nout, f);
-                               
-            #pragma omp barrier
-            #pragma omp master
-            {
-                cpu_end = get_time_ms();
-            }
+
+                #pragma omp barrier
+                #pragma omp master
+                {
+                    cpu_start = get_time_ms();
+                }
+                #pragma omp barrier
+
+                /* 2. Timed run */
+                #pragma omp for schedule(static)
+                for (int f = 1; f <= freq_factor; ++f)
+                    nufft1_execute(tws[tid], y_real, y_imag,
+                                   cpu_out_r + (f-1)*Nout,
+                                   cpu_out_i + (f-1)*Nout, f);
+
+                    #pragma omp barrier
+                    #pragma omp master
+                    {
+                        cpu_end = get_time_ms();
+                    }
         }
         double cpu_time = (cpu_end - cpu_start) / (double)physical_cores;
 
