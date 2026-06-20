@@ -146,12 +146,14 @@ int main(int argc, char *argv[]) {
     hjdoEdit->setMaximumWidth(120);
     topBarLayout->addWidget(hjdoEdit);
     
-    topBarLayout->addWidget(new QLabel("Max,Amp"));
+    topBarLayout->addWidget(new QLabel("Max"));
     QLineEdit *maxEdit = new QLineEdit("0");
     maxEdit->setMaximumWidth(60);
+    topBarLayout->addWidget(maxEdit);
+
+    topBarLayout->addWidget(new QLabel("Amp"));
     QLineEdit *ampEdit = new QLineEdit("0");
     ampEdit->setMaximumWidth(60);
-    topBarLayout->addWidget(maxEdit);
     topBarLayout->addWidget(ampEdit);
     
     topBarLayout->addWidget(new QLabel("Object"));

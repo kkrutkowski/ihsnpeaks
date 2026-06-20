@@ -7,6 +7,7 @@ all: build/lc-qt
 build/lc-qt: build-all
 	@echo "🗜️ Compressing executable with UPX and cleaning up..."
 	docker run --rm -v "$(shell pwd)":/app lc-qt-builder sh -c " \
+		strip -s /app/build/lc-qt; \
 		upx -1 /app/build/lc-qt; \
 		mv /app/build/lc-qt /app/lc-qt-temp; \
 		rm -rf /app/build /app/x86_64-buildroot-linux-musl_sdk-buildroot; \
