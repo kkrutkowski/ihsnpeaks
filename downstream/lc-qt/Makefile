@@ -2,20 +2,19 @@
 
 .PHONY: all clean build-all
 
-all: build/lc-qt
+all: lc-qt
 
-build/lc-qt: build-all
-	@echo "🗜️ Compressing executable with UPX and cleaning up..."
+lc-qt: build-all
+	@echo "🗜️ Compressing executable with UPX..."
 	docker run --rm -v "$(shell pwd)":/app lc-qt-builder sh -c " \
+		/app/buildroot/bin/x86_64-buildroot-linux-musl-strip /app/build/lc-qt; \
 		strip -s /app/build/lc-qt; \
-		upx -1 /app/build/lc-qt; \
-		mv /app/build/lc-qt /app/lc-qt-temp; \
-		rm -rf /app/build /app/x86_64-buildroot-linux-musl_sdk-buildroot; \
-		mkdir -p /app/build; \
-		mv /app/lc-qt-temp /app/build/lc-qt; \
-		chown -R $(shell id -u):$(shell id -g) /app/build; \
-		chmod 755 /app/build/lc-qt"
-	@echo "🎉 Done! Statically compiled and compressed executable is ready at: build/lc-qt"
+		upx /app/build/lc-qt; \
+		chown $(shell id -u):$(shell id -g) /app/build/lc-qt; \
+		chmod 755 /app/build/lc-qt; \
+		mv /app/build/lc-qt /app/lc-qt; \
+		rm -rf /app/build"
+	@echo "🎉 Done! Statically compiled and compressed executable is ready at: ./lc-qt"
 
 
 build-all:
@@ -24,4 +23,15 @@ build-all:
 	./build.sh
 
 clean:
-	rm -rf build x86_64-buildroot-linux-musl_sdk-buildroot
+	rm -rf build
+
+deep-clean: clean
+	@echo "🧹 Removing entire buildroot cache directory..."
+	rm -rf buildroot
+
+docker-clean:
+	@echo "🐳 Removing builder Docker containers and image..."
+	docker rm -f $$(docker ps -a -q --filter ancestor=lc-qt-builder) 2>/dev/null || true
+	docker rmi -f lc-qt-builder 2>/dev/null || true
+
+

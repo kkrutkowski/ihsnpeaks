@@ -12,3 +12,5 @@ __pycache__/
 tmp/*
 .qwen/*
 downstream/cuihsnpeaks/refs/*
+downstream/lc-qt/buildroot
+downstream/lc-qt/lc-qt
