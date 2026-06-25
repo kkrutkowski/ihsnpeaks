@@ -5,7 +5,7 @@ echo "🐳 Building Docker compilation image..."
 docker build -t lc-qt-builder .
 
 echo "🏗️ Compiling lc-qt statically inside Alpine..."
-docker run --rm -v "$(pwd)":/app lc-qt-builder bash -c "
+docker run --rm -v "$(pwd)":/app -v "$(pwd)/../../include":/external_include lc-qt-builder bash -c "
 
     # Delete buildroot if it is a git repo, so we can replace with SDK
     if [ -d "buildroot" ] && [ -d "buildroot/.git" ]; then
@@ -32,7 +32,8 @@ docker run --rm -v "$(pwd)":/app lc-qt-builder bash -c "
     rm -rf build
     mkdir -p build && cd build
     cmake .. \
-        -DCMAKE_TOOLCHAIN_FILE=/app/buildroot/share/buildroot/toolchainfile.cmake
+        -DCMAKE_TOOLCHAIN_FILE=/app/buildroot/share/buildroot/toolchainfile.cmake \
+        -DEXTERNAL_INCLUDE_DIR=/external_include
     make -j\$(nproc)
 "
 

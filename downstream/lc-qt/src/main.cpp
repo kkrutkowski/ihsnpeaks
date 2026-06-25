@@ -15,8 +15,74 @@
 #include <QStyle>
 #include <QPainter>
 #include <QPainterPath>
+#include <QKeyEvent>
 #include <QtMath>
 #include <cstdlib>
+#include <QFile>
+#include <QFileInfo>
+#include <QTextStream>
+#include <QDir>
+
+#include "json.h"
+
+#include "windows/customize_labels.h"
+#include "windows/classification_stats.h"
+
+static const char *CONFIG_FILE = ".lc-config.json";
+
+static void loadConfig(QString labels[10], bool *numpadNav) {
+    QFile f(CONFIG_FILE);
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    QByteArray data = f.readAll();
+    f.close();
+
+    json_value_s *root = json_parse(data.constData(), data.size());
+    if (!root || root->type != json_type_object) {
+        if (root) free(root);
+        return;
+    }
+
+    json_object_s *obj = json_value_as_object(root);
+    for (json_object_element_s *el = obj->start; el; el = el->next) {
+        if (el->value->type == json_type_string) {
+            json_string_s *s = json_value_as_string(el->value);
+            if (!s) continue;
+            QString val = QString::fromUtf8(s->string, s->string_size);
+
+            if (strcmp(el->name->string, "numpad_nav") == 0) {
+                *numpadNav = (val == "true");
+            }
+
+            for (int i = 0; i < 10; ++i) {
+                char key[8];
+                snprintf(key, sizeof(key), "label%d", i);
+                if (strcmp(el->name->string, key) == 0) {
+                    labels[i] = val;
+                    break;
+                }
+            }
+        }
+    }
+    free(root);
+}
+
+static void saveConfig(const QString labels[10], bool numpadNav) {
+    QString json = "{";
+    for (int i = 0; i < 10; ++i) {
+        QString escaped = labels[i];
+        escaped.replace('\\', "\\\\").replace('"', "\\\"");
+        json += QString("\"label%1\":\"%2\"").arg(i).arg(escaped);
+        if (i < 9) json += ',';
+    }
+    json += QString(",\"numpad_nav\":\"%1\"}").arg(numpadNav ? "true" : "false");
+
+    QFile f(CONFIG_FILE);
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+    f.write(json.toUtf8());
+    f.close();
+}
 
 class MockPlotWidget : public QFrame {
     QString m_title;
@@ -64,7 +130,50 @@ protected:
     }
 };
 
+class ClassificationDisplay : public QLineEdit {
+    QString *m_labels;
+    int m_current;
+public:
+    ClassificationDisplay(QString labels[10], QWidget *parent = nullptr)
+        : QLineEdit(parent), m_labels(labels), m_current(0) {
+        setReadOnly(true);
+        setFocusPolicy(Qt::NoFocus);
+        setMinimumWidth(200);
+        setAlignment(Qt::AlignCenter);
+        refreshDisplay();
+    }
 
+    void refreshDisplay() {
+        setText(QString("%1 — %2").arg(m_current).arg(m_labels[m_current]));
+    }
+
+    void setLabels(QString labels[10]) {
+        m_labels = labels;
+        refreshDisplay();
+    }
+
+    void setCurrent(int idx) {
+        m_current = idx;
+        refreshDisplay();
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() == QEvent::KeyPress) {
+            QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+            int key = ke->key();
+            if (key >= Qt::Key_0 && key <= Qt::Key_9) {
+                QWidget *focus = QApplication::focusWidget();
+                bool textHasFocus = focus && qobject_cast<QLineEdit *>(focus);
+                if (!textHasFocus) {
+                    m_current = key - Qt::Key_0;
+                    refreshDisplay();
+                    return true;
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
 
 
 int main(int argc, char *argv[]) {
@@ -76,6 +185,13 @@ int main(int argc, char *argv[]) {
     QMainWindow window;
     window.setWindowTitle("lc v ?.?? 25/05/2026");
     window.resize(900, 850);
+
+    // Classification state
+    QString labels[10] = {"nonvar", "variable", "variable", "variable", "variable",
+                          "variable", "variable", "variable", "variable", "variable"};
+    bool numpadNav = false;
+    loadConfig(labels, &numpadNav);
+    int counts[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     
     // Menu Bar
     QMenuBar *menuBar = window.menuBar();
@@ -198,38 +314,49 @@ int main(int argc, char *argv[]) {
     
     mainLayout->addLayout(listAndCurveLayout);
     
-    // Log Files Section
-    QGroupBox *logGroupBox = new QGroupBox("Log Files");
-    QHBoxLayout *logLayout = new QHBoxLayout(logGroupBox);
-    
-    auto createLogColumn = [](const QString &name, const QString &defaultFile, const QString &actionName) {
-        QVBoxLayout *col = new QVBoxLayout();
-        QHBoxLayout *row1 = new QHBoxLayout();
-        QLineEdit *fileEdit = new QLineEdit(defaultFile);
-        QPushButton *openBtn = new QPushButton("Open");
-        row1->addWidget(fileEdit);
-        row1->addWidget(openBtn);
-        col->addLayout(row1);
-        
-        QHBoxLayout *row2 = new QHBoxLayout();
-        QPushButton *actionBtn = new QPushButton(actionName);
-        QLineEdit *valEdit = new QLineEdit("0");
-        valEdit->setMaximumWidth(50);
-        valEdit->setAlignment(Qt::AlignCenter);
-        row2->addWidget(actionBtn);
-        row2->addWidget(valEdit);
-        col->addLayout(row2);
-        
-        return col;
-    };
-    
-    logLayout->addLayout(createLogColumn("var_per", "var_per", "Periodic"));
-    logLayout->addLayout(createLogColumn("var_susp", "var_susp", "Suspected"));
-    logLayout->addLayout(createLogColumn("var_long", "var_long", "Long Term"));
-    logLayout->addLayout(createLogColumn("var_rej", "var_rej", "Reject"));
-    
-    mainLayout->addWidget(logGroupBox);
-    
+    // Log Files Section — split into Statistics (left) + Classification (right)
+    QHBoxLayout *logFilesLayout = new QHBoxLayout();
+
+    QGroupBox *statsGroupBox = new QGroupBox("Statistics");
+    QHBoxLayout *statsLayout = new QHBoxLayout(statsGroupBox);
+    QPushButton *statsBtn = new QPushButton("Class stats");
+    statsLayout->addStretch();
+    statsLayout->addWidget(statsBtn);
+    statsLayout->addStretch();
+    logFilesLayout->addWidget(statsGroupBox, 1);
+
+    QGroupBox *classGroupBox = new QGroupBox("Classification");
+    QHBoxLayout *classLayout = new QHBoxLayout(classGroupBox);
+
+    QPushButton *customizeBtn = new QPushButton("Customize labels");
+    ClassificationDisplay *classDisplay = new ClassificationDisplay(labels);
+
+    classLayout->addStretch();
+    classLayout->addWidget(customizeBtn);
+    classLayout->addStretch();
+    classLayout->addWidget(new QLabel("Current:"));
+    classLayout->addWidget(classDisplay);
+    classLayout->addStretch();
+    logFilesLayout->addWidget(classGroupBox, 1);
+
+    mainLayout->addLayout(logFilesLayout);
+
+    app.installEventFilter(classDisplay);
+
+    QObject::connect(customizeBtn, &QPushButton::clicked, [&]() {
+        CustomizeLabelsDialog dlg(labels, &numpadNav, &window);
+        QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav]() {
+            classDisplay->refreshDisplay();
+            saveConfig(labels, numpadNav);
+        });
+        dlg.exec();
+    });
+
+    QObject::connect(statsBtn, &QPushButton::clicked, [&]() {
+        ClassificationStatsDialog dlg(labels, counts, &window);
+        dlg.exec();
+    });
+
     // Period Search / Period Modify section
     QHBoxLayout *periodLayout = new QHBoxLayout();
     
