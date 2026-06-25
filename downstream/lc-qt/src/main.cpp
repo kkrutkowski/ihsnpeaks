@@ -259,7 +259,7 @@ int main(int argc, char *argv[]) {
     
     topBarLayout->addWidget(new QLabel("HJDO"));
     QLineEdit *hjdoEdit = new QLineEdit("2450000");
-    hjdoEdit->setMaximumWidth(120);
+    hjdoEdit->setMaximumWidth(80);
     topBarLayout->addWidget(hjdoEdit);
     
     topBarLayout->addWidget(new QLabel("Max"));
