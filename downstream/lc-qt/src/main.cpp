@@ -133,9 +133,10 @@ protected:
 class ClassificationDisplay : public QLineEdit {
     QString *m_labels;
     int m_current;
+    QLineEdit *m_typeEdit;
 public:
     ClassificationDisplay(QString labels[10], QWidget *parent = nullptr)
-        : QLineEdit(parent), m_labels(labels), m_current(0) {
+        : QLineEdit(parent), m_labels(labels), m_current(0), m_typeEdit(nullptr) {
         setReadOnly(true);
         setFocusPolicy(Qt::NoFocus);
         setMinimumWidth(200);
@@ -157,6 +158,10 @@ public:
         refreshDisplay();
     }
 
+    void setTypeEdit(QLineEdit *typeEdit) {
+        m_typeEdit = typeEdit;
+    }
+
     bool eventFilter(QObject *watched, QEvent *event) override {
         if (event->type() == QEvent::KeyPress) {
             QKeyEvent *ke = static_cast<QKeyEvent *>(event);
@@ -167,6 +172,15 @@ public:
                 if (!textHasFocus) {
                     m_current = key - Qt::Key_0;
                     refreshDisplay();
+                    return true;
+                }
+            } else if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+                QWidget *focus = QApplication::focusWidget();
+                bool textHasFocus = focus && qobject_cast<QLineEdit *>(focus);
+                if (!textHasFocus) {
+                    if (m_typeEdit) {
+                        m_typeEdit->setText(m_labels[m_current]);
+                    }
                     return true;
                 }
             }
@@ -187,8 +201,8 @@ int main(int argc, char *argv[]) {
     window.resize(900, 850);
 
     // Classification state
-    QString labels[10] = {"nonvar", "variable", "variable", "variable", "variable",
-                          "variable", "variable", "variable", "variable", "variable"};
+    QString labels[10] = {"nonvar", "var", "unknown", "unknown", "unknown",
+                          "unknown", "unknown", "unknown", "unknown", "unknown"};
     bool numpadNav = false;
     loadConfig(labels, &numpadNav);
     int counts[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
@@ -253,8 +267,9 @@ int main(int argc, char *argv[]) {
     QHBoxLayout *topBarLayout = new QHBoxLayout();
     
     topBarLayout->addWidget(new QLabel("Type"));
-    QLineEdit *typeEdit = new QLineEdit("Var");
+    QLineEdit *typeEdit = new QLineEdit("unknown");
     typeEdit->setMaximumWidth(120);
+    typeEdit->setReadOnly(true);
     topBarLayout->addWidget(typeEdit);
     
     topBarLayout->addWidget(new QLabel("HJDO"));
@@ -330,6 +345,7 @@ int main(int argc, char *argv[]) {
 
     QPushButton *customizeBtn = new QPushButton("Customize labels");
     ClassificationDisplay *classDisplay = new ClassificationDisplay(labels);
+    classDisplay->setTypeEdit(typeEdit);
 
     classLayout->addStretch();
     classLayout->addWidget(customizeBtn);
@@ -344,12 +360,19 @@ int main(int argc, char *argv[]) {
     app.installEventFilter(classDisplay);
 
     QObject::connect(customizeBtn, &QPushButton::clicked, [&]() {
-        CustomizeLabelsDialog dlg(labels, &numpadNav, &window);
-        QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav]() {
-            classDisplay->refreshDisplay();
-            saveConfig(labels, numpadNav);
-        });
-        dlg.exec();
+        bool reopen = true;
+        while (reopen) {
+            reopen = false;
+            CustomizeLabelsDialog dlg(labels, &numpadNav, &window);
+            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav]() {
+                classDisplay->refreshDisplay();
+                saveConfig(labels, numpadNav);
+            });
+            dlg.exec();
+            if (dlg.shouldReopen()) {
+                reopen = true;
+            }
+        }
     });
 
     QObject::connect(statsBtn, &QPushButton::clicked, [&]() {

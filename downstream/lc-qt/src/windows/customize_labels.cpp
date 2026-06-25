@@ -17,7 +17,7 @@ static bool isNumPadSkip(int i) {
 }
 
 CustomizeLabelsDialog::CustomizeLabelsDialog(QString labels[10], bool *numpadNav, QWidget *parent)
-    : QDialog(parent), m_labels(labels), m_numpadNav(numpadNav), m_grid(nullptr) {
+    : QDialog(parent), m_labels(labels), m_numpadNav(numpadNav), m_grid(nullptr), m_shouldReopen(false) {
 
     setWindowTitle("Customize Labels");
     setMinimumWidth(340);
@@ -59,8 +59,8 @@ CustomizeLabelsDialog::CustomizeLabelsDialog(QString labels[10], bool *numpadNav
     m_grid->addWidget(new QLabel("Label"), 0, 1);
 
     static const char *defaults[] = {
-        "nonvar", "variable", "variable", "variable", "variable",
-        "variable", "variable", "variable", "variable", "variable"
+        "nonvar", "var", "unknown", "unknown", "unknown",
+        "unknown", "unknown", "unknown", "unknown", "unknown"
     };
 
     for (int i = 0; i < 10; ++i) {
@@ -95,6 +95,11 @@ CustomizeLabelsDialog::CustomizeLabelsDialog(QString labels[10], bool *numpadNav
 void CustomizeLabelsDialog::toggleNumpadNav(int state) {
     *m_numpadNav = (state == Qt::Checked);
     updateVisibility();
+    if (*m_numpadNav && isVisible()) {
+        apply();
+        m_shouldReopen = true;
+        accept();
+    }
 }
 
 void CustomizeLabelsDialog::updateVisibility() {

@@ -21,19 +21,20 @@ The application renders a dark-themed UI replicating the original `lc` tool's la
 
 The main window has a split "Log Files" row with two `QGroupBox`es:
 - **Statistics** (left): "Class stats" button → opens `ClassificationStatsDialog`
-- **Classification** (right): "Customize labels" button, "Current:" label, and read-only `ClassificationDisplay` box
+- **Classification** (right): "Customize labels" button, "Current:" label, and read-only `ClassificationDisplay` box. Approving by clicking Enter (standard or NumPad) copies the classification to the "Type" input box.
 
 ### ClassificationDisplay (`src/main.cpp`)
 - Read-only `QLineEdit` with `Qt::NoFocus` policy (never steals focus)
-- Installed as `eventFilter` on `QApplication` — intercepts 0-9 key presses globally
-- Only catches 0-9 when the focused widget is NOT a `QLineEdit` (so typing in text fields works normally)
+- Installed as `eventFilter` on `QApplication` — intercepts 0-9 key presses globally to change classification, and Enter/Return key presses to approve the classification (copying text to "Type" box)
+- Only catches keys when the focused widget is NOT a `QLineEdit` (so typing in text fields works normally)
 - Displays current classification as "N — label"
 
 ### CustomizeLabelsDialog (`src/windows/customize_labels.h` / `.cpp`)
 - QDialog with 10 editable label rows (0-9), all editable
-- Defaults: 0="nonvar", 1-9="variable"
+- Defaults: 0="nonvar", 1="var", 2-9="unknown"
 - **NumPad navigation checkbox** at top (default off): when enabled, hides slots 2, 4, 6, 8 (numpad arrow keys), leaving only 0, 1, 3, 5, 7, 9. Visible rows are compacted to the top of the grid (no gaps).
-- Emits `labelsChanged()` signal on OK, which triggers `saveConfig()` and display refresh
+- Checking (but not unchecking) this option dynamically closes and automatically reopens the dialog (preserving user label edits) to clean up layout presentation.
+- Emits `labelsChanged()` signal on OK (or when automatically accepted for NumPad navigation change), which triggers `saveConfig()` and display refresh
 
 ### ClassificationStatsDialog (`src/windows/classification_stats.h` / `.cpp`)
 - QDialog showing a table: number (0-9) | label text | count (all 0 for now)
