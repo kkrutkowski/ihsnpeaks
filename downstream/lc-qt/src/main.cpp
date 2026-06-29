@@ -219,19 +219,18 @@ int main(int argc, char *argv[]) {
     fileMenu->addAction("Quit", &app, &QCoreApplication::quit);
     
     QMenu *optionsMenu = menuBar->addMenu("Options");
-    optionsMenu->addAction("Customize In/Out...");
-    optionsMenu->addAction("Preview");
-    optionsMenu->addAction("Classes");
-    optionsMenu->addAction("Frequency analysis");
+    //optionsMenu->addAction("Customize In/Out...");
+    //optionsMenu->addAction("Preview");
+    //optionsMenu->addAction("Classes");
+    //optionsMenu->addAction("Frequency analysis");
     optionsMenu->addAction("Customize Period Search...");
-    optionsMenu->addAction("Light Curve");
+    //optionsMenu->addAction("Light Curve");
     optionsMenu->addAction("Plot Options");
     optionsMenu->addAction("Period Scroll");
-    optionsMenu->addAction("Multi-Period Window");
-    optionsMenu->addAction("Auto Equalize");
-    optionsMenu->addAction("Auto Power Spec Load");
+    //optionsMenu->addAction("Multi-Period Window");
+    //optionsMenu->addAction("Auto Equalize");
     optionsMenu->addAction("Auto Power Spec Calc");
-    optionsMenu->addAction("Auto Adjust Spectrum Max");
+    //optionsMenu->addAction("Auto Adjust Spectrum Max");
     
     menuBar->addAction("Help");
     
@@ -295,8 +294,8 @@ int main(int argc, char *argv[]) {
     
     // Raw and Phased Plots Row
     QHBoxLayout *plotsLayout = new QHBoxLayout();
-    MockPlotWidget *rawPlot = new MockPlotWidget("Raw Light Curve (Scatter & Error Bars)", false, false, false);
-    MockPlotWidget *phasedPlot = new MockPlotWidget("Phased Light Curve (Sine Model + Scatter)", true, false, false);
+    MockPlotWidget *rawPlot = new MockPlotWidget("Raw Light Curve", false, false, false);
+    MockPlotWidget *phasedPlot = new MockPlotWidget("Phased Light Curve", true, false, false);
     plotsLayout->addWidget(rawPlot);
     plotsLayout->addWidget(phasedPlot);
     mainLayout->addLayout(plotsLayout, 3); // stretch factor 3
@@ -394,7 +393,7 @@ int main(int argc, char *argv[]) {
     searchBtns->addWidget(new QPushButton("Stop"));
     searchBtns->addWidget(new QPushButton("…"));
     searchLayout->addLayout(searchBtns);
-    MockPlotWidget *searchPlot = new MockPlotWidget("Period Search Spectrum (Power vs Frequency)", false, true, false);
+    MockPlotWidget *searchPlot = new MockPlotWidget("Negative Log-Likelihood", false, true, false);
     searchLayout->addWidget(searchPlot, 1);
     periodLayout->addWidget(searchGroupBox, 1);
 
