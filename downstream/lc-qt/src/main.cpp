@@ -392,8 +392,7 @@ int main(int argc, char *argv[]) {
     searchBtns->addWidget(new QPushButton("BLS"));
     searchBtns->addWidget(new QPushButton("P"));
     searchBtns->addWidget(new QPushButton("Stop"));
-    searchBtns->addWidget(new QPushButton("Load"));
-    searchBtns->addWidget(new QPushButton("..."));
+    searchBtns->addWidget(new QPushButton("…"));
     searchLayout->addLayout(searchBtns);
     MockPlotWidget *searchPlot = new MockPlotWidget("Period Search Spectrum (Power vs Frequency)", false, true, false);
     searchLayout->addWidget(searchPlot, 1);
@@ -419,11 +418,11 @@ int main(int argc, char *argv[]) {
     // Bottom layout for modify showing [-] and [+] on the side
     QHBoxLayout *bottomModifyArea = new QHBoxLayout();
     QPushButton *minusBtn = new QPushButton("-");
-    minusBtn->setMaximumSize(20, 20);
+    minusBtn->setMaximumSize(25, 50);
     QPushButton *plusBtn = new QPushButton("+");
-    plusBtn->setMaximumSize(20, 20);
+    plusBtn->setMaximumSize(25, 50);
     
-    MockPlotWidget *modifyPlot = new MockPlotWidget("Period Modify (Model Fitting)", false, false, true);
+    MockPlotWidget *modifyPlot = new MockPlotWidget("Period Modify", false, false, true);
 
     
     QVBoxLayout *leftCtrl = new QVBoxLayout();
