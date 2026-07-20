@@ -82,6 +82,17 @@ static inline void free_buffer(buffer_t* buffer) {
     free(buffer->aovScratch);
     buffer->aovScratch = NULL;
     buffer->aovScratchLen = 0;
+    free(buffer->aovSw);
+    buffer->aovSw = NULL;
+    free(buffer->aovCw);
+    buffer->aovCw = NULL;
+    free(buffer->aovSyw);
+    buffer->aovSyw = NULL;
+    free(buffer->aovCyw);
+    buffer->aovCyw = NULL;
+    free(buffer->aovPower);
+    buffer->aovPower = NULL;
+    buffer->aovArrayCap = 0;
     if (buffer->peaks) {
         free(buffer->peaks);
         buffer->peaks = NULL;
@@ -102,6 +113,34 @@ static inline void free_buffer(buffer_t* buffer) {
             buffer->buf = NULL;
         }
     }
+}
+
+// Lazily allocate (or grow) AoV working arrays to exactly the required capacity.
+static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nterms) {
+    if (buffer->aovSw && buffer->aovArrayCap >= cap) return true;
+    // Free old (too-small) arrays
+    free(buffer->aovSw);
+    buffer->aovSw = NULL;
+    free(buffer->aovCw);
+    buffer->aovCw = NULL;
+    free(buffer->aovSyw);
+    buffer->aovSyw = NULL;
+    free(buffer->aovCyw);
+    buffer->aovCyw = NULL;
+    free(buffer->aovPower);
+    buffer->aovPower = NULL;
+    buffer->aovArrayCap = 0;
+    int max_factor = 2 * nterms;
+    size_t trig_len = (size_t)(max_factor + 1) * cap;
+    size_t ytrig_len = (size_t)(nterms + 1) * cap;
+    buffer->aovSw = aligned_alloc(64, round_buffer(trig_len * sizeof(float)));
+    buffer->aovCw = aligned_alloc(64, round_buffer(trig_len * sizeof(float)));
+    buffer->aovSyw = aligned_alloc(64, round_buffer(ytrig_len * sizeof(float)));
+    buffer->aovCyw = aligned_alloc(64, round_buffer(ytrig_len * sizeof(float)));
+    buffer->aovPower = aligned_alloc(64, round_buffer(cap * sizeof(float)));
+    if (!buffer->aovSw || !buffer->aovCw || !buffer->aovSyw || !buffer->aovCyw || !buffer->aovPower) return false;
+    buffer->aovArrayCap = cap;
+    return true;
 }
 
 static inline int alloc_buffer(buffer_t* buffer, parameters* params) {

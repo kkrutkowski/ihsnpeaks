@@ -729,6 +729,26 @@ void nufft1_precompute(nufft1_workspace *workspace, const double *x, int Mpoints
     }
 }
 
+void nufft1_workspace_copy_precomputed(nufft1_workspace *dst, const nufft1_workspace *src) {
+    if (!dst || !src || !dst->plan || !src->plan) return;
+    if (dst->plan != src->plan) return;  // plans must match
+    int mp = src->active_mpoints;
+    if (mp <= 0 || mp > dst->capacity_mpoints) return;
+    dst->active_mpoints = mp;
+    const nufft1_plan *plan = src->plan;
+    size_t total_points = (size_t)plan->num_factors * (size_t)plan->Mpoints;
+    size_t total_spread = total_points * (size_t)plan->spread_stride;
+    memcpy(dst->shift_r, src->shift_r, total_points * sizeof(float));
+    memcpy(dst->shift_i, src->shift_i, total_points * sizeof(float));
+    memcpy(dst->spread_base_idx, src->spread_base_idx, total_points * sizeof(int));
+    memcpy(dst->spread_weight, src->spread_weight, total_spread * sizeof(float));
+}
+
+int nufft1_workspace_get_active_mpoints(const nufft1_workspace *workspace) {
+    if (!workspace) return 0;
+    return workspace->active_mpoints;
+}
+
 void nufft1_execute(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor) {
     if (!workspace || !workspace->plan || !y_real || !y_imag || !out_real || !out_imag) return;
     const nufft1_plan *plan = workspace->plan;

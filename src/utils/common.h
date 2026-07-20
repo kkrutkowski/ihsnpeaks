@@ -170,6 +170,8 @@ typedef struct {
     float* cobraImag;
     float* aovScratch;
     size_t aovScratchLen;
+    float *aovSw, *aovCw, *aovSyw, *aovCyw, *aovPower;
+    size_t aovArrayCap;
     nufft1_workspace* nufftWorkspace;
     uint32_t activePlanIndex;
     uint32_t activeGridLen;

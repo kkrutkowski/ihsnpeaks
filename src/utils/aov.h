@@ -551,7 +551,8 @@ static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *bu
 }
 
 static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq, float threshold, double df,
-                                    bool write_spectrum, bool store_power, bool scan_peaks, int precision, char *stringBuff) {
+                                    bool write_spectrum, bool store_power, bool scan_peaks, int precision, char *stringBuff,
+                                    const aov_reference_t *precomputed_ref) {
     if (nfreq == 0) return 0;
     if (!aov_target_has_dof(buffer, params->nterms)) {
         if (write_spectrum || store_power) {
@@ -565,7 +566,9 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     }
 
     aov_reference_t ref;
-    if (!aov_prepare_reference(buffer, params->epsilon, &ref)) {
+    if (precomputed_ref) {
+        ref = *precomputed_ref;
+    } else if (!aov_prepare_reference(buffer, params->epsilon, &ref)) {
         if (write_spectrum || store_power) {
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
@@ -581,21 +584,35 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     uint32_t block_len = buffer->activeOutputLen;
 
     // Full-size arrays (stride = nfreq) — two-phase ladder design (toeplitz-ls pattern)
-    float *Sw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
-    float *Cw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
-    float *Syw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
-    float *Cyw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
-    float *power_arr = (float *)aov_aligned_alloc((size_t)nfreq, sizeof(float));
-    if (!Sw || !Cw || !Syw || !Cyw || !power_arr) {
-        free(Sw);
-        free(Cw);
-        free(Syw);
-        free(Cyw);
-        free(power_arr);
-        return -1;
+    // Use pre-allocated buffer arrays when available to avoid per-call page faults.
+    bool aov_arrays_owned = false;
+    float *Sw, *Cw, *Syw, *Cyw, *power_arr;
+    if (buffer->aovSw && buffer->aovArrayCap >= (size_t)nfreq) {
+        Sw = buffer->aovSw;
+        Cw = buffer->aovCw;
+        Syw = buffer->aovSyw;
+        Cyw = buffer->aovCyw;
+        power_arr = buffer->aovPower;
+    } else {
+        aov_arrays_owned = true;
+        Sw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
+        Cw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
+        Syw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
+        Cyw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
+        power_arr = (float *)aov_aligned_alloc((size_t)nfreq, sizeof(float));
+        if (!Sw || !Cw || !Syw || !Cyw || !power_arr) {
+            free(Sw);
+            free(Cw);
+            free(Syw);
+            free(Cyw);
+            free(power_arr);
+            return -1;
+        }
     }
 
-    nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
+    if (nufft1_workspace_get_active_mpoints(buffer->nufftWorkspace) != (int)buffer->n) {
+        nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
+    }
 
     // Initialize factor-0 for ALL frequencies
     for (uint32_t i = 0; i < nfreq; ++i) {
@@ -629,11 +646,13 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         }
     }
 
-    free(Sw);
-    free(Cw);
-    free(Syw);
-    free(Cyw);
-    free(power_arr);
+    if (aov_arrays_owned) {
+        free(Sw);
+        free(Cw);
+        free(Syw);
+        free(Cyw);
+        free(power_arr);
+    }
     return status;
 }
 

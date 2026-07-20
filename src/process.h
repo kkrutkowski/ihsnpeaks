@@ -296,6 +296,61 @@ static inline void execute_nufft_sweep(buffer_t *buffer, parameters *params, dou
     }
 }
 
+// ======================== Peak Merge Utilities ========================
+
+static inline bool quadratic_peak_position(double freq, double fstep, float left, float center, float right, float oversampling, double *peak_freq,
+                                           float *peak_magnitude) {
+    if (!float_is_finite_bits(left) || !float_is_finite_bits(center) || !float_is_finite_bits(right)) return false;
+    *peak_freq = freq;
+    *peak_magnitude = center;
+    if (oversampling < 3.0f) return true;
+
+    double x0 = freq - fstep;
+    double x1 = freq;
+    double x2 = freq + fstep;
+    double slope01 = ((double)center - (double)left) / (x1 - x0);
+    double slope12 = ((double)right - (double)center) / (x2 - x1);
+    double curvature = (slope12 - slope01) / (x2 - x0);
+    if (curvature == 0.0) return true;
+
+    double linear = slope01 - curvature * (x0 + x1);
+    double vx = -linear / (2.0 * curvature);
+    double vy = (double)left + slope01 * (vx - x0) + curvature * (vx - x0) * (vx - x1);
+    float vyf = (float)vy;
+    if (double_is_finite_bits(vx) && float_is_finite_bits(vyf) && vx >= x0 && vx <= x2) {
+        *peak_freq = vx;
+        *peak_magnitude = vyf;
+    }
+    return true;
+}
+
+static inline float direct_merge_rank(const parameters *params, const eval_method_t *method, const peak_t *peak) {
+    return mode_defers_peak_evaluation(params->mode) ? peak->p : eval_peak_rank(method, peak);
+}
+
+static inline void direct_merge_peak_stable(peak_t *dst, uint32_t *dst_count, int max_peaks, const peak_t *peak, const parameters *params,
+                                            const eval_method_t *method) {
+    if (max_peaks <= 0 || !peak) return;
+    float rank = direct_merge_rank(params, method, peak);
+    if (!float_is_finite_bits(rank)) return;
+    uint32_t count = *dst_count;
+    if (count >= (uint32_t)max_peaks) {
+        float last_rank = direct_merge_rank(params, method, &dst[max_peaks - 1]);
+        if (rank <= last_rank) return;
+    }
+
+    uint32_t idx = count;
+    while (idx > 0U && rank > direct_merge_rank(params, method, &dst[idx - 1U])) {
+        --idx;
+    }
+    if (count < (uint32_t)max_peaks) {
+        ++count;
+        *dst_count = count;
+    }
+    for (uint32_t i = count - 1U; i > idx; --i) dst[i] = dst[i - 1U];
+    if (idx < (uint32_t)max_peaks) dst[idx] = *peak;
+}
+
 // ======================== Frequency Range Slicing (Parallel Sweep) ========================
 // Divides [fmin, fmax] into N contiguous sub-ranges (one per thread).
 // Each worker runs the unmodified serial sweep on its sub-range, then results are merged.
@@ -316,6 +371,12 @@ typedef struct {
     double fstep;
     uint32_t nfreq;
     freq_slice_workset_t *worksets;
+    float threshold;
+    double df;
+    bool scan_peaks;
+    bool write_spectrum;
+    int precision;
+    float aov_ref_ws, aov_ref_ymean, aov_ref_yws, aov_ref_chi2_ref;
 } freq_slice_context_t;
 
 static inline void freq_slice_ihs_worker(void *data, long i, int thread_id) {
@@ -366,6 +427,32 @@ static inline void freq_slice_ihs_worker(void *data, long i, int thread_id) {
     execute_nufft_sweep(buf, ctx->params, slice_fmin, ctx->fstep, work->slice_nfreq);
     work->status = 0;
 
+    // Per-slice peak finding (on-the-fly, no full power array merge needed)
+    if (ctx->scan_peaks) {
+        buf->nPeaks = 0;
+        for (uint32_t i = 1; i + 1 < work->slice_nfreq; ++i) {
+            float left = buf->power[i - 1], center = buf->power[i], right = buf->power[i + 1];
+            if (center > left && center > right && center > ctx->threshold) {
+                double freq = slice_fmin + (double)i * ctx->fstep;
+                double peak_freq = freq;
+                float peak_mag = center;
+                quadratic_peak_position(freq, ctx->fstep, left, center, right, ctx->params->oversamplingFactor, &peak_freq, &peak_mag);
+                append_peak(buf, ctx->params, peak_freq, peak_mag, ctx->df);
+            }
+        }
+    }
+
+    // Per-slice spectrum output
+    if (ctx->write_spectrum) {
+        for (uint32_t i = 0; i < work->slice_nfreq; ++i) {
+            double freq = slice_fmin + (double)i * ctx->fstep;
+            float magnitude = correct_ihs_res(buf->power[i], ctx->params->nterms);
+            if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
+            char sb[64];
+            appendFreq(freq, magnitude, ctx->precision, ctx->params->outputPeriod, &buf->spectrum, sb);
+        }
+    }
+
     // Restore worker's own pointers so free_buffer doesn't free primary's data
     buf->x = own_x;
     buf->y = own_y;
@@ -373,7 +460,8 @@ static inline void freq_slice_ihs_worker(void *data, long i, int thread_id) {
     buf->wy = own_wy;
 }
 
-static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *params, kt_forpool_t *pool, double fmin, double fstep, uint32_t nfreq) {
+static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *params, kt_forpool_t *pool, double fmin, double fstep, uint32_t nfreq,
+                                                float threshold, double df, bool scan_peaks, bool write_spectrum, int precision) {
     if (nfreq == 0) return true;
     if (!pool || pool->n_threads < 2 || !params->buffers || params->nbuffers < pool->n_threads) {
         execute_nufft_sweep(buffer, params, fmin, fstep, nfreq);
@@ -384,6 +472,10 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
     uint32_t nworksets = (uint32_t)nthreads;
     if (nworksets > nfreq) nworksets = nfreq;
     if (nworksets < 2U) nworksets = 2U;
+
+    // Approach A: re-activate plan for per-thread workload
+    uint32_t per_thread_nfreq = (nfreq + nworksets - 1U) / nworksets;
+    activate_target_nufft_plan(buffer, params, per_thread_nfreq);
 
     // Frequency range slicing with 1-frequency overlap at boundaries
     uint32_t freqs_per_worker = (nfreq + nworksets - 2U) / (nworksets - 1U);
@@ -405,7 +497,17 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
         worksets[w].status = -1;
     }
 
-    freq_slice_context_t ctx = {.primary = buffer, .params = params, .fmin = fmin, .fstep = fstep, .nfreq = nfreq, .worksets = worksets};
+    freq_slice_context_t ctx = {.primary = buffer,
+                                .params = params,
+                                .fmin = fmin,
+                                .fstep = fstep,
+                                .nfreq = nfreq,
+                                .worksets = worksets,
+                                .threshold = threshold,
+                                .df = df,
+                                .scan_peaks = scan_peaks,
+                                .write_spectrum = write_spectrum,
+                                .precision = precision};
 
     kt_forpool(pool, freq_slice_ihs_worker, &ctx, (long)nworksets);
 
@@ -414,13 +516,40 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
         if (worksets[w].status != 0) ok = false;
     }
 
-    // Merge: copy each worker's power into primary, skipping overlap for workers > 0
+    // Merge results
     if (ok) {
-        for (uint32_t w = 0; w < nworksets; ++w) {
-            if (worksets[w].slice_nfreq == 0) continue;
-            buffer_t *buf = params->buffers[worksets[w].buffer_idx];
-            uint32_t skip = (w == 0) ? 0U : 1U;
-            memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
+        if (scan_peaks) {
+            // Pairwise tree merge of peak lists + spectrum concatenation
+            const eval_method_t *eval_method = eval_method_for_params(params);
+            int max_peaks = params->npeaks > 0 ? params->npeaks : 0;
+
+            buffer->nPeaks = 0;
+            if (max_peaks > 0) {
+                for (uint32_t w = 0; w < nworksets; ++w) {
+                    if (worksets[w].slice_nfreq == 0) continue;
+                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    for (uint32_t p = 0; p < buf->nPeaks; ++p) {
+                        direct_merge_peak_stable(buffer->peaks, &buffer->nPeaks, max_peaks, &buf->peaks[p], params, eval_method);
+                    }
+                }
+            }
+
+            if (write_spectrum) {
+                sdsclear(buffer->spectrum);
+                for (uint32_t w = 0; w < nworksets; ++w) {
+                    if (worksets[w].slice_nfreq == 0) continue;
+                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    buffer->spectrum = sdscatsds(buffer->spectrum, buf->spectrum);
+                }
+            }
+        } else {
+            // Fallback: merge power arrays (spectrum_prewhiten case needs full power[])
+            for (uint32_t w = 0; w < nworksets; ++w) {
+                if (worksets[w].slice_nfreq == 0) continue;
+                buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                uint32_t skip = (w == 0) ? 0U : 1U;
+                memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
+            }
         }
     }
 
@@ -478,10 +607,17 @@ static inline void freq_slice_aov_worker(void *data, long i, int thread_id) {
     buf->activeOutputLen = primary->activeOutputLen;
     buf->activeLadderLevels = primary->activeLadderLevels;
 
-    // Run serial AoV sweep on this worker's frequency sub-range (store_power=true, no spectrum/peaks)
+    // Copy precomputed spreading indices/weights from primary (hoisted nufft1_precompute)
+    nufft1_workspace_copy_precomputed(buf->nufftWorkspace, primary->nufftWorkspace);
+
+    // Run serial AoV sweep on this worker's frequency sub-range (on-the-fly peaks, no store_power)
     double slice_fmin = ctx->fmin + (double)work->freq_start * ctx->fstep;
     char stringBuff[64];
-    int status = execute_aov_sweep(buf, params, slice_fmin, ctx->fstep, work->slice_nfreq, INFINITY, 0.0, false, true, false, 0, stringBuff);
+    buf->nPeaks = 0;
+    bool store_power = !ctx->scan_peaks;  // store power only when not doing on-the-fly peaks (spectrum_prewhiten case)
+    aov_reference_t ref = {.ws = ctx->aov_ref_ws, .ymean = ctx->aov_ref_ymean, .yws = ctx->aov_ref_yws, .chi2_ref = ctx->aov_ref_chi2_ref};
+    int status = execute_aov_sweep(buf, params, slice_fmin, ctx->fstep, work->slice_nfreq, ctx->threshold, ctx->df, ctx->write_spectrum, store_power,
+                                   ctx->scan_peaks, ctx->precision, stringBuff, &ref);
     work->status = (status == 0) ? 0 : -1;
 
     // Restore worker's own pointers so free_buffer doesn't free primary's data
@@ -491,22 +627,21 @@ static inline void freq_slice_aov_worker(void *data, long i, int thread_id) {
     buf->wy = own_wy;
 }
 
-static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, kt_forpool_t *pool, double fmin, double fstep, uint32_t nfreq) {
+static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, kt_forpool_t *pool, double fmin, double fstep, uint32_t nfreq,
+                                              float threshold, double df, bool scan_peaks, bool write_spectrum, int precision) {
     if (nfreq == 0) return true;
     if (!pool || pool->n_threads < 2 || !params->buffers || params->nbuffers < pool->n_threads) {
         // Fallback to serial
         char stringBuff[64];
-        return execute_aov_sweep(buffer, params, fmin, fstep, nfreq, INFINITY, 0.0, false, true, false, 0, stringBuff) == 0;
+        return execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, write_spectrum, true, scan_peaks, precision, stringBuff, NULL) == 0;
     }
 
     // Handle edge cases identically to serial version
     if (!aov_target_has_dof(buffer, params->nterms)) {
-        memset(buffer->power, 0, (size_t)nfreq * sizeof(float));
         return true;
     }
     aov_reference_t ref;
     if (!aov_prepare_reference(buffer, params->epsilon, &ref)) {
-        memset(buffer->power, 0, (size_t)nfreq * sizeof(float));
         return true;
     }
 
@@ -514,6 +649,13 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
     uint32_t nworksets = (uint32_t)nthreads;
     if (nworksets > nfreq) nworksets = nfreq;
     if (nworksets < 2U) nworksets = 2U;
+
+    // Approach A: re-activate plan for per-thread workload
+    uint32_t per_thread_nfreq = (nfreq + nworksets - 1U) / nworksets;
+    activate_target_nufft_plan(buffer, params, per_thread_nfreq);
+
+    // Hoist nufft1_precompute: compute once on primary, workers will copy
+    nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
 
     // Frequency range slicing with 1-frequency overlap at boundaries
     uint32_t freqs_per_worker = (nfreq + nworksets - 2U) / (nworksets - 1U);
@@ -535,7 +677,31 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
         worksets[w].status = -1;
     }
 
-    freq_slice_context_t ctx = {.primary = buffer, .params = params, .fmin = fmin, .fstep = fstep, .nfreq = nfreq, .worksets = worksets};
+    // Ensure each worker buffer has AoV arrays sized to the actual per-thread slice
+    for (uint32_t w = 0; w < nworksets; ++w) {
+        if (worksets[w].slice_nfreq == 0) continue;
+        buffer_t *buf = params->buffers[w];
+        if (!buffer_ensure_aov_arrays(buf, (size_t)worksets[w].slice_nfreq, params->nterms)) {
+            free(worksets);
+            return false;
+        }
+    }
+
+    freq_slice_context_t ctx = {.primary = buffer,
+                                .params = params,
+                                .fmin = fmin,
+                                .fstep = fstep,
+                                .nfreq = nfreq,
+                                .worksets = worksets,
+                                .threshold = threshold,
+                                .df = df,
+                                .scan_peaks = scan_peaks,
+                                .write_spectrum = write_spectrum,
+                                .precision = precision,
+                                .aov_ref_ws = ref.ws,
+                                .aov_ref_ymean = ref.ymean,
+                                .aov_ref_yws = ref.yws,
+                                .aov_ref_chi2_ref = ref.chi2_ref};
 
     kt_forpool(pool, freq_slice_aov_worker, &ctx, (long)nworksets);
 
@@ -544,44 +710,45 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
         if (worksets[w].status != 0) ok = false;
     }
 
-    // Merge: copy each worker's power into primary, skipping overlap for workers > 0
+    // Merge results
     if (ok) {
-        for (uint32_t w = 0; w < nworksets; ++w) {
-            if (worksets[w].slice_nfreq == 0) continue;
-            buffer_t *buf = params->buffers[worksets[w].buffer_idx];
-            uint32_t skip = (w == 0) ? 0U : 1U;
-            memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
+        if (scan_peaks) {
+            // Pairwise tree merge of peak lists + spectrum concatenation
+            const eval_method_t *eval_method = eval_method_for_params(params);
+            int max_peaks = params->npeaks > 0 ? params->npeaks : 0;
+
+            buffer->nPeaks = 0;
+            if (max_peaks > 0) {
+                for (uint32_t w = 0; w < nworksets; ++w) {
+                    if (worksets[w].slice_nfreq == 0) continue;
+                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    for (uint32_t p = 0; p < buf->nPeaks; ++p) {
+                        direct_merge_peak_stable(buffer->peaks, &buffer->nPeaks, max_peaks, &buf->peaks[p], params, eval_method);
+                    }
+                }
+            }
+
+            if (write_spectrum) {
+                sdsclear(buffer->spectrum);
+                for (uint32_t w = 0; w < nworksets; ++w) {
+                    if (worksets[w].slice_nfreq == 0) continue;
+                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    buffer->spectrum = sdscatsds(buffer->spectrum, buf->spectrum);
+                }
+            }
+        } else {
+            // Fallback: merge power arrays (spectrum_prewhiten case needs full power[])
+            for (uint32_t w = 0; w < nworksets; ++w) {
+                if (worksets[w].slice_nfreq == 0) continue;
+                buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                uint32_t skip = (w == 0) ? 0U : 1U;
+                memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
+            }
         }
     }
 
     free(worksets);
     return ok;
-}
-
-static inline bool quadratic_peak_position(double freq, double fstep, float left, float center, float right, float oversampling, double *peak_freq,
-                                           float *peak_magnitude) {
-    if (!float_is_finite_bits(left) || !float_is_finite_bits(center) || !float_is_finite_bits(right)) return false;
-    *peak_freq = freq;
-    *peak_magnitude = center;
-    if (oversampling < 3.0f) return true;
-
-    double x0 = freq - fstep;
-    double x1 = freq;
-    double x2 = freq + fstep;
-    double slope01 = ((double)center - (double)left) / (x1 - x0);
-    double slope12 = ((double)right - (double)center) / (x2 - x1);
-    double curvature = (slope12 - slope01) / (x2 - x0);
-    if (curvature == 0.0) return true;
-
-    double linear = slope01 - curvature * (x0 + x1);
-    double vx = -linear / (2.0 * curvature);
-    double vy = (double)left + slope01 * (vx - x0) + curvature * (vx - x0) * (vx - x1);
-    float vyf = (float)vy;
-    if (double_is_finite_bits(vx) && float_is_finite_bits(vyf) && vx >= x0 && vx <= x2) {
-        *peak_freq = vx;
-        *peak_magnitude = vyf;
-    }
-    return true;
 }
 
 static inline void capture_spectrum_column(buffer_t *buffer, const parameters *params, const eval_method_t *eval_method, bool use_aov, bool direct_eval_grid,
@@ -711,33 +878,6 @@ static inline void free_direct_scratch(buffer_t *scratch) {
     scratch->peaks = NULL;
     scratch->nPeaks = 0U;
     scratch->allocated = false;
-}
-
-static inline float direct_merge_rank(const parameters *params, const eval_method_t *method, const peak_t *peak) {
-    return mode_defers_peak_evaluation(params->mode) ? peak->p : eval_peak_rank(method, peak);
-}
-
-static inline void direct_merge_peak_stable(peak_t *dst, uint32_t *dst_count, int max_peaks, const peak_t *peak, const parameters *params,
-                                            const eval_method_t *method) {
-    if (max_peaks <= 0 || !peak) return;
-    float rank = direct_merge_rank(params, method, peak);
-    if (!float_is_finite_bits(rank)) return;
-    uint32_t count = *dst_count;
-    if (count >= (uint32_t)max_peaks) {
-        float last_rank = direct_merge_rank(params, method, &dst[max_peaks - 1]);
-        if (rank <= last_rank) return;
-    }
-
-    uint32_t idx = count;
-    while (idx > 0U && rank > direct_merge_rank(params, method, &dst[idx - 1U])) {
-        --idx;
-    }
-    if (count < (uint32_t)max_peaks) {
-        ++count;
-        *dst_count = count;
-    }
-    for (uint32_t i = count - 1U; i > idx; --i) dst[i] = dst[i - 1U];
-    if (idx < (uint32_t)max_peaks) dst[idx] = *peak;
 }
 
 static inline void direct_grid_worker(void *data, long i, int thread_id) {
@@ -958,21 +1098,25 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         } else if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
                 if (direct_pool && direct_pool->n_threads > 1 && params->buffers && params->nbuffers >= direct_pool->n_threads) {
-                    // Parallel AoV: fills power[], serial post-pass handles spectrum + peaks
-                    if (!execute_aov_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq)) {
+                    // Parallel AoV: on-the-fly peaks + spectrum, no power[] merge
+                    aov_streamed = true;
+                    if (!execute_aov_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq, threshold, df, true,
+                                                    params->spectrum && !spectrum_prewhiten, n)) {
                         fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
                     }
                 } else {
                     aov_streamed = true;
                     if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, params->spectrum && !spectrum_prewhiten, params->spectrum, true, n,
-                                          stringBuff) != 0) {
+                                          stringBuff, NULL) != 0) {
                         fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
                     }
                 }
             } else {
                 if (direct_pool && direct_pool->n_threads > 1 && params->buffers && params->nbuffers >= direct_pool->n_threads) {
-                    // Parallel NuFFT: fills power[], serial post-pass handles spectrum + peaks
-                    if (!execute_nufft_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq)) {
+                    // Parallel NuFFT: on-the-fly peaks + spectrum, no power[] merge
+                    aov_streamed = true;
+                    if (!execute_nufft_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq, threshold, df, true,
+                                                      params->spectrum && !spectrum_prewhiten, n)) {
                         fprintf(stderr, "IHS periodogram failed for %s\n", in_file);
                     }
                 } else {
@@ -1079,18 +1223,18 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         } else if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
                 if (direct_pool && direct_pool->n_threads > 1 && params->buffers && params->nbuffers >= direct_pool->n_threads) {
-                    if (!execute_aov_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq)) {
+                    if (!execute_aov_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq, threshold, df, false, false, n)) {
                         fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
                     }
                 } else {
                     final_aov_streamed = true;
-                    if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, false, true, false, n, stringBuff) != 0) {
+                    if (execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, false, true, false, n, stringBuff, NULL) != 0) {
                         fprintf(stderr, "AoV periodogram failed for %s\n", in_file);
                     }
                 }
             } else {
                 if (direct_pool && direct_pool->n_threads > 1 && params->buffers && params->nbuffers >= direct_pool->n_threads) {
-                    if (!execute_nufft_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq)) {
+                    if (!execute_nufft_sweep_parallel(buffer, params, direct_pool, fmin, fstep, nfreq, threshold, df, false, false, n)) {
                         fprintf(stderr, "IHS periodogram failed for %s\n", in_file);
                     }
                 } else {
