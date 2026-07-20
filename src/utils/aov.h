@@ -451,6 +451,36 @@ static inline void aov_compute_trig_sums_block(buffer_t *buffer, parameters *par
     }
 }
 
+// Ladder-based trig sum computation: uses twiddle ladders to advance through blocks
+// instead of recomputing sin/cos from scratch for each block.
+// Fills S[q*total_count + rel_idx] and C[q*total_count + rel_idx] for q=1..max_factor.
+// base_offset is the absolute freq index of the start of the output arrays.
+static inline void aov_compute_trig_sums_ladder(buffer_t *buffer, double fmin, double fstep, size_t block_begin, size_t block_end, int max_factor,
+                                                float epsilon, float ymean, bool yweighted, float *S, float *C, uint32_t total_count, uint32_t base_offset) {
+    uint32_t block_len = buffer->activeOutputLen;
+    for (int q = 1; q <= max_factor; ++q) {
+        double freq_factor = (double)q;
+        aov_fill_complex_input(buffer, fmin, freq_factor, epsilon, ymean, yweighted);
+        fill_twiddle_ladder(buffer, fstep, freq_factor);
+        compute_work_at_block(buffer, block_begin);
+
+        for (size_t block_idx = block_begin; block_idx < block_end; ++block_idx) {
+            uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
+            uint32_t count = block_len;
+            if (base + count > base_offset + total_count) count = base_offset + total_count - base;
+            uint32_t rel_base = base - base_offset;
+
+            nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, q);
+            memcpy(C + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockReal, (size_t)count * sizeof(float));
+            memcpy(S + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockImag, (size_t)count * sizeof(float));
+
+            if (block_idx + 1U < block_end) {
+                advance_work_ladder(buffer, block_idx + 1U);
+            }
+        }
+    }
+}
+
 static inline bool aov_quadratic_peak_position(double freq, double fstep, float left, float center, float right, float oversampling, double *peak_freq,
                                                float *peak_magnitude) {
     if (!float_is_finite_bits(left) || !float_is_finite_bits(center) || !float_is_finite_bits(right)) return false;
@@ -549,54 +579,52 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     int degree = params->nterms;
     int max_factor = 2 * degree;
     uint32_t block_len = buffer->activeOutputLen;
-    float *Sw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)block_len, sizeof(float));
-    float *Cw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)block_len, sizeof(float));
-    float *Syw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)block_len, sizeof(float));
-    float *Cyw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)block_len, sizeof(float));
-    float *block_power = (float *)aov_aligned_alloc((size_t)block_len, sizeof(float));
-    if (!Sw || !Cw || !Syw || !Cyw || !block_power) {
+
+    // Full-size arrays (stride = nfreq) — two-phase ladder design (toeplitz-ls pattern)
+    float *Sw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
+    float *Cw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
+    float *Syw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
+    float *Cyw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
+    float *power_arr = (float *)aov_aligned_alloc((size_t)nfreq, sizeof(float));
+    if (!Sw || !Cw || !Syw || !Cyw || !power_arr) {
         free(Sw);
         free(Cw);
         free(Syw);
         free(Cyw);
-        free(block_power);
+        free(power_arr);
         return -1;
     }
 
     nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
 
+    // Initialize factor-0 for ALL frequencies
+    for (uint32_t i = 0; i < nfreq; ++i) {
+        Sw[i] = 0.0f;
+        Cw[i] = ref.ws;
+        Syw[i] = 0.0f;
+        Cyw[i] = ref.yws;
+    }
+
+    // Phase 1: Ladder computes all trig sums (sin/cos only once per factor)
     size_t num_blocks = ((size_t)nfreq + (size_t)block_len - 1U) / (size_t)block_len;
+    aov_compute_trig_sums_ladder(buffer, fmin, fstep, 0, num_blocks, max_factor, params->epsilon, ref.ymean, false, Sw, Cw, nfreq, 0);
+    aov_compute_trig_sums_ladder(buffer, fmin, fstep, 0, num_blocks, degree, params->epsilon, ref.ymean, true, Syw, Cyw, nfreq, 0);
+
+    // Phase 2: Solve all frequencies at once
     int status = 0;
-    aov_peak_stream_t stream = {0};
+    if (degree == 1) {
+        aov_gls_impl(Sw, Cw, Syw, Cyw, (int)nfreq, ref.ws, ref.yws, ref.chi2_ref, power_arr);
+    } else {
+        status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)nfreq, degree, ref.chi2_ref, power_arr);
+    }
 
-    for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
-        uint32_t count = block_len;
-        if (base + count > nfreq) count = nfreq - base;
-        double block_fmin = fmin + ((double)base * fstep);
-
-        for (uint32_t i = 0; i < count; ++i) {
-            Sw[i] = 0.0f;
-            Cw[i] = ref.ws;
-            Syw[i] = 0.0f;
-            Cyw[i] = ref.yws;
-        }
-
-        aov_compute_trig_sums_block(buffer, params, block_fmin, count, max_factor, params->epsilon, ref.ymean, false, Sw, Cw);
-        aov_compute_trig_sums_block(buffer, params, block_fmin, count, degree, params->epsilon, ref.ymean, true, Syw, Cyw);
-
-        if (degree == 1) {
-            aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref.ws, ref.yws, ref.chi2_ref, block_power);
-        } else {
-            status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref.chi2_ref, block_power);
-            if (status != 0) break;
-        }
-
-        for (uint32_t k = 0; k < count; ++k) {
-            uint32_t idx = base + k;
+    // Phase 3: Output streaming (peaks/spectrum)
+    if (status == 0) {
+        aov_peak_stream_t stream = {0};
+        for (uint32_t idx = 0; idx < nfreq; ++idx) {
             double freq = fmin + ((double)idx * fstep);
-            if (store_power) buffer->power[idx] = block_power[k];
-            aov_stream_peak_value(&stream, buffer, params, freq, block_power[k], idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum,
+            if (store_power) buffer->power[idx] = power_arr[idx];
+            aov_stream_peak_value(&stream, buffer, params, freq, power_arr[idx], idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum,
                                   scan_peaks);
         }
     }
@@ -605,7 +633,7 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     free(Cw);
     free(Syw);
     free(Cyw);
-    free(block_power);
+    free(power_arr);
     return status;
 }
 

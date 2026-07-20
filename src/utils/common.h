@@ -162,6 +162,8 @@ typedef struct {
     float* workImag;
     float* deltaReal;
     float* deltaImag;
+    float* deltaBackReal;
+    float* deltaBackImag;
     float* fftReal;
     float* fftImag;
     float* cobraReal;

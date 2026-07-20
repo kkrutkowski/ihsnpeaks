@@ -151,8 +151,18 @@ int main(int argc, char *argv[]) {
         buffer_t buffer = {0};           // initalize the pointers to NULL to avoid segfaults
         alloc_buffer(&buffer, &params);  //, params.avgLen
         kt_forpool_t *directPool = NULL;
-        if (mode_uses_direct_eval_grid(params.mode) && nThreads > 1) {
-            directPool = kt_forpool_init(nThreads, params.idle);
+        if (nThreads > 1) {
+            if (mode_uses_direct_eval_grid(params.mode)) {
+                directPool = kt_forpool_init(nThreads, params.idle);
+            } else if (!mode_uses_direct_gb_grid(params.mode)) {
+                // m0-m4: allocate per-worker buffers for parallel NuFFT/AoV sweep
+                params.nbuffers = nThreads;
+                alloc_buffers(&params);
+                for (int i = 0; i < params.nbuffers; i++) {
+                    alloc_buffer(params.buffers[i], &params);
+                }
+                directPool = kt_forpool_init(nThreads, params.idle);
+            }
         }
         process_target(kv_A(params.targets, 0).path, &buffer, &params, false, directPool);
         // print_buffer(&buffer);

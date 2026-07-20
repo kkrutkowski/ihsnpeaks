@@ -67,6 +67,10 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->deltaReal = NULL;
     free(buffer->deltaImag);
     buffer->deltaImag = NULL;
+    free(buffer->deltaBackReal);
+    buffer->deltaBackReal = NULL;
+    free(buffer->deltaBackImag);
+    buffer->deltaBackImag = NULL;
     free(buffer->fftReal);
     buffer->fftReal = NULL;
     free(buffer->fftImag);
@@ -139,11 +143,10 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->readBuf = aligned_alloc(64, round_buffer(params->maxSize));
     }
     if (!buffer->readBuf) goto error;
-    bool needs_power_grid = mode_uses_direct_eval_grid(params->mode) || !periodogram_uses_aov(params->periodogramMethod) || params->spectrum;
-    if (needs_power_grid && !buffer->power) {
+    if (!buffer->power) {
         buffer->power = aligned_alloc(64, round_buffer(((size_t)params->maxFreqCount + 2U) * sizeof(float)));
     }
-    if (needs_power_grid && !buffer->power) goto error;
+    if (!buffer->power) goto error;
     if (!buffer->blockReal) {
         buffer->blockReal = aligned_alloc(64, round_buffer((size_t)params->outputLen * sizeof(float)));
     }
@@ -177,6 +180,14 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->deltaImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
     }
     if (!buffer->deltaImag) goto error;
+    if (!buffer->deltaBackReal) {
+        buffer->deltaBackReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
+    }
+    if (!buffer->deltaBackReal) goto error;
+    if (!buffer->deltaBackImag) {
+        buffer->deltaBackImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
+    }
+    if (!buffer->deltaBackImag) goto error;
     if (!buffer->fftReal) {
         buffer->fftReal = aligned_alloc(64, round_buffer(params->nufftExternalSizes.fft_len * sizeof(float)));
     }

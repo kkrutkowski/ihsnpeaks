@@ -78,9 +78,9 @@ enum json_parse_flags_e {
      {"a" : null,} would be allowed wi*th this option on. */
     json_parse_flags_allow_trailing_comma = 0x1,
 
-        /* allow unquoted keys for objects. For example, {a : null} would be allowed
-         w ith this option on. */
-            json_parse_flags_allow_unquoted_keys = 0x2,
+    /* allow unquoted keys for objects. For example, {a : null} would be allowed
+     w ith this option on. */
+    json_parse_flags_allow_unquoted_keys = 0x2,
 
     /* allow a global unbracketed object. For example, a : null, b : true, c : {}
      would be allowed with this option* on. */
@@ -90,13 +90,13 @@ enum json_parse_flags_e {
      example, a = null, b : true would* be allowed with this option on. */
     json_parse_flags_allow_equals_in_object = 0x8,
 
-        /* allow that objects don't have to have comma separators between key/value
-         p airs. */
-            json_parse_flags_allow_no_commas = 0x10,
+    /* allow that objects don't have to have comma separators between key/value
+     p airs. */
+    json_parse_flags_allow_no_commas = 0x10,
 
-            /* allow c-style comments (either variants) to be ignored in the input JSON
-             f ile. */
-                json_parse_flags_allow_c_style_comments = 0x20,
+    /* allow c-style comments (either variants) to be ignored in the input JSON
+     f ile. */
+    json_parse_flags_allow_c_style_comments = 0x20,
 
     /* deprecated flag, unused. */
     json_parse_flags_deprecated = 0x40,
@@ -122,18 +122,18 @@ enum json_parse_flags_e {
     /* allow multi line string values. */
     json_parse_flags_allow_multi_line_strings = 0x2000,
 
-        /* allow simplified JSON to be parsed. Simplified JSON is an enabling of a set
-         o f other parsing options. */
-            json_parse_flags_allow_simplified_json =
-                (json_parse_flags_allow_trailing_comma | json_parse_flags_allow_unquoted_keys | json_parse_flags_allow_global_object |
-                 json_parse_flags_allow_equals_in_object | json_parse_flags_allow_no_commas),
+    /* allow simplified JSON to be parsed. Simplified JSON is an enabling of a set
+     o f other parsing options. */
+    json_parse_flags_allow_simplified_json =
+        (json_parse_flags_allow_trailing_comma | json_parse_flags_allow_unquoted_keys | json_parse_flags_allow_global_object |
+         json_parse_flags_allow_equals_in_object | json_parse_flags_allow_no_commas),
 
-            /* allow JSON5 to be parsed. JSON5 is an enabling of a set of other parsing
-             o ptions. */
-                json_parse_flags_allow_json5 =
-                    (json_parse_flags_allow_trailing_comma | json_parse_flags_allow_unquoted_keys | json_parse_flags_allow_c_style_comments |
-                     json_parse_flags_allow_single_quoted_strings | json_parse_flags_allow_hexadecimal_numbers | json_parse_flags_allow_leading_plus_sign |
-                     json_parse_flags_allow_leading_or_trailing_decimal_point | json_parse_flags_allow_inf_and_nan | json_parse_flags_allow_multi_line_strings)
+    /* allow JSON5 to be parsed. JSON5 is an enabling of a set of other parsing
+     o ptions. */
+    json_parse_flags_allow_json5 =
+        (json_parse_flags_allow_trailing_comma | json_parse_flags_allow_unquoted_keys | json_parse_flags_allow_c_style_comments |
+         json_parse_flags_allow_single_quoted_strings | json_parse_flags_allow_hexadecimal_numbers | json_parse_flags_allow_leading_plus_sign |
+         json_parse_flags_allow_leading_or_trailing_decimal_point | json_parse_flags_allow_inf_and_nan | json_parse_flags_allow_multi_line_strings)
 };
 
 /* Parse a JSON text file, returning a pointer to the root of the JSON
