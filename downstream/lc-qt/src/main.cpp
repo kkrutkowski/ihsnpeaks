@@ -18,19 +18,33 @@
 #include <QKeyEvent>
 #include <QtMath>
 #include <cstdlib>
+#include <cstring>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
 #include <QDir>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QVector>
 
 #include "json.h"
 
+extern "C" {
+#include "lc_readout.h"
+}
+
 #include "windows/customize_labels.h"
 #include "windows/classification_stats.h"
+#include "windows/lightcurve_plot.h"
 
 static const char *CONFIG_FILE = ".lc-config.json";
 
-static void loadConfig(QString labels[10], bool *numpadNav) {
+struct FileEntry {
+    QString path;
+    int n = 0;
+};
+
+static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *files) {
     QFile f(CONFIG_FILE);
     if (!f.open(QIODevice::ReadOnly))
         return;
@@ -45,19 +59,56 @@ static void loadConfig(QString labels[10], bool *numpadNav) {
 
     json_object_s *obj = json_value_as_object(root);
     for (json_object_element_s *el = obj->start; el; el = el->next) {
+        const char *key = el->name->string;
+
+        /* New format: "labels" as JSON array */
+        if (strcmp(key, "labels") == 0 && el->value->type == json_type_array) {
+            json_array_s *arr = json_value_as_array(el->value);
+            int i = 0;
+            for (json_array_element_s *ae = arr->start; ae && i < 10; ae = ae->next, i++) {
+                if (ae->value->type == json_type_string) {
+                    json_string_s *s = json_value_as_string(ae->value);
+                    if (s) labels[i] = QString::fromUtf8(s->string, s->string_size);
+                }
+            }
+            continue;
+        }
+
+        /* "files" as JSON array of {path, n} objects */
+        if (strcmp(key, "files") == 0 && el->value->type == json_type_array) {
+            json_array_s *arr = json_value_as_array(el->value);
+            for (json_array_element_s *ae = arr->start; ae; ae = ae->next) {
+                if (ae->value->type != json_type_object) continue;
+                json_object_s *fobj = json_value_as_object(ae->value);
+                FileEntry entry;
+                for (json_object_element_s *fe = fobj->start; fe; fe = fe->next) {
+                    if (strcmp(fe->name->string, "path") == 0 && fe->value->type == json_type_string) {
+                        json_string_s *s = json_value_as_string(fe->value);
+                        if (s) entry.path = QString::fromUtf8(s->string, s->string_size);
+                    } else if (strcmp(fe->name->string, "n") == 0 && fe->value->type == json_type_number) {
+                        json_number_s *num = json_value_as_number(fe->value);
+                        if (num) entry.n = atoi(num->number);
+                    }
+                }
+                if (!entry.path.isEmpty()) files->append(entry);
+            }
+            continue;
+        }
+
         if (el->value->type == json_type_string) {
             json_string_s *s = json_value_as_string(el->value);
             if (!s) continue;
             QString val = QString::fromUtf8(s->string, s->string_size);
 
-            if (strcmp(el->name->string, "numpad_nav") == 0) {
+            if (strcmp(key, "numpad_nav") == 0) {
                 *numpadNav = (val == "true");
             }
 
+            /* Legacy format: "label0"..."label9" */
             for (int i = 0; i < 10; ++i) {
-                char key[8];
-                snprintf(key, sizeof(key), "label%d", i);
-                if (strcmp(el->name->string, key) == 0) {
+                char lkey[8];
+                snprintf(lkey, sizeof(lkey), "label%d", i);
+                if (strcmp(key, lkey) == 0) {
                     labels[i] = val;
                     break;
                 }
@@ -67,15 +118,26 @@ static void loadConfig(QString labels[10], bool *numpadNav) {
     free(root);
 }
 
-static void saveConfig(const QString labels[10], bool numpadNav) {
-    QString json = "{";
+static QString escapeJsonString(const QString &s) {
+    QString out = s;
+    out.replace('\\', "\\\\").replace('"', "\\\"");
+    return out;
+}
+
+static void saveConfig(const QString labels[10], bool numpadNav, const QVector<FileEntry> &files) {
+    QString json = "{\"labels\":[";
     for (int i = 0; i < 10; ++i) {
-        QString escaped = labels[i];
-        escaped.replace('\\', "\\\\").replace('"', "\\\"");
-        json += QString("\"label%1\":\"%2\"").arg(i).arg(escaped);
+        json += QString("\"%1\"").arg(escapeJsonString(labels[i]));
         if (i < 9) json += ',';
     }
-    json += QString(",\"numpad_nav\":\"%1\"}").arg(numpadNav ? "true" : "false");
+    json += QString("],\"numpad_nav\":\"%1\"").arg(numpadNav ? "true" : "false");
+
+    json += ",\"files\":[";
+    for (int i = 0; i < files.size(); ++i) {
+        json += QString("{\"path\":\"%1\",\"n\":%2}").arg(escapeJsonString(files[i].path)).arg(files[i].n);
+        if (i < files.size() - 1) json += ',';
+    }
+    json += "]}";
 
     QFile f(CONFIG_FILE);
     if (!f.open(QIODevice::WriteOnly))
@@ -197,20 +259,21 @@ int main(int argc, char *argv[]) {
     app.setStyle("Fusion");
     
     QMainWindow window;
-    window.setWindowTitle("lc v ?.?? 25/05/2026");
+    window.setWindowTitle("lc-qt v ?.?? 21/07/2026");
     window.resize(900, 850);
 
     // Classification state
     QString labels[10] = {"nonvar", "var", "unknown", "unknown", "unknown",
                           "unknown", "unknown", "unknown", "unknown", "unknown"};
     bool numpadNav = false;
-    loadConfig(labels, &numpadNav);
+    QVector<FileEntry> files;
+    loadConfig(labels, &numpadNav, &files);
     int counts[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     
     // Menu Bar
     QMenuBar *menuBar = window.menuBar();
     QMenu *fileMenu = menuBar->addMenu("File");
-    fileMenu->addAction("Load Light Curve...");
+    QAction *loadLcAction = fileMenu->addAction("Load Light Curve...");
     fileMenu->addAction("Save Light Curve");
     fileMenu->addAction("Save Light Curve As...");
     fileMenu->addAction("Open Object List...");
@@ -294,7 +357,7 @@ int main(int argc, char *argv[]) {
     
     // Raw and Phased Plots Row
     QHBoxLayout *plotsLayout = new QHBoxLayout();
-    MockPlotWidget *rawPlot = new MockPlotWidget("Raw Light Curve", false, false, false);
+    LightCurvePlotWidget *rawPlot = new LightCurvePlotWidget("Raw Light Curve");
     MockPlotWidget *phasedPlot = new MockPlotWidget("Phased Light Curve", true, false, false);
     plotsLayout->addWidget(rawPlot);
     plotsLayout->addWidget(phasedPlot);
@@ -358,14 +421,74 @@ int main(int argc, char *argv[]) {
 
     app.installEventFilter(classDisplay);
 
+    // Light curve loading logic
+    lc_data_t lcData;
+    memset(&lcData, 0, sizeof(lcData));
+
+    auto loadLightCurve = [&](const QString &path) {
+        if (path.isEmpty()) return;
+
+        QFileInfo fi(path);
+        QString suffix = fi.suffix().toLower();
+
+        lc_data_t newData;
+        int rc;
+        if (suffix == "fits") {
+            rc = lc_load_fits(path.toUtf8().constData(), &newData);
+        } else {
+            rc = lc_load_dat(path.toUtf8().constData(), &newData);
+        }
+
+        if (rc != 0 || newData.n == 0) {
+            QMessageBox::warning(&window, "Load Error",
+                                 QString("Failed to load light curve from:\n%1").arg(path));
+            return;
+        }
+
+        /* Detrend: remove linear trend, add mean back */
+        lc_detrend(&newData);
+
+        /* Free previous data and take ownership of new */
+        lc_free(&lcData);
+        lcData = newData;
+
+        /* Update plot */
+        rawPlot->setData(&lcData);
+
+        /* Update UI labels */
+        noPointsLabel->setText(QString("No. points    %1").arg(lcData.n));
+        objectEdit->setText(fi.fileName());
+
+        /* Update files list in config */
+        bool found = false;
+        for (int i = 0; i < files.size(); i++) {
+            if (files[i].path == path) {
+                files[i].n = (int)lcData.n;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            files.append(FileEntry{path, (int)lcData.n});
+        }
+        saveConfig(labels, numpadNav, files);
+    };
+
+    QObject::connect(loadLcAction, &QAction::triggered, [&]() {
+        QString path = QFileDialog::getOpenFileName(
+            &window, "Load Light Curve", QString(),
+            "Light Curve Files (*.dat *.fits);;All Files (*)");
+        loadLightCurve(path);
+    });
+
     QObject::connect(customizeBtn, &QPushButton::clicked, [&]() {
         bool reopen = true;
         while (reopen) {
             reopen = false;
             CustomizeLabelsDialog dlg(labels, &numpadNav, &window);
-            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav]() {
+            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav, &files]() {
                 classDisplay->refreshDisplay();
-                saveConfig(labels, numpadNav);
+                saveConfig(labels, numpadNav, files);
             });
             dlg.exec();
             if (dlg.shouldReopen()) {
@@ -443,5 +566,11 @@ int main(int argc, char *argv[]) {
     mainLayout->addLayout(periodLayout, 2); // stretch factor 2
     
     window.show();
+
+    /* Auto-load file passed as argv[1] */
+    if (argc > 1) {
+        loadLightCurve(QString::fromLocal8Bit(argv[1]));
+    }
+
     return app.exec();
 }
