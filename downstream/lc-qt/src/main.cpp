@@ -324,15 +324,15 @@ static lc_data_t cloneLcData(const lc_data_t *src) {
 class PeriodogramTask : public QObject {
     Q_OBJECT
 public:
-    PeriodogramTask(const lc_data_t *data, const lc_periodogram_config_t &cfg, lc_progress_t *progress)
-        : m_data(cloneLcData(data)), m_cfg(cfg), m_progress(progress) {}
+    PeriodogramTask(lc_compute_ctx_t *ctx, const lc_data_t *data, const lc_periodogram_config_t &cfg, lc_progress_t *progress)
+        : m_ctx(ctx), m_data(cloneLcData(data)), m_cfg(cfg), m_progress(progress) {}
     ~PeriodogramTask() override { lc_free(&m_data); }
 
 public slots:
     void run() {
         lc_periodogram_result_t result;
         memset(&result, 0, sizeof(result));
-        int rc = lc_compute_periodogram(&m_data, &m_cfg, &result, m_progress);
+        int rc = lc_compute_periodogram_ctx(m_ctx, &m_data, &m_cfg, &result, m_progress);
         if (rc == 0) {
             QVector<float> nll(result.nll, result.nll + result.nfreq);
             double fmin = result.fmin;
@@ -352,6 +352,7 @@ signals:
     void failed(QString msg);
 
 private:
+    lc_compute_ctx_t *m_ctx;
     lc_data_t m_data;
     lc_periodogram_config_t m_cfg;
     lc_progress_t *m_progress;
@@ -623,14 +624,12 @@ int main(int argc, char *argv[]) {
     QPushButton *ihsBtn = new QPushButton("IHS");
     QPushButton *gbBtn = new QPushButton("GB");
     QPushButton *blsBtn = new QPushButton("BLS");
-    QPushButton *pBtn = new QPushButton("P");
     QPushButton *stopBtn = new QPushButton("Stop");
     QPushButton *moreBtn = new QPushButton("…");
     searchBtns->addWidget(aovBtn);
     searchBtns->addWidget(ihsBtn);
     searchBtns->addWidget(gbBtn);
     searchBtns->addWidget(blsBtn);
-    searchBtns->addWidget(pBtn);
     searchBtns->addWidget(stopBtn);
     searchBtns->addWidget(moreBtn);
     searchLayout->addLayout(searchBtns);
@@ -685,6 +684,7 @@ int main(int argc, char *argv[]) {
 
     // ---- Periodogram spectrum computation wiring ----
     lc_progress_t *progress = lc_progress_create();
+    lc_compute_ctx_t *computeCtx = lc_compute_ctx_create(0 /* auto: physical cores */);
 
     QLabel *progressLabel = new QLabel();
     progressLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -760,7 +760,7 @@ int main(int argc, char *argv[]) {
         progressTimer->start();
 
         workerThread = new QThread();
-        task = new PeriodogramTask(&lcData, cfg, progress);
+        task = new PeriodogramTask(computeCtx, &lcData, cfg, progress);
         task->moveToThread(workerThread);
 
         QObject::connect(workerThread, &QThread::started, task, &PeriodogramTask::run);
@@ -795,7 +795,6 @@ int main(int argc, char *argv[]) {
     QObject::connect(gbBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_GB); });
     QObject::connect(blsBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_BLS); });
     QObject::connect(stopBtn, &QPushButton::clicked, [&]() { lc_progress_request_cancel(progress); });
-    /* pBtn ("P") intentionally left unconnected. */
 
     auto openPeriodSearchDialog = [&]() {
         CustomizePeriodSearchDialog dlg(&ps, &window);
@@ -815,7 +814,10 @@ int main(int argc, char *argv[]) {
         loadLightCurve(QString::fromLocal8Bit(argv[1]));
     }
 
-    return app.exec();
+    int rc = app.exec();
+    lc_compute_ctx_destroy(computeCtx);
+    lc_progress_destroy(progress);
+    return rc;
 }
 
 #include "main.moc"

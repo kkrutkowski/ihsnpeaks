@@ -71,6 +71,20 @@ LC_API int lc_compute_periodogram(const lc_data_t *data, const lc_periodogram_co
 
 LC_API void lc_periodogram_result_free(lc_periodogram_result_t *r);
 
+/*
+ * Persistent computation context — caches thread pool, NuFFT plans, and worker
+ * buffers between runs so that repeated periodogram computations (e.g. switching
+ * between IHS/AoV/GB/BLS) only pay the sweep cost, not allocation overhead.
+ */
+typedef struct lc_compute_ctx lc_compute_ctx_t;
+
+LC_API lc_compute_ctx_t *lc_compute_ctx_create(int nthreads); /* 0 = auto (physical cores) */
+LC_API void lc_compute_ctx_destroy(lc_compute_ctx_t *ctx);
+
+/* Same semantics as lc_compute_periodogram but reuses cached resources in ctx. */
+LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *data, const lc_periodogram_config_t *cfg, lc_periodogram_result_t *out,
+                                      lc_progress_t *progress);
+
 #ifdef __cplusplus
 }
 #endif

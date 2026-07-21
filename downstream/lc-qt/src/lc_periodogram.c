@@ -262,6 +262,10 @@ static void lc_progress_set_total(lc_progress_t *p, uint32_t total) {
     if (p) atomic_store(&p->total, total);
 }
 
+static void lc_progress_add_total(lc_progress_t *p, uint32_t extra) {
+    if (p) atomic_fetch_add(&p->total, extra);
+}
+
 static void lc_progress_set_done(lc_progress_t *p, uint32_t done) {
     if (p) atomic_store(&p->done, done);
 }
@@ -351,7 +355,7 @@ static void lc_ihs_slice_worker(void *data, long i, int tid) {
 }
 
 static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, kt_forpool_t *pool, double fmin, double fstep, uint32_t nfreq,
-                                          lc_progress_t *progress) {
+                                          lc_progress_t *progress, int max_slices) {
     if (nfreq == 0) return true;
     if (!pool || pool->n_threads < 2 || !params->buffers || params->nbuffers < pool->n_threads) {
         /* Serial fallback: precompute internally */
@@ -364,6 +368,7 @@ static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, 
 
     int nthreads = pool->n_threads;
     uint32_t nworksets = (uint32_t)nthreads;
+    if (max_slices > 0 && nworksets > (uint32_t)max_slices) nworksets = (uint32_t)max_slices;
     if (nworksets > nfreq) nworksets = nfreq;
     if (nworksets < 2U) nworksets = 2U;
 
@@ -545,7 +550,7 @@ static void lc_aov_slice_worker(void *data, long i, int tid) {
 }
 
 static bool lc_execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, kt_forpool_t *pool, double fmin, double fstep, uint32_t nfreq,
-                                          lc_progress_t *progress) {
+                                          lc_progress_t *progress, int max_slices) {
     if (nfreq == 0) return true;
     if (!aov_target_has_dof(buffer, params->nterms)) return true;
     aov_reference_t ref;
@@ -562,6 +567,7 @@ static bool lc_execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, 
 
     int nthreads = pool->n_threads;
     uint32_t nworksets = (uint32_t)nthreads;
+    if (max_slices > 0 && nworksets > (uint32_t)max_slices) nworksets = (uint32_t)max_slices;
     if (nworksets > nfreq) nworksets = nfreq;
     if (nworksets < 2U) nworksets = 2U;
 
@@ -714,6 +720,90 @@ static int lc_run_direct_grid(buffer_t *buffer, parameters *params, const eval_m
 }
 
 /* ===================================================================================
+ * Parallel NLL conversion (power[] -> NLL)
+ *
+ * For AoV, capture_spectrum_column calls aov_likelihood_from_r2 -> lnFAP -> lnI ->
+ * incbeta (regularized incomplete beta / continued fraction) per frequency, which is
+ * ~1000x more expensive than IHS's correct_ihs_res. Parallelize it with kt_forpool
+ * so it doesn't stall the UI after the sweep reaches 100%.
+ * =================================================================================== */
+
+typedef struct {
+    const float *power; /* offset to this workset's start */
+    float *nll;         /* offset to this workset's start */
+    uint32_t count;     /* number of elements in this chunk */
+    int nterms;
+    int aov_n_eff;
+    bool use_aov;
+    lc_progress_t *progress;
+} lc_nll_workset_t;
+
+typedef struct {
+    lc_nll_workset_t *worksets;
+} lc_nll_dispatch_t;
+
+static void lc_nll_worker(void *data, long i, int tid) {
+    (void)tid;
+    lc_nll_dispatch_t *disp = (lc_nll_dispatch_t *)data;
+    lc_nll_workset_t *ws = &disp->worksets[i];
+    for (uint32_t j = 0; j < ws->count; ++j) {
+        float magnitude;
+        if (ws->use_aov) {
+            magnitude = aov_likelihood_from_r2(ws->power[j], ws->nterms, ws->aov_n_eff);
+        } else {
+            magnitude = (float)correct_ihs_res((double)ws->power[j], ws->nterms);
+        }
+        ws->nll[j] = float_is_finite_bits(magnitude) ? magnitude : 0.0f;
+    }
+    lc_progress_add_done(ws->progress, 1U);
+}
+
+/* Parallel NLL conversion using the shared thread pool.
+ * Returns number of progress blocks added (for total accounting). */
+static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t nfreq, int nterms, int aov_n_eff, bool use_aov,
+                                        kt_forpool_t *pool, lc_progress_t *progress) {
+    if (nfreq == 0) return 0;
+    int nthreads = (pool && pool->n_threads > 1) ? pool->n_threads : 1;
+    uint32_t nwork = (uint32_t)nthreads;
+    if (nwork > nfreq) nwork = nfreq;
+
+    uint32_t chunk = (nfreq + nwork - 1U) / nwork;
+
+    lc_nll_workset_t *worksets = (lc_nll_workset_t *)calloc(nwork, sizeof(lc_nll_workset_t));
+    if (!worksets) {
+        /* Fallback: serial */
+        for (uint32_t j = 0; j < nfreq; ++j) {
+            float magnitude;
+            if (use_aov) magnitude = aov_likelihood_from_r2(power[j], nterms, aov_n_eff);
+            else magnitude = (float)correct_ihs_res((double)power[j], nterms);
+            nll[j] = float_is_finite_bits(magnitude) ? magnitude : 0.0f;
+        }
+        return 0;
+    }
+
+    for (uint32_t w = 0; w < nwork; ++w) {
+        uint32_t start = w * chunk;
+        uint32_t count = (start + chunk <= nfreq) ? chunk : (nfreq - start);
+        worksets[w].power = power + start;
+        worksets[w].nll = nll + start;
+        worksets[w].count = count;
+        worksets[w].nterms = nterms;
+        worksets[w].aov_n_eff = aov_n_eff;
+        worksets[w].use_aov = use_aov;
+        worksets[w].progress = progress;
+    }
+
+    lc_nll_dispatch_t disp = {.worksets = worksets};
+    if (pool && pool->n_threads > 1) {
+        kt_forpool(pool, lc_nll_worker, &disp, (long)nwork);
+    } else {
+        for (uint32_t w = 0; w < nwork; ++w) lc_nll_worker(&disp, (long)w, 0);
+    }
+    free(worksets);
+    return nwork; /* number of progress blocks consumed */
+}
+
+/* ===================================================================================
  * Periodogram computation
  * =================================================================================== */
 
@@ -766,163 +856,249 @@ LC_API void lc_periodogram_result_free(lc_periodogram_result_t *r) {
     r->nfreq = 0U;
 }
 
-LC_API int lc_compute_periodogram(const lc_data_t *data, const lc_periodogram_config_t *cfg, lc_periodogram_result_t *out, lc_progress_t *progress) {
-    if (!data || data->n == 0U || !cfg || !out) return -1;
-    memset(out, 0, sizeof(*out));
-    lc_progress_reset(progress);
+/* ===================================================================================
+ * Persistent computation context
+ * =================================================================================== */
 
-    /* --- 1. Build parameters (defaults via init_parameters, then override) --- */
+struct lc_compute_ctx {
+    int nthreads;        /* pool size: all logical CPUs (SMT) for GB/BLS */
+    int physical_cores;  /* physical core count: used to cap IHS/AoV worksets */
+    kt_forpool_t *pool;
+    parameters params;
+    buffer_t primary;
+    int primary_allocated;
+    int workers_allocated;
+    uint32_t cached_maxLen;
+    uint32_t cached_maxFreqCount;
+    int cached_gridMode;
+    int cached_nterms;
+    int cached_periodogramMethod;
+    float cached_fmax;
+    int cached_method;
+};
+
+LC_API lc_compute_ctx_t *lc_compute_ctx_create(int nthreads) {
+    lc_compute_ctx_t *ctx = (lc_compute_ctx_t *)calloc(1, sizeof(lc_compute_ctx_t));
+    if (!ctx) return NULL;
+    ctx->physical_cores = count_physical_cores();
+    if (ctx->physical_cores < 1) ctx->physical_cores = 1;
+    /* Pool uses all logical CPUs (SMT) — GB/BLS benefit from extra threads */
+    ctx->nthreads = nthreads > 0 ? nthreads : (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (ctx->nthreads < 1) ctx->nthreads = 1;
+    if (ctx->nthreads > 1) ctx->pool = (kt_forpool_t *)kt_forpool_init(ctx->nthreads, false);
+    return ctx;
+}
+
+LC_API void lc_compute_ctx_destroy(lc_compute_ctx_t *ctx) {
+    if (!ctx) return;
+    if (ctx->pool) kt_forpool_destroy(ctx->pool);
+    if (ctx->workers_allocated) {
+        for (int i = 0; i < ctx->params.nbuffers; ++i) {
+            if (ctx->params.buffers[i]) {
+                free_buffer(ctx->params.buffers[i]);
+                free(ctx->params.buffers[i]);
+            }
+        }
+        free(ctx->params.buffers);
+        ctx->params.buffers = NULL;
+    }
+    if (ctx->primary_allocated) free_buffer(&ctx->primary);
+    free_nufft_plan_cache(&ctx->params);
+    free(ctx->params.target);
+    free_targets(&ctx->params.targets);
+    free(ctx);
+}
+
+/* Invalidate and rebuild cached plans/buffers when data size or config changes. */
+static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_span, const lc_periodogram_config_t *cfg) {
+    int gridMode = (cfg->pswf == 21) ? NUFFT1_PSWF21 : NUFFT1_PSWF43;
+    int nterms = cfg->nterms > 0 ? cfg->nterms : 3;
+    int periMethod = (cfg->method == LC_SPEC_AOV) ? PERIODOGRAM_AOV : PERIODOGRAM_IHS;
+    float fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
+
+    /* Check if we need to rebuild plans and buffers */
+    bool need_rebuild = (ctx->cached_maxLen != n || ctx->cached_gridMode != gridMode || ctx->cached_nterms != nterms ||
+                         ctx->cached_periodogramMethod != periMethod || ctx->cached_fmax != fmax ||
+                         ctx->cached_method != (int)cfg->method || !ctx->primary_allocated);
+
+    if (!need_rebuild) return 0;
+
+    /* Free old resources */
+    if (ctx->workers_allocated) {
+        for (int i = 0; i < ctx->params.nbuffers; ++i) {
+            if (ctx->params.buffers[i]) {
+                free_buffer(ctx->params.buffers[i]);
+                free(ctx->params.buffers[i]);
+            }
+        }
+        free(ctx->params.buffers);
+        ctx->params.buffers = NULL;
+        ctx->workers_allocated = 0;
+    }
+    if (ctx->primary_allocated) {
+        free_buffer(&ctx->primary);
+        ctx->primary_allocated = 0;
+    }
+    free_nufft_plan_cache(&ctx->params);
+    free(ctx->params.target);
+    ctx->params.target = NULL;
+    free_targets(&ctx->params.targets);
+
+    /* Build fresh parameters */
     char arg0[] = "ihsnpeaks";
     char arg1[] = "lc.dat";
     char arg2[] = "24.0";
     char *fake_argv[3] = {arg0, arg1, arg2};
-    parameters params = init_parameters(3, fake_argv);
+    ctx->params = init_parameters(3, fake_argv);
 
-    params.nterms = cfg->nterms > 0 ? cfg->nterms : 3;
-    params.oversamplingFactor = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
-    params.fmin = (float)cfg->fmin; /* 0 => auto later via effective_grid_fmin */
-    params.fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
-    params.gridMode = (cfg->pswf == 21) ? NUFFT1_PSWF21 : NUFFT1_PSWF43;
+    ctx->params.nterms = nterms;
+    ctx->params.oversamplingFactor = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
+    ctx->params.fmin = (float)cfg->fmin;
+    ctx->params.fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
+    ctx->params.gridMode = gridMode;
+    ctx->params.gbAlpha = (float)cfg->oversmoothing;
+    ctx->params.blsMinRelWidth = cfg->oversmoothing;
+    ctx->params.blsMaxRelWidth = 0.5;
+    ctx->params.blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
+    ctx->params.periodogramMethod = periMethod;
+    ctx->params.mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 2;
+    if (cfg->method == LC_SPEC_GB) ctx->params.gbEvalMode = GB_EVAL_GBLS;
+    if (cfg->method == LC_SPEC_BLS) ctx->params.gbEvalMode = GB_EVAL_BLS;
 
-    /* GB/BLS evaluation parameters: gbls[oversmoothing] and bls[oversmoothing,0.5,nbins] */
-    params.gbAlpha = (float)cfg->oversmoothing;
-    params.blsMinRelWidth = cfg->oversmoothing;
-    params.blsMaxRelWidth = 0.5; /* hardcoded maximum for lc-qt */
-    params.blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
+    ctx->params.maxLen = n;
+    ctx->params.maxTimeSpan = time_span;
+    ctx->params.maxSize = 4096U;
+    ctx->params.maxFreqCount = estimate_frequency_count(&ctx->params, time_span);
+    initialize_nufft_plan(&ctx->params);
 
-    bool use_aov = false;
-    bool direct_grid = false;
-    switch (cfg->method) {
-        case LC_SPEC_AOV:
-            params.periodogramMethod = PERIODOGRAM_AOV;
-            params.mode = 2;
-            use_aov = true;
-            break;
-        case LC_SPEC_GB:
-            params.periodogramMethod = PERIODOGRAM_IHS;
-            params.gbEvalMode = GB_EVAL_GBLS;
-            params.mode = 5;
-            direct_grid = true;
-            break;
-        case LC_SPEC_BLS:
-            params.periodogramMethod = PERIODOGRAM_IHS;
-            params.gbEvalMode = GB_EVAL_BLS;
-            params.mode = 5;
-            direct_grid = true;
-            break;
-        case LC_SPEC_IHS:
-        default:
-            params.periodogramMethod = PERIODOGRAM_IHS;
-            params.mode = 2;
-            break;
+    /* Allocate primary buffer */
+    memset(&ctx->primary, 0, sizeof(ctx->primary));
+    if (alloc_buffer(&ctx->primary, &ctx->params) != 0) return -1;
+    ctx->primary_allocated = 1;
+
+    /* Allocate worker buffers */
+    int nthreads = ctx->nthreads;
+    ctx->params.nbuffers = nthreads;
+    alloc_buffers(&ctx->params);
+    ctx->workers_allocated = 1;
+    for (int i = 0; i < ctx->params.nbuffers; ++i) {
+        if (alloc_buffer(ctx->params.buffers[i], &ctx->params) != 0) return -1;
     }
 
-    /* --- 2. Sizes (replicate process_path without file scanning) --- */
+    ctx->cached_maxLen = n;
+    ctx->cached_maxFreqCount = ctx->params.maxFreqCount;
+    ctx->cached_gridMode = gridMode;
+    ctx->cached_nterms = nterms;
+    ctx->cached_periodogramMethod = periMethod;
+    ctx->cached_fmax = fmax;
+    ctx->cached_method = (int)cfg->method;
+    return 0;
+}
+
+LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *data, const lc_periodogram_config_t *cfg, lc_periodogram_result_t *out,
+                                      lc_progress_t *progress) {
+    if (!ctx || !data || data->n == 0U || !cfg || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    lc_progress_reset(progress);
+
     uint32_t n = data->n;
-    params.maxLen = n;
     double time_span = (n > 1U) ? (data->x[n - 1] - data->x[0]) : 0.0;
-    params.maxTimeSpan = time_span;
-    params.maxSize = 4096U; /* readBuf unused for in-memory data; keep non-zero */
-    params.maxFreqCount = estimate_frequency_count(&params, time_span);
-    initialize_nufft_plan(&params); /* always: alloc_buffer requires nufftPlanCount > 0 */
+
+    /* Ensure cached resources match current data/config */
+    if (ctx_ensure_resources(ctx, n, time_span, cfg) != 0) return -1;
+
+    parameters *params = &ctx->params;
+    buffer_t *buf = &ctx->primary;
+
+    /* Update per-run config that doesn't require rebuild */
+    params->oversamplingFactor = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
+    params->fmin = (float)cfg->fmin;
+    params->fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
+    params->gbAlpha = (float)cfg->oversmoothing;
+    params->blsMinRelWidth = cfg->oversmoothing;
+    params->blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
+    params->mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 2;
+    if (cfg->method == LC_SPEC_GB) params->gbEvalMode = GB_EVAL_GBLS;
+    if (cfg->method == LC_SPEC_BLS) params->gbEvalMode = GB_EVAL_BLS;
+
+    bool use_aov = (cfg->method == LC_SPEC_AOV);
+    bool direct_grid = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS);
+
+    /* Copy data into primary buffer and preprocess */
+    for (uint32_t i = 0; i < n; ++i) {
+        buf->x[i] = data->x[i];
+        buf->y[i] = data->y[i];
+        buf->dy[i] = data->dy[i];
+    }
+    buf->n = n;
+    preprocess_buffer(buf, params->epsilon, params->mode);
+
+    /* Frequency grid — use time span (not absolute x[n-1]) since lc-qt data
+     * may not be zero-centered (upstream .dat files start near t=0, so x[n-1]≈span). */
+    double grid_span = buf->x[buf->n - 1] - buf->x[0];
+    if (grid_span <= 0.0) grid_span = buf->x[buf->n - 1]; /* fallback for x[0]==0 */
+    const eval_method_t *eval_method = eval_method_for_params(params);
+    double fmin = effective_grid_fmin(params, grid_span);
+    double fstep;
+    if (mode_uses_direct_eval_grid(params->mode)) {
+        fstep = eval_method->direct_frequency_step(buf->n, grid_span, params);
+    } else {
+        fstep = 1.0 / ((double)params->nterms * (double)params->oversamplingFactor * grid_span * 0.5);
+    }
+    uint32_t nfreq = target_frequency_count(params, fmin, fstep);
+    if (nfreq > buf->maxFreqCount) nfreq = buf->maxFreqCount;
+
+    float *nll = (float *)calloc(nfreq > 0U ? (size_t)nfreq : 1U, sizeof(float));
+    if (!nll) return -1;
 
     int result_code = -1;
-    float *nll = NULL;
-    buffer_t buf;
-    memset(&buf, 0, sizeof(buf));
-    int primary_allocated = 0;
-    kt_forpool_t *pool = NULL;
-    int workers_allocated = 0;
-
-    /* --- 3. Primary buffer + preprocess --- */
-    if (alloc_buffer(&buf, &params) != 0) goto cleanup;
-    primary_allocated = 1;
-    for (uint32_t i = 0; i < n; ++i) {
-        buf.x[i] = data->x[i];
-        buf.y[i] = data->y[i];
-        buf.dy[i] = data->dy[i];
-    }
-    buf.n = n;
-    preprocess_buffer(&buf, params.epsilon, params.mode);
-
-    /* --- 4. Frequency grid (mirrors process_target) --- */
-    const eval_method_t *eval_method = eval_method_for_params(&params);
-    double fmin = effective_grid_fmin(&params, buf.x[buf.n - 1]);
-    double fstep;
-    if (mode_uses_direct_eval_grid(params.mode)) {
-        fstep = eval_method->direct_frequency_step(buf.n, buf.x[buf.n - 1], &params);
-    } else {
-        fstep = 1.0 / ((double)params.nterms * (double)params.oversamplingFactor * (double)buf.x[buf.n - 1] * 0.5);
-    }
-    double df = 1.0 / (double)buf.x[buf.n - 1];
-    uint32_t nfreq = target_frequency_count(&params, fmin, fstep);
-    if (nfreq > buf.maxFreqCount) nfreq = buf.maxFreqCount;
-
-    nll = (float *)calloc(nfreq > 0U ? (size_t)nfreq : 1U, sizeof(float));
-    if (!nll) goto cleanup;
-
-    /* --- 5. Thread pool (one shared pool per computation) --- */
-    int nthreads = cfg->nthreads > 0 ? cfg->nthreads : count_physical_cores();
-    if (nthreads < 1) nthreads = 1;
-    if (nthreads > 1) pool = (kt_forpool_t *)kt_forpool_init(nthreads, false);
+    kt_forpool_t *pool = ctx->pool;
 
     if (direct_grid) {
-        /* GB / BLS */
-        int rc = lc_run_direct_grid(&buf, &params, eval_method, pool, fmin, fstep, nfreq, nll, progress);
-        if (rc == 1) {
-            result_code = 1; /* cancelled */
-            goto cleanup;
-        }
-        if (rc < 0) goto cleanup;
+        int rc = lc_run_direct_grid(buf, params, eval_method, pool, fmin, fstep, nfreq, nll, progress);
+        if (rc == 1) { result_code = 1; goto done; }
+        if (rc < 0) goto done;
     } else {
-        /* IHS / AoV: parallel NuFFT sweep filling buf.power[], then convert to NLL */
-        if (!activate_target_nufft_plan(&buf, &params, nfreq)) goto cleanup;
-        params.nbuffers = nthreads;
-        alloc_buffers(&params);
-        workers_allocated = 1;
-        for (int i = 0; i < params.nbuffers; ++i) {
-            if (alloc_buffer(params.buffers[i], &params) != 0) goto cleanup;
-        }
+        if (!activate_target_nufft_plan(buf, params, nfreq)) goto done;
 
         bool ok;
         if (use_aov) {
-            ok = lc_execute_aov_sweep_parallel(&buf, &params, pool, fmin, fstep, nfreq, progress);
+            ok = lc_execute_aov_sweep_parallel(buf, params, pool, fmin, fstep, nfreq, progress, ctx->physical_cores);
         } else {
-            ok = lc_execute_ihs_sweep_parallel(&buf, &params, pool, fmin, fstep, nfreq, progress);
+            ok = lc_execute_ihs_sweep_parallel(buf, params, pool, fmin, fstep, nfreq, progress, ctx->physical_cores);
         }
-        if (!ok) goto cleanup;
-        if (lc_progress_is_cancelled(progress)) {
-            result_code = 1; /* cancelled */
-            goto cleanup;
-        }
+        if (!ok) goto done;
+        if (lc_progress_is_cancelled(progress)) { result_code = 1; goto done; }
 
-        int aov_n_eff = periodogram_effective_n(&buf);
-        capture_spectrum_column(&buf, &params, eval_method, use_aov, false, aov_n_eff, fmin, fstep, nfreq, params.nterms, nll, 0U);
+        int aov_n_eff = periodogram_effective_n(buf);
+        /* Add conversion work to progress total BEFORE converting, so the UI
+         * doesn't show 100% until the NLL conversion is also complete.
+         * For AoV this matters (lnFAP is expensive); for IHS it's negligible but harmless. */
+        int conv_threads = (pool && pool->n_threads > 1) ? pool->n_threads : 1;
+        uint32_t conv_blocks = (uint32_t)conv_threads;
+        if (conv_blocks > nfreq) conv_blocks = nfreq;
+        lc_progress_add_total(progress, conv_blocks);
+        lc_parallel_nll_convert(buf->power, nll, nfreq, params->nterms, aov_n_eff, use_aov, pool, progress);
     }
 
     out->nfreq = nfreq;
     out->fmin = fmin;
     out->fstep = fstep;
     out->nll = nll;
-    nll = NULL; /* ownership transferred */
+    nll = NULL;
     result_code = 0;
 
-cleanup:
-    if (pool) kt_forpool_destroy(pool);
-    if (workers_allocated) {
-        for (int i = 0; i < params.nbuffers; ++i) {
-            if (params.buffers[i]) {
-                free_buffer(params.buffers[i]);
-                free(params.buffers[i]);
-            }
-        }
-        free(params.buffers);
-        params.buffers = NULL;
-    }
-    if (primary_allocated) free_buffer(&buf);
+done:
     free(nll);
-    free_nufft_plan_cache(&params);
-    free(params.target);
-    free_targets(&params.targets);
     return result_code;
+}
+
+/* Convenience wrapper: creates a context, runs one computation, destroys context. */
+LC_API int lc_compute_periodogram(const lc_data_t *data, const lc_periodogram_config_t *cfg, lc_periodogram_result_t *out, lc_progress_t *progress) {
+    int nthreads = (cfg && cfg->nthreads > 0) ? cfg->nthreads : 0;
+    lc_compute_ctx_t *ctx = lc_compute_ctx_create(nthreads);
+    if (!ctx) return -1;
+    int rc = lc_compute_periodogram_ctx(ctx, data, cfg, out, progress);
+    lc_compute_ctx_destroy(ctx);
+    return rc;
 }

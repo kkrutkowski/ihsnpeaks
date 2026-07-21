@@ -4,18 +4,20 @@
 
 `lc-qt` is a clean-room rewrite of Prof. Grzegorz Pojmański's **lc** light-curve analysis tool (1997–2018), reimplemented with a Qt6 GUI frontend and **ihsnpeaks** as the backend periodogram engine. The project is a work in progress — currently closer to a functional mock-up than a full lc replacement.
 
-The application renders a dark-themed UI replicating the original `lc` tool's layout: raw/phased light-curve plots, object list management, classification system with customizable labels, period search (AoV, IHS, GB, BLS), and period modify controls. The **Raw Light Curve** plot is functional — it loads and displays `.dat`/`.fits` files using upstream ihsnpeaks C readout functions, with detrending and proper time-axis preservation. All other plot widgets remain mock placeholders.
+The application renders a dark-themed UI replicating the original `lc` tool's layout: raw/phased light-curve plots, object list management, classification system with customizable labels, period search (AoV, IHS, GB, BLS), and period modify controls. The **Raw Light Curve** plot is functional — it loads and displays `.dat`/`.fits` files using upstream ihsnpeaks C readout functions, with detrending and proper time-axis preservation. The **Period Search** (Negative Log-Likelihood spectrum) plot is functional — it computes and displays IHS, AoV, GB, and BLS periodograms using the upstream ihsnpeaks computation pipeline via a multithreaded C bridge. All other plot widgets remain mock placeholders.
 
-**Parent project:** This is a downstream subproject of `ihsnpeaks` — located at `ihsnpeaks/downstream/lc-qt/`. It uses `json.h` from the parent project (`ihsnpeaks/include/json.h`) for configuration persistence, and the upstream `src/utils/readout.h` (plus its dependency chain) for light-curve file I/O.
+**Parent project:** This is a downstream subproject of `ihsnpeaks` — located at `ihsnpeaks/downstream/lc-qt/`. It uses `json.h` from the parent project (`ihsnpeaks/include/json.h`) for configuration persistence, and the upstream `src/` headers (readout, process, convolution, aov, nufft1, kthread) for the computation backend.
 
 ## Architecture
 
 - **Qt6 Widgets:** Uses `QMainWindow`, `QFrame`, `QGroupBox`, `QLineEdit`, `QPushButton`, `QCheckBox` — classic widget-based desktop UI, no QML.
 - **Dark theme:** Inline `setStyleSheet()` calls define a graphite-dark palette (background `#242429`, accent `#3b82f6`).
 - **LightCurvePlotWidget** (`src/windows/lightcurve_plot.h/.cpp`): A `QFrame` subclass that renders actual scatter data with auto-scaling, grid, and smart axis tick formatting.
-- **MockPlotWidget:** A `QFrame` subclass that paints a grid and title — placeholder for phased plot, period search, and period modify charts.
-- **C bridge** (`src/lc_readout.h` / `src/lc_readout.c`): A single C translation unit (compiled with `-std=gnu23`) that wraps upstream ihsnpeaks header-only libraries (`readout.h`, `fast_convert.h`, `qfits.h`, `sds.h`, `fdist.h`) and exposes a clean C API (`lc_load_dat`, `lc_load_fits`, `lc_detrend`, `lc_free`) to the C++ frontend.
-- **ClassificationDisplay:** A read-only `QLineEdit` with `Qt::NoFocus` that displays the current classification as "N — label". Installed as an `eventFilter` on `QApplication` to intercept 0-9 key presses globally when no text field has focus.
+- **SpectrumPlotWidget** (`src/windows/spectrum_plot.h/.cpp`): A `QFrame` subclass that renders the NLL periodogram as a line plot with peak-preserving downsampling (≤8 pts/pixel), not-a-knot cubic spline interpolation when sparse, 5% y-margin (starting at 0), and a progress percentage overlay in the upper-right corner during computation.
+- **C bridge** (`src/lc_periodogram.h` / `src/lc_periodogram.c`): A single C translation unit (compiled with `-std=gnu23`) that wraps the entire upstream ihsnpeaks computation pipeline (`kthread.h`, `process.h`, `readout.h`, `convolution.h`, `aov.h`, `nufft1.h`, etc.) and exposes a clean C API to the C++ frontend: file I/O (`lc_load_dat`, `lc_load_fits`, `lc_detrend`, `lc_free`), periodogram computation (`lc_compute_periodogram_ctx`), and progress monitoring (`lc_progress_*`).
+- **Persistent computation context** (`lc_compute_ctx_t`): Caches the thread pool, NuFFT plans, and worker buffers between runs. Rebuilds only when data size, method, fmax, grid mode, or nterms change.
+- **CustomizePeriodSearchDialog** (`src/windows/customize_period_search.h/.cpp`): QDialog with period search parameters: harmonics, oversampling, min/max frequency, zoom factor, search radius, upsampling factor (4/3 or 2/1), oversmoothing factor (GBLS/BLS), and number of bins (BLS).
+- **ClassificationDisplay:** A read-only `QLineEdit` with `Qt::NoFocus` that displays the current classification as "N — label". Installed as an `eventFilter` on `QApplication` to intercept 0-9 key presses globally when no text field or spin box has focus.
 - **Static linking:** Build produces a fully static musl binary, optionally UPX-compressed.
 - **AUTOMOC:** CMake `CMAKE_AUTOMOC ON` is enabled for Qt Meta-Object Compiler support (required for `Q_OBJECT` in dialog and widget classes).
 
@@ -41,6 +43,62 @@ The application renders a dark-themed UI replicating the original `lc` tool's la
 The main window has a split "Log Files" row with two `QGroupBox`es:
 - **Statistics** (left): "Class stats" button → opens `ClassificationStatsDialog`
 - **Classification** (right): "Customize labels" button, "Current:" label, and read-only `ClassificationDisplay` box. Approving by clicking Enter (standard or NumPad) copies the classification to the "Type" input box.
+
+## Period Search (Spectrum Generation)
+
+### Overview
+
+The "Period Search" section computes and displays Negative Log-Likelihood (NLL) frequency spectra using the upstream ihsnpeaks computation pipeline. Four methods are available: **AoV**, **IHS**, **GB** (GBLS), and **BLS**. Computation is fully multithreaded using a shared `kt_forpool_t` thread pool.
+
+### Button mapping
+
+| Button | periodogramMethod | gbEvalMode | mode | fstep formula |
+|--------|-------------------|------------|------|---------------|
+| IHS | PERIODOGRAM_IHS | — | 2 | `1/(nterms × oversampling × span × 0.5)` |
+| AoV | PERIODOGRAM_AOV | — | 2 | same as IHS |
+| GB | — | GB_EVAL_GBLS | 5 | `gb_direct_frequency_step(n, span, params)` |
+| BLS | — | GB_EVAL_BLS | 5 | `bls_direct_frequency_step(span, params)` |
+
+### Threading model
+
+- **Thread pool**: Created with all logical CPUs (SMT enabled) via `sysconf(_SC_NPROCESSORS_ONLN)`.
+- **GB/BLS**: Use all logical threads (embarrassingly parallel per-frequency evaluation with independent scratch spaces).
+- **IHS/AoV**: Workset count capped at physical core count (`max_slices` parameter) to avoid SMT contention on NuFFT-heavy workloads.
+- **Progress**: NuFFT-block-level atomic progress updates for IHS/AoV; per-frequency atomic updates for GB/BLS. Progress percentage is drawn in the upper-right corner of the spectrum plot (font 12 bold). Time estimation is shown in the status bar.
+- **Cancellation**: Stop button sets an atomic cancel flag. GB/BLS workers stop at chunk boundaries; IHS/AoV run to completion (fast) and discard the result.
+
+### Computation flow
+
+1. `PeriodogramTask` (QObject on a QThread) builds `lc_periodogram_config_t` from dialog settings.
+2. `lc_compute_periodogram_ctx()` uses the persistent context (`lc_compute_ctx_t`):
+   - Rebuilds cached resources (plans, buffers) only when data size, method, fmax, grid mode, or nterms change.
+   - Copies data into the primary buffer, runs `preprocess_buffer`.
+   - Computes frequency grid using the **actual time span** (`x[n-1] - x[0]`), not absolute `x[n-1]`.
+   - Runs the parallel sweep (IHS/AoV via NuFFT blocks, GB/BLS via direct grid).
+   - Converts power→NLL in parallel (`aov_likelihood_from_r2` for AoV, `correct_ihs_res` for IHS, direct for GB/BLS).
+3. Result (`fmin`, `fstep`, `nll[]`) is emitted to the GUI thread and rendered by `SpectrumPlotWidget`.
+
+### Customize Period Search dialog
+
+Accessible via the "…" button or the "Customize Period Search..." menu action. Parameters:
+- **Number of harmonics** (`nterms`, default 3)
+- **Oversampling** (default 5)
+- **Min frequency** (QLineEdit with "auto" placeholder; empty = auto `2/span`)
+- **Max frequency** (default 24)
+- **Zooming factor** (default 4, stored but unused)
+- **Search radius** (default 0.1, stored but unused)
+- **Upsampling factor** (combo: "4/3" → pswf43, "2/1" → pswf21)
+- **Oversmoothing factor** (default 0.2 → `gbAlpha` for GBLS, `blsMinRelWidth` for BLS; BLS max width hardcoded 0.5)
+- **Number of bins** (default 10 → `blsWidthCount`, BLS only)
+
+All settings persist to `.lc-config.json`. Decimal delimiter is forced to "." (`QLocale::c()`).
+
+### Spectrum rendering
+
+- **Y-axis**: Starts at 0, 5% headroom above max, not inverted (higher NLL = higher on screen).
+- **Dense data** (≥1 pt/px): Peak-preserving downsample to ≤8 pts/pixel (keeps local maxima).
+- **Sparse data** (<0.75 pt/px): Not-a-knot cubic spline interpolation at ~6 samples/px.
+- **Empty state**: Shows "No data" centered.
 
 ### ClassificationDisplay (`src/main.cpp`)
 - Read-only `QLineEdit` with `Qt::NoFocus` policy (never steals focus)
@@ -68,7 +126,18 @@ On startup, `loadConfig()` reads `.lc-config.json` from the working directory us
   "numpad_nav": "false",
   "files": [
     {"path": "/path/to/OGLE-BLAP-035.dat", "n": 2240}
-  ]
+  ],
+  "period_search": {
+    "nterms": 3,
+    "oversampling": 5.0,
+    "fmin": 0.0,
+    "fmax": 24.0,
+    "zoom_factor": 4.0,
+    "search_radius": 0.1,
+    "pswf": 43,
+    "oversmoothing": 0.2,
+    "nbins": 10
+  }
 }
 ```
 
@@ -131,25 +200,35 @@ Displays the Qt6 GUI window. Press 0-9 keys (when no text field is focused) to s
 lc-qt/
 ├── src/
 │   ├── main.cpp                    — Qt6 application entry point: UI layout, light curve loading,
-│   │                                  ClassificationDisplay, loadConfig/saveConfig, main()
-│   ├── lc_readout.h                — C bridge public API (lc_data_t, lc_load_dat/fits/detrend/free)
-│   ├── lc_readout.c                — C bridge implementation (gnu23, wraps upstream readout.h)
+│   │                                  ClassificationDisplay, PeriodogramTask worker, period search
+│   │                                  wiring, loadConfig/saveConfig, main()
+│   ├── lc_readout.h                — C bridge public API: lc_data_t, lc_load_dat/fits/detrend/free
+│   ├── lc_periodogram.h            — C bridge public API: lc_periodogram_config_t, lc_compute_ctx_t,
+│   │                                  lc_compute_periodogram_ctx, lc_progress_*
+│   ├── lc_periodogram.c            — C bridge implementation (gnu23): wraps upstream kthread.h +
+│   │                                  process.h + readout.h; multithreaded IHS/AoV/GB/BLS sweeps,
+│   │                                  parallel NLL conversion, persistent context, physical core count
 │   └── windows/
 │       ├── lightcurve_plot.h       — LightCurvePlotWidget declaration (Q_OBJECT)
 │       ├── lightcurve_plot.cpp     — Scatter plot renderer with auto-scaling and smart ticks
+│       ├── spectrum_plot.h         — SpectrumPlotWidget declaration (line plot + progress overlay)
+│       ├── spectrum_plot.cpp       — NLL spectrum renderer: peak-preserving downsample, cubic spline
+│       ├── customize_period_search.h  — CustomizePeriodSearchDialog + PeriodSearchSettings struct
+│       ├── customize_period_search.cpp — Dialog: harmonics, oversampling, fmin/fmax, pswf, GBLS/BLS params
 │       ├── customize_labels.h      — CustomizeLabelsDialog declaration
 │       ├── customize_labels.cpp    — CustomizeLabelsDialog: 10 editable labels, NumPad nav toggle
 │       ├── classification_stats.h  — ClassificationStatsDialog declaration
 │       └── classification_stats.cpp — ClassificationStatsDialog: count-per-label table
 ├── CMakeLists.txt                  — CMake config (C23 + C++17, AUTOMOC, static linking, Qt6 Widgets,
-│                                       upstream include paths isolated to C bridge only)
+│                                       lc_backend OBJECT library, build-time scaling.h generation)
 ├── Makefile                        — Orchestrates Docker-based static build + UPX compression
-├── build.sh                        — Docker build script: image build, SDK download, cmake compile
+├── build.sh                        — Docker build script: image build, SDK download, cmake compile,
+│                                       /src symlink for kthread.h cross-mount include
 ├── Dockerfile                      — Debian slim with build-essential, cmake, upx-ucl
 ├── README.md                       — Project description (work in progress)
 ├── QWEN.md                         — This file
 ├── lc-qt                           — Pre-built output binary (git-tracked)
-├── .lc-config.json                 — Runtime config (labels array + files list + numpad_nav)
+├── .lc-config.json                 — Runtime config (labels, files, period_search settings)
 └── buildroot/                      — Prebuilt Buildroot musl SDK (downloaded, not committed)
     ├── relocate-sdk.sh             — Toolchain relocation script
     ├── bin/                        — Cross-compiler binaries
@@ -164,11 +243,14 @@ lc-qt/
 - **Build system:** CMake (invoked via Docker with Buildroot toolchain). Makefile is a thin wrapper for the Docker workflow.
 - **Static linking:** The final binary must be fully static (`-static`, `--gc-sections`, `.so` files stripped from sysroot). No dynamic linking.
 - **Qt6 only:** Uses `Qt6::Widgets`. No Qt Quick/QML.
-- **AUTOMOC:** Required for any class using `Q_OBJECT` — already enabled in CMakeLists.txt.
-- **Upstream include isolation:** The upstream `src/` include paths are applied ONLY to `lc_readout.c` via `set_source_files_properties` COMPILE_FLAGS — never via `target_include_directories` — to prevent moc from parsing conflicting upstream headers (notably `strings.h`).
+- **AUTOMOC:** Required for any class using `Q_OBJECT` — already enabled in CMakeLists.txt. `main.cpp` includes `main.moc` at the end for the in-file `PeriodogramTask` Q_OBJECT class.
+- **Backend OBJECT library:** `lc_backend` holds `lc_periodogram.c` + `${UPSTREAM_SRC_DIR}/nufft/nufft1.c`. Both compiled with `-std=gnu23 -D_GNU_SOURCE -DMAX_TWIDDLE_REUSE=8`. Dispatch-ready: parameterized `LC_BACKEND_MARCH` for future multi-microarchitecture support.
+- **Build-time scaling.h:** Generated by compiling+running upstream `scaling.c` + `nufft1.c` as `scaling_gen` (static musl binary runs inside the build container). Emits tuned PSWF constants into `${CMAKE_BINARY_DIR}/scaling.h`.
+- **Single C translation unit:** All upstream headers (`kthread.h`, `process.h`, `readout.h`, `convolution.h`, `aov.h`, `nufft1.h`, header-only libs) are included ONLY in `lc_periodogram.c`. Non-static definitions in these headers would cause duplicate-symbol link errors if included elsewhere.
+- **Upstream include isolation:** The upstream `src/` include paths are applied ONLY to the backend sources via `set_source_files_properties` / OBJECT library compile options — never via global `target_include_directories`.
 - **Style:** Dark-themed UI via inline stylesheets — no external CSS/QSS files.
 - **Headers as implementation units:** Dialog windows and widgets use separate `.h`/`.cpp` pairs in `src/windows/`.
 - **No test framework:** No tests exist yet.
 - **The `buildroot/` directory** is downloaded by the build process and should not be committed to git (it is a large prebuilt SDK). Do not use `make deep-clean` to remove it — it is already gitignored.
-- **json.h dependency:** The sheredom `json.h` header-only parser lives in the parent project at `ihsnpeaks/include/json.h`. It is mounted into Docker builds at `/external_include/` via `build.sh`. The CMake `EXTERNAL_INCLUDE_DIR` variable controls the path (defaults to `../../include` for local builds, overridden to `/external_include` in Docker).
-- **Upstream C dependency:** The C bridge (`lc_readout.c`) compiles the entire upstream header-only dependency chain (`readout.h` → `common.h`, `fast_convert.h`, `qfits.h`, `sds.h`, `fdist.h`, `convolution.h`, `nufft1.h`) in a single translation unit. These libraries use non-static function definitions and must not be included elsewhere.
+- **json.h dependency:** The sheredom `json.h` header-only parser lives in the parent project at `ihsnpeaks/include/json.h`. It is mounted into Docker builds at `/external_include/` via `build.sh`. The CMake `EXTERNAL_INCLUDE_DIR` variable controls the path.
+- **build.sh symlink:** Creates `/src -> /upstream_src` inside the container so `kthread.h`'s relative include (`../../src/params.h`) resolves across the separate Docker mounts.
