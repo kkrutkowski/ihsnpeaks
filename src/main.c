@@ -127,7 +127,11 @@ int main(int argc, char *argv[]) {
     }
 
     if (topology_probed) {
-        nThreads = topo->total_workers;
+        if (kv_size(params.targets) == 1 && topo->total_cores >= 1) {
+            nThreads = topo->total_cores;  // single target: one worker per physical core
+        } else {
+            nThreads = topo->total_workers;  // batch: use all logical PUs
+        }
         if (nThreads < 1) nThreads = 1;
     }
 

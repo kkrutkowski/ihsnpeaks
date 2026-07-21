@@ -109,11 +109,11 @@ void LightCurvePlotWidget::paintEvent(QPaintEvent *event) {
     painter.setPen(QColor(148, 163, 184));
     painter.setFont(QFont("sans-serif", 9));
 
-    // Y-axis labels: precision = 1/100 of visible amplitude
+    // Y-axis labels (inverted: brighter/smaller mag on top)
     int yDecimals = (int)std::floor(-std::log10(ySpan / 100.0));
     if (yDecimals < 0) yDecimals = 0;
     for (int i = 0; i <= gridN; i++) {
-        float val = yMax - (float)i * ySpan / gridN;
+        float val = yMin + (float)i * ySpan / gridN;
         int gy = padT + i * plotH / gridN;
         painter.drawText(QRect(2, gy - 8, padL - 6, 16), Qt::AlignRight | Qt::AlignVCenter,
                          QString::number(val, 'f', yDecimals));
@@ -144,7 +144,7 @@ void LightCurvePlotWidget::paintEvent(QPaintEvent *event) {
 
     for (unsigned int i = 0; i < m_n; i++) {
         double px = padL + ((m_x[i] - xMin) / xSpan) * plotW;
-        double py = padT + ((double)(yMax - m_y[i]) / ySpan) * plotH;
+        double py = padT + ((double)(m_y[i] - yMin) / ySpan) * plotH;
         painter.drawEllipse(QPointF(px, py), 1.5, 1.5);
     }
 }

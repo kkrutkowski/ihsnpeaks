@@ -382,10 +382,10 @@ typedef struct {
 static inline void freq_slice_ihs_worker(void *data, long i, int thread_id) {
     freq_slice_context_t *ctx = (freq_slice_context_t *)data;
     freq_slice_workset_t *work = &ctx->worksets[i];
-    buffer_t *buf = ctx->params->buffers[thread_id];
+    buffer_t *buf = ctx->params->buffers[i];
     buffer_t *primary = ctx->primary;
 
-    work->buffer_idx = thread_id;
+    work->buffer_idx = (int)i;
 
     if (work->slice_nfreq == 0) {
         work->status = 0;
@@ -527,7 +527,7 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
             if (max_peaks > 0) {
                 for (uint32_t w = 0; w < nworksets; ++w) {
                     if (worksets[w].slice_nfreq == 0) continue;
-                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    buffer_t *buf = params->buffers[w];
                     for (uint32_t p = 0; p < buf->nPeaks; ++p) {
                         direct_merge_peak_stable(buffer->peaks, &buffer->nPeaks, max_peaks, &buf->peaks[p], params, eval_method);
                     }
@@ -538,7 +538,7 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
                 sdsclear(buffer->spectrum);
                 for (uint32_t w = 0; w < nworksets; ++w) {
                     if (worksets[w].slice_nfreq == 0) continue;
-                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    buffer_t *buf = params->buffers[w];
                     buffer->spectrum = sdscatsds(buffer->spectrum, buf->spectrum);
                 }
             }
@@ -546,7 +546,7 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
             // Fallback: merge power arrays (spectrum_prewhiten case needs full power[])
             for (uint32_t w = 0; w < nworksets; ++w) {
                 if (worksets[w].slice_nfreq == 0) continue;
-                buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                buffer_t *buf = params->buffers[w];
                 uint32_t skip = (w == 0) ? 0U : 1U;
                 memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
             }
@@ -564,11 +564,11 @@ static inline bool execute_nufft_sweep_parallel(buffer_t *buffer, parameters *pa
 static inline void freq_slice_aov_worker(void *data, long i, int thread_id) {
     freq_slice_context_t *ctx = (freq_slice_context_t *)data;
     freq_slice_workset_t *work = &ctx->worksets[i];
-    buffer_t *buf = ctx->params->buffers[thread_id];
+    buffer_t *buf = ctx->params->buffers[i];
     buffer_t *primary = ctx->primary;
     parameters *params = ctx->params;
 
-    work->buffer_idx = thread_id;
+    work->buffer_idx = (int)i;
 
     if (work->slice_nfreq == 0) {
         work->status = 0;
@@ -721,7 +721,7 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
             if (max_peaks > 0) {
                 for (uint32_t w = 0; w < nworksets; ++w) {
                     if (worksets[w].slice_nfreq == 0) continue;
-                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    buffer_t *buf = params->buffers[w];
                     for (uint32_t p = 0; p < buf->nPeaks; ++p) {
                         direct_merge_peak_stable(buffer->peaks, &buffer->nPeaks, max_peaks, &buf->peaks[p], params, eval_method);
                     }
@@ -732,7 +732,7 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
                 sdsclear(buffer->spectrum);
                 for (uint32_t w = 0; w < nworksets; ++w) {
                     if (worksets[w].slice_nfreq == 0) continue;
-                    buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                    buffer_t *buf = params->buffers[w];
                     buffer->spectrum = sdscatsds(buffer->spectrum, buf->spectrum);
                 }
             }
@@ -740,7 +740,7 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
             // Fallback: merge power arrays (spectrum_prewhiten case needs full power[])
             for (uint32_t w = 0; w < nworksets; ++w) {
                 if (worksets[w].slice_nfreq == 0) continue;
-                buffer_t *buf = params->buffers[worksets[w].buffer_idx];
+                buffer_t *buf = params->buffers[w];
                 uint32_t skip = (w == 0) ? 0U : 1U;
                 memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
             }

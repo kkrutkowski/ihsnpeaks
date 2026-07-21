@@ -26,7 +26,10 @@ docker run --rm -v "$(pwd)":/app -v "$(pwd)/../../include":/external_include -v 
     
     echo '🧹 Disabling dynamic libraries in sysroot...'
     find buildroot/x86_64-buildroot-linux-musl/sysroot -name \"*.so\" -delete
-    
+
+    echo '🔗 Linking /src -> /upstream_src for kthread.h relative include...'
+    ln -sfn /upstream_src /src
+
     echo '🏗️ Compiling lc-qt statically using the Buildroot toolchain...'
     cd /app
     rm -rf build

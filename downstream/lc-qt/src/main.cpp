@@ -19,6 +19,7 @@
 #include <QtMath>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
@@ -26,16 +27,24 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QVector>
+#include <QThread>
+#include <QTimer>
+#include <QStatusBar>
+#include <QElapsedTimer>
+#include <QAbstractSpinBox>
 
 #include "json.h"
 
 extern "C" {
 #include "lc_readout.h"
+#include "lc_periodogram.h"
 }
 
 #include "windows/customize_labels.h"
 #include "windows/classification_stats.h"
 #include "windows/lightcurve_plot.h"
+#include "windows/spectrum_plot.h"
+#include "windows/customize_period_search.h"
 
 static const char *CONFIG_FILE = ".lc-config.json";
 
@@ -44,7 +53,7 @@ struct FileEntry {
     int n = 0;
 };
 
-static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *files) {
+static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *files, PeriodSearchSettings *ps) {
     QFile f(CONFIG_FILE);
     if (!f.open(QIODevice::ReadOnly))
         return;
@@ -95,6 +104,27 @@ static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *
             continue;
         }
 
+        /* "period_search" as JSON object */
+        if (strcmp(key, "period_search") == 0 && el->value->type == json_type_object && ps) {
+            json_object_s *pobj = json_value_as_object(el->value);
+            for (json_object_element_s *pe = pobj->start; pe; pe = pe->next) {
+                if (pe->value->type != json_type_number) continue;
+                json_number_s *num = json_value_as_number(pe->value);
+                if (!num) continue;
+                const char *pk = pe->name->string;
+                if (strcmp(pk, "nterms") == 0) ps->nterms = atoi(num->number);
+                else if (strcmp(pk, "oversampling") == 0) ps->oversampling = atof(num->number);
+                else if (strcmp(pk, "fmin") == 0) ps->fmin = atof(num->number);
+                else if (strcmp(pk, "fmax") == 0) ps->fmax = atof(num->number);
+                else if (strcmp(pk, "zoom_factor") == 0) ps->zoomFactor = atof(num->number);
+                else if (strcmp(pk, "search_radius") == 0) ps->searchRadius = atof(num->number);
+                else if (strcmp(pk, "pswf") == 0) ps->pswf = atoi(num->number);
+                else if (strcmp(pk, "oversmoothing") == 0) ps->oversmoothing = atof(num->number);
+                else if (strcmp(pk, "nbins") == 0) ps->nbins = atoi(num->number);
+            }
+            continue;
+        }
+
         if (el->value->type == json_type_string) {
             json_string_s *s = json_value_as_string(el->value);
             if (!s) continue;
@@ -124,7 +154,7 @@ static QString escapeJsonString(const QString &s) {
     return out;
 }
 
-static void saveConfig(const QString labels[10], bool numpadNav, const QVector<FileEntry> &files) {
+static void saveConfig(const QString labels[10], bool numpadNav, const QVector<FileEntry> &files, const PeriodSearchSettings &ps) {
     QString json = "{\"labels\":[";
     for (int i = 0; i < 10; ++i) {
         json += QString("\"%1\"").arg(escapeJsonString(labels[i]));
@@ -137,7 +167,28 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
         json += QString("{\"path\":\"%1\",\"n\":%2}").arg(escapeJsonString(files[i].path)).arg(files[i].n);
         if (i < files.size() - 1) json += ',';
     }
-    json += "]}";
+    json += "]";
+
+    json += QString(",\"period_search\":{"
+                    "\"nterms\":%1,"
+                    "\"oversampling\":%2,"
+                    "\"fmin\":%3,"
+                    "\"fmax\":%4,"
+                    "\"zoom_factor\":%5,"
+                    "\"search_radius\":%6,"
+                    "\"pswf\":%7,"
+                    "\"oversmoothing\":%8,"
+                    "\"nbins\":%9}")
+                .arg(ps.nterms)
+                .arg(ps.oversampling, 0, 'g', 10)
+                .arg(ps.fmin, 0, 'g', 10)
+                .arg(ps.fmax, 0, 'g', 10)
+                .arg(ps.zoomFactor, 0, 'g', 10)
+                .arg(ps.searchRadius, 0, 'g', 10)
+                .arg(ps.pswf)
+                .arg(ps.oversmoothing, 0, 'g', 10)
+                .arg(ps.nbins);
+    json += "}";
 
     QFile f(CONFIG_FILE);
     if (!f.open(QIODevice::WriteOnly))
@@ -230,7 +281,7 @@ public:
             int key = ke->key();
             if (key >= Qt::Key_0 && key <= Qt::Key_9) {
                 QWidget *focus = QApplication::focusWidget();
-                bool textHasFocus = focus && qobject_cast<QLineEdit *>(focus);
+                bool textHasFocus = focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus));
                 if (!textHasFocus) {
                     m_current = key - Qt::Key_0;
                     refreshDisplay();
@@ -238,7 +289,7 @@ public:
                 }
             } else if (key == Qt::Key_Return || key == Qt::Key_Enter) {
                 QWidget *focus = QApplication::focusWidget();
-                bool textHasFocus = focus && qobject_cast<QLineEdit *>(focus);
+                bool textHasFocus = focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus));
                 if (!textHasFocus) {
                     if (m_typeEdit) {
                         m_typeEdit->setText(m_labels[m_current]);
@@ -249,6 +300,61 @@ public:
         }
         return QObject::eventFilter(watched, event);
     }
+};
+
+
+/* Deep copy of an lc_data_t for use on the worker thread (frees only x/y/dy; _buf stays null). */
+static lc_data_t cloneLcData(const lc_data_t *src) {
+    lc_data_t copy;
+    memset(&copy, 0, sizeof(copy));
+    if (!src || src->n == 0) return copy;
+    copy.n = src->n;
+    copy.magnitude = src->magnitude;
+    copy._buf = nullptr;
+    copy.x = (double *)malloc((size_t)src->n * sizeof(double));
+    copy.y = (float *)malloc((size_t)src->n * sizeof(float));
+    copy.dy = (float *)malloc((size_t)src->n * sizeof(float));
+    if (copy.x) memcpy(copy.x, src->x, (size_t)src->n * sizeof(double));
+    if (copy.y) memcpy(copy.y, src->y, (size_t)src->n * sizeof(float));
+    if (copy.dy) memcpy(copy.dy, src->dy, (size_t)src->n * sizeof(float));
+    return copy;
+}
+
+/* Worker that runs the (blocking, multithreaded) periodogram computation off the GUI thread. */
+class PeriodogramTask : public QObject {
+    Q_OBJECT
+public:
+    PeriodogramTask(const lc_data_t *data, const lc_periodogram_config_t &cfg, lc_progress_t *progress)
+        : m_data(cloneLcData(data)), m_cfg(cfg), m_progress(progress) {}
+    ~PeriodogramTask() override { lc_free(&m_data); }
+
+public slots:
+    void run() {
+        lc_periodogram_result_t result;
+        memset(&result, 0, sizeof(result));
+        int rc = lc_compute_periodogram(&m_data, &m_cfg, &result, m_progress);
+        if (rc == 0) {
+            QVector<float> nll(result.nll, result.nll + result.nfreq);
+            double fmin = result.fmin;
+            double fstep = result.fstep;
+            lc_periodogram_result_free(&result);
+            emit finished(fmin, fstep, nll);
+        } else if (rc == 1) {
+            emit cancelled();
+        } else {
+            emit failed(QStringLiteral("Periodogram computation failed"));
+        }
+    }
+
+signals:
+    void finished(double fmin, double fstep, QVector<float> nll);
+    void cancelled();
+    void failed(QString msg);
+
+private:
+    lc_data_t m_data;
+    lc_periodogram_config_t m_cfg;
+    lc_progress_t *m_progress;
 };
 
 
@@ -267,7 +373,8 @@ int main(int argc, char *argv[]) {
                           "unknown", "unknown", "unknown", "unknown", "unknown"};
     bool numpadNav = false;
     QVector<FileEntry> files;
-    loadConfig(labels, &numpadNav, &files);
+    PeriodSearchSettings ps;
+    loadConfig(labels, &numpadNav, &files, &ps);
     int counts[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     
     // Menu Bar
@@ -287,6 +394,7 @@ int main(int argc, char *argv[]) {
     //optionsMenu->addAction("Classes");
     //optionsMenu->addAction("Frequency analysis");
     optionsMenu->addAction("Customize Period Search...");
+    QAction *periodSearchAction = optionsMenu->actions().last();
     //optionsMenu->addAction("Light Curve");
     optionsMenu->addAction("Plot Options");
     optionsMenu->addAction("Period Scroll");
@@ -422,6 +530,8 @@ int main(int argc, char *argv[]) {
     app.installEventFilter(classDisplay);
 
     // Light curve loading logic
+    std::function<void()> onLightCurveLoaded;
+
     lc_data_t lcData;
     memset(&lcData, 0, sizeof(lcData));
 
@@ -471,7 +581,8 @@ int main(int argc, char *argv[]) {
         if (!found) {
             files.append(FileEntry{path, (int)lcData.n});
         }
-        saveConfig(labels, numpadNav, files);
+        saveConfig(labels, numpadNav, files, ps);
+        if (onLightCurveLoaded) onLightCurveLoaded();
     };
 
     QObject::connect(loadLcAction, &QAction::triggered, [&]() {
@@ -486,9 +597,9 @@ int main(int argc, char *argv[]) {
         while (reopen) {
             reopen = false;
             CustomizeLabelsDialog dlg(labels, &numpadNav, &window);
-            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav, &files]() {
+            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav, &files, &ps]() {
                 classDisplay->refreshDisplay();
-                saveConfig(labels, numpadNav, files);
+                saveConfig(labels, numpadNav, files, ps);
             });
             dlg.exec();
             if (dlg.shouldReopen()) {
@@ -508,15 +619,22 @@ int main(int argc, char *argv[]) {
     QGroupBox *searchGroupBox = new QGroupBox("Period Search");
     QVBoxLayout *searchLayout = new QVBoxLayout(searchGroupBox);
     QHBoxLayout *searchBtns = new QHBoxLayout();
-    searchBtns->addWidget(new QPushButton("AoV"));
-    searchBtns->addWidget(new QPushButton("IHS"));
-    searchBtns->addWidget(new QPushButton("GB"));
-    searchBtns->addWidget(new QPushButton("BLS"));
-    searchBtns->addWidget(new QPushButton("P"));
-    searchBtns->addWidget(new QPushButton("Stop"));
-    searchBtns->addWidget(new QPushButton("…"));
+    QPushButton *aovBtn = new QPushButton("AoV");
+    QPushButton *ihsBtn = new QPushButton("IHS");
+    QPushButton *gbBtn = new QPushButton("GB");
+    QPushButton *blsBtn = new QPushButton("BLS");
+    QPushButton *pBtn = new QPushButton("P");
+    QPushButton *stopBtn = new QPushButton("Stop");
+    QPushButton *moreBtn = new QPushButton("…");
+    searchBtns->addWidget(aovBtn);
+    searchBtns->addWidget(ihsBtn);
+    searchBtns->addWidget(gbBtn);
+    searchBtns->addWidget(blsBtn);
+    searchBtns->addWidget(pBtn);
+    searchBtns->addWidget(stopBtn);
+    searchBtns->addWidget(moreBtn);
     searchLayout->addLayout(searchBtns);
-    MockPlotWidget *searchPlot = new MockPlotWidget("Negative Log-Likelihood", false, true, false);
+    SpectrumPlotWidget *searchPlot = new SpectrumPlotWidget("Negative Log-Likelihood");
     searchLayout->addWidget(searchPlot, 1);
     periodLayout->addWidget(searchGroupBox, 1);
 
@@ -564,7 +682,132 @@ int main(int argc, char *argv[]) {
     periodLayout->addWidget(modifyGroupBox, 1);
     
     mainLayout->addLayout(periodLayout, 2); // stretch factor 2
-    
+
+    // ---- Periodogram spectrum computation wiring ----
+    lc_progress_t *progress = lc_progress_create();
+
+    QLabel *progressLabel = new QLabel();
+    progressLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    window.statusBar()->addPermanentWidget(progressLabel);
+
+    QThread *workerThread = nullptr;
+    PeriodogramTask *task = nullptr;
+    QElapsedTimer elapsedTimer;
+    QTimer *progressTimer = new QTimer(&window);
+    progressTimer->setInterval(100);
+
+    auto setButtonsEnabled = [&](bool enabled) {
+        bool hasData = (lcData.n > 0);
+        aovBtn->setEnabled(enabled && hasData);
+        ihsBtn->setEnabled(enabled && hasData);
+        gbBtn->setEnabled(enabled && hasData);
+        blsBtn->setEnabled(enabled && hasData);
+        stopBtn->setEnabled(!enabled);
+    };
+    onLightCurveLoaded = [&]() { setButtonsEnabled(true); };
+
+    QObject::connect(progressTimer, &QTimer::timeout, [&]() {
+        uint32_t done = lc_progress_done(progress);
+        uint32_t total = lc_progress_total(progress);
+        if (total == 0) {
+            searchPlot->setProgressText("...");
+            progressLabel->setText("Computation in progress...");
+            return;
+        }
+        double pct = 100.0 * (double)done / (double)total;
+        searchPlot->setProgressText(QString("%1%").arg(pct, 0, 'f', 1));
+        QString timeLeft;
+        double elapsed = (double)elapsedTimer.elapsed() / 1000.0;
+        if (elapsed > 0.001 && done > 0) {
+            double remaining = (double)(total - done) * elapsed / (double)done;
+            if (remaining >= 60.0) {
+                int mins = (int)(remaining / 60.0);
+                int secs = (int)(remaining - (double)mins * 60.0);
+                timeLeft = QString("%1m %2s left").arg(mins).arg(secs);
+            } else {
+                timeLeft = QString("%1s left").arg(remaining, 0, 'f', 2);
+            }
+        } else {
+            timeLeft = "calculating...";
+        }
+        progressLabel->setText(QString("Computation in progress: %1% complete | %2").arg(pct, 0, 'f', 1).arg(timeLeft));
+    });
+
+    auto launchSpectrum = [&](lc_spec_method_t method) {
+        if (lcData.n == 0) {
+            QMessageBox::warning(&window, "No Data", "Load a light curve first.");
+            return;
+        }
+        if (workerThread) return; /* already running */
+
+        lc_periodogram_config_t cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.method = method;
+        cfg.nterms = ps.nterms;
+        cfg.oversampling = ps.oversampling;
+        cfg.fmin = ps.fmin;
+        cfg.fmax = ps.fmax;
+        cfg.pswf = ps.pswf;
+        cfg.nthreads = 0; /* auto: all online CPUs */
+        cfg.oversmoothing = ps.oversmoothing;
+        cfg.nbins = ps.nbins;
+
+        lc_progress_reset(progress);
+        setButtonsEnabled(false);
+        elapsedTimer.start();
+        searchPlot->setProgressText("...");
+        progressLabel->setText("Computation in progress...");
+        progressTimer->start();
+
+        workerThread = new QThread();
+        task = new PeriodogramTask(&lcData, cfg, progress);
+        task->moveToThread(workerThread);
+
+        QObject::connect(workerThread, &QThread::started, task, &PeriodogramTask::run);
+        QObject::connect(task, &PeriodogramTask::finished, searchPlot,
+                         [searchPlot](double fmin, double fstep, QVector<float> nll) { searchPlot->setData(fmin, fstep, nll); });
+        QObject::connect(task, &PeriodogramTask::failed, &window,
+                         [&window](QString msg) { QMessageBox::warning(&window, "Computation Failed", msg); });
+
+        auto onComplete = [&]() {
+            progressTimer->stop();
+            progressLabel->clear();
+            searchPlot->setProgressText("");
+            setButtonsEnabled(true);
+            if (workerThread) workerThread->quit();
+        };
+        QObject::connect(task, &PeriodogramTask::finished, &window, [onComplete](double, double, QVector<float>) { onComplete(); });
+        QObject::connect(task, &PeriodogramTask::cancelled, &window, [onComplete]() { onComplete(); });
+        QObject::connect(task, &PeriodogramTask::failed, &window, [onComplete](QString) { onComplete(); });
+
+        QObject::connect(workerThread, &QThread::finished, task, &QObject::deleteLater);
+        QObject::connect(workerThread, &QThread::finished, workerThread, &QObject::deleteLater);
+        QObject::connect(workerThread, &QThread::finished, &window, [&]() {
+            workerThread = nullptr;
+            task = nullptr;
+        });
+
+        workerThread->start();
+    };
+
+    QObject::connect(aovBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_AOV); });
+    QObject::connect(ihsBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_IHS); });
+    QObject::connect(gbBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_GB); });
+    QObject::connect(blsBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_BLS); });
+    QObject::connect(stopBtn, &QPushButton::clicked, [&]() { lc_progress_request_cancel(progress); });
+    /* pBtn ("P") intentionally left unconnected. */
+
+    auto openPeriodSearchDialog = [&]() {
+        CustomizePeriodSearchDialog dlg(&ps, &window);
+        if (dlg.exec() == QDialog::Accepted) {
+            saveConfig(labels, numpadNav, files, ps);
+        }
+    };
+    QObject::connect(moreBtn, &QPushButton::clicked, openPeriodSearchDialog);
+    QObject::connect(periodSearchAction, &QAction::triggered, openPeriodSearchDialog);
+
+    setButtonsEnabled(true); /* initial state: disabled until a light curve is loaded */
+
     window.show();
 
     /* Auto-load file passed as argv[1] */
@@ -574,3 +817,5 @@ int main(int argc, char *argv[]) {
 
     return app.exec();
 }
+
+#include "main.moc"
