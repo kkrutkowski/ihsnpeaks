@@ -44,6 +44,7 @@ extern "C" {
 #include "windows/customize_labels.h"
 #include "windows/classification_stats.h"
 #include "windows/lightcurve_plot.h"
+#include "windows/phased_lightcurve.h"
 #include "windows/spectrum_plot.h"
 #include "windows/zoomed_spectrum.h"
 #include "windows/customize_period_search.h"
@@ -494,7 +495,7 @@ int main(int argc, char *argv[]) {
     // Raw and Phased Plots Row
     QHBoxLayout *plotsLayout = new QHBoxLayout();
     LightCurvePlotWidget *rawPlot = new LightCurvePlotWidget("Raw Light Curve");
-    MockPlotWidget *phasedPlot = new MockPlotWidget("Phased Light Curve", true, false, false);
+    PhasedLightCurveWidget *phasedPlot = new PhasedLightCurveWidget("Phased Light Curve");
     plotsLayout->addWidget(rawPlot);
     plotsLayout->addWidget(phasedPlot);
     mainLayout->addLayout(plotsLayout, 3); // stretch factor 3
@@ -592,6 +593,7 @@ int main(int argc, char *argv[]) {
 
         /* Update plot */
         rawPlot->setData(&lcData);
+        phasedPlot->setData(&lcData);
 
         /* Update UI labels */
         noPointsLabel->setText(QString("No. points    %1").arg(lcData.n));
@@ -722,6 +724,8 @@ int main(int argc, char *argv[]) {
                      [zoomPlot](double freq) { zoomPlot->selectFrequency(freq, true); });
     QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged,
                      searchPlot, &SpectrumPlotWidget::setSelectedFrequency);
+    QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged,
+                     phasedPlot, &PhasedLightCurveWidget::setFrequency);
     QObject::connect(searchPlot, &SpectrumPlotWidget::rangeSelected,
                      zoomPlot, &ZoomedSpectrumWidget::setViewFromSelection);
 
