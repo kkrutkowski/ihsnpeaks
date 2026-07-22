@@ -87,6 +87,7 @@ add_executable(lc-qt
     src/windows/classification_stats.cpp
     src/windows/lightcurve_plot.cpp
     src/windows/spectrum_plot.cpp
+    src/windows/zoomed_spectrum.cpp
     src/windows/customize_period_search.cpp
 )
 

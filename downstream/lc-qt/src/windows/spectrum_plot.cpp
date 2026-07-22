@@ -1,6 +1,7 @@
 #include "spectrum_plot.h"
 
 #include <QPaintEvent>
+#include <QMouseEvent>
 #include <QPen>
 #include <QFont>
 #include <algorithm>
@@ -12,6 +13,7 @@ constexpr double OVERZOOM_POINTS_PER_PIXEL = 0.75;
 constexpr double SPLINE_SAMPLES_PER_PIXEL = 6.0;
 constexpr int SPLINE_MARGIN_POINTS = 6;
 constexpr int POINTS_PER_PIXEL_BUDGET = 8;
+constexpr int DRAG_THRESHOLD_PX = 5; /* click vs. rubber-band drag discrimination */
 
 /* Not-a-knot cubic spline second derivatives M for strictly increasing xs (N >= 3). */
 QVector<double> splineMoments(const QVector<double> &xs, const QVector<double> &ys) {
@@ -104,7 +106,72 @@ void SpectrumPlotWidget::setData(double fmin, double fstep, const QVector<float>
 void SpectrumPlotWidget::clearData() {
     m_nll.clear();
     m_nfreq = 0;
+    m_selectedFreq = -1.0;
     update();
+}
+
+void SpectrumPlotWidget::setSelectedFrequency(double freq) {
+    m_selectedFreq = freq;
+    update();
+}
+
+double SpectrumPlotWidget::freqAtPixel(int px) const {
+    int plotW = width() - PAD_L - PAD_R;
+    if (plotW <= 0 || m_nfreq == 0) return m_fmin;
+    double xMin = freqAt(0), xMax = freqAt(m_nfreq - 1);
+    double xSpan = xMax - xMin;
+    if (xSpan < 1e-12) xSpan = 1.0;
+    double frac = std::clamp((double)(px - PAD_L) / (double)plotW, 0.0, 1.0);
+    return xMin + frac * xSpan;
+}
+
+void SpectrumPlotWidget::mousePressEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton && m_nfreq > 0) {
+        m_pressPos = event->position().toPoint();
+        m_dragCurrent = m_pressPos;
+        m_hasPress = true;
+        m_dragging = false;
+        return;
+    }
+    QFrame::mousePressEvent(event);
+}
+
+void SpectrumPlotWidget::mouseMoveEvent(QMouseEvent *event) {
+    if (m_hasPress) {
+        if (!m_dragging && (event->position().toPoint() - m_pressPos).manhattanLength() > DRAG_THRESHOLD_PX)
+            m_dragging = true;
+        if (m_dragging) {
+            m_dragCurrent = event->position().toPoint();
+            update();
+            return;
+        }
+    }
+    QFrame::mouseMoveEvent(event);
+}
+
+void SpectrumPlotWidget::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton && m_hasPress) {
+        bool wasDrag = m_dragging;
+        QPoint releasePos = event->position().toPoint();
+        m_hasPress = false;
+        m_dragging = false;
+        if (wasDrag) {
+            /* Rubber-band selection: emit the selected frequency range only
+               (the NLL axis of the zoomed view auto-scales). */
+            int x0 = std::min(m_pressPos.x(), releasePos.x());
+            int x1 = std::max(m_pressPos.x(), releasePos.x());
+            double f0 = freqAtPixel(x0), f1 = freqAtPixel(x1);
+            emit rangeSelected(f0, f1);
+        } else {
+            /* Plain click: select the frequency. */
+            double freq = freqAtPixel(releasePos.x());
+            m_selectedFreq = freq;
+            emit frequencyClicked(freq);
+        }
+        update();
+        return;
+    }
+    QFrame::mouseReleaseEvent(event);
 }
 
 void SpectrumPlotWidget::paintEvent(QPaintEvent *event) {
@@ -114,7 +181,7 @@ void SpectrumPlotWidget::paintEvent(QPaintEvent *event) {
 
     int w = width();
     int h = height();
-    int padL = 55, padR = 15, padT = 28, padB = 35;
+    int padL = PAD_L, padR = PAD_R, padT = PAD_T, padB = PAD_B;
     int plotW = w - padL - padR;
     int plotH = h - padT - padB;
     if (plotW <= 0 || plotH <= 0) return;
@@ -273,6 +340,28 @@ void SpectrumPlotWidget::paintEvent(QPaintEvent *event) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(59, 130, 246));
         painter.drawEllipse(poly[0], 1.5, 1.5);
+    }
+
+    // Selected-frequency indicator — thin vertical line
+    if (m_selectedFreq >= 0.0 && m_nfreq > 0) {
+        double xMinI = freqAt(0);
+        double xMaxI = freqAt(m_nfreq - 1);
+        if (m_selectedFreq >= xMinI && m_selectedFreq <= xMaxI && xSpan > 1e-12) {
+            int ix = padL + (int)std::round(((m_selectedFreq - xMin) / xSpan) * plotW);
+            painter.setPen(QPen(QColor(245, 158, 11), 1)); /* #f59e0b amber */
+            painter.drawLine(ix, padT, ix, padT + plotH);
+        }
+    }
+
+    // Rubber-band selection overlay — translucent rectangle spanning the full
+    // plot height (only the frequency range is meaningful).
+    if (m_dragging) {
+        int x0 = std::min(m_pressPos.x(), m_dragCurrent.x());
+        int x1 = std::max(m_pressPos.x(), m_dragCurrent.x());
+        QRect r(x0, padT, x1 - x0, plotH);
+        painter.setPen(QPen(QColor(59, 130, 246, 200), 1));
+        painter.setBrush(QColor(59, 130, 246, 50));
+        painter.drawRect(r);
     }
 
     // Progress overlay — upper-right corner of the plot area

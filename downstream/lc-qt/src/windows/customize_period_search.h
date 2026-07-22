@@ -12,7 +12,7 @@ struct PeriodSearchSettings {
     double oversampling = 5.0; /* oversampling factor (-o) */
     double fmin = 0.0;         /* min frequency (-f); 0 = auto */
     double fmax = 24.0;        /* max frequency (positional) */
-    double zoomFactor = 4.0;   /* stored; ignored for now */
+    double zoomFactor = 4.0;   /* zoomed spectrum: initial zoom on full-spectrum click */
     double searchRadius = 0.1; /* stored; no ihsnpeaks spectrum mapping */
     int pswf = 43;             /* NuFFT backend: 43 (pswf43) or 21 (pswf21) */
     double oversmoothing = 0.2;/* -> gbAlpha (GBLS) AND blsMinRelWidth (BLS) */

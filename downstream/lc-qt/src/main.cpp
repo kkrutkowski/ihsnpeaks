@@ -19,6 +19,7 @@
 #include <QtMath>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <functional>
 #include <QFile>
 #include <QFileInfo>
@@ -44,6 +45,7 @@ extern "C" {
 #include "windows/classification_stats.h"
 #include "windows/lightcurve_plot.h"
 #include "windows/spectrum_plot.h"
+#include "windows/zoomed_spectrum.h"
 #include "windows/customize_period_search.h"
 
 static const char *CONFIG_FILE = ".lc-config.json";
@@ -358,6 +360,31 @@ private:
     lc_progress_t *m_progress;
 };
 
+/* Format the period (1/freq) the same way upstream ihsnpeaks formats peak
+   periods with --period (src/utils/strings.h: custom_coordinate_dtoa):
+   significant digits = precision + ceil(log10(freq)) clamped to [1, 17], where
+   precision = 1 + log10(DeltaT * oversampling * nterms); the fractional part is
+   zero-padded so the value shows that many significant digits. */
+static QString formatPeriodUpstream(double freq, double deltaT, double oversampling, int nterms) {
+    if (!(freq > 0.0) || !std::isfinite(freq)) return QStringLiteral("inf");
+    double arg = deltaT * oversampling * (double)nterms;
+    int precision = (arg > 0.0) ? 1 + (int)std::log10(arg) : 1;
+    int sig = precision + (int)std::ceil(std::log10(freq));
+    if (sig < 1) sig = 1;
+    if (sig > 17) sig = 17;
+    double period = 1.0 / freq;
+    int dec;
+    if (period >= 1.0) {
+        int intDigits = (int)std::ceil(std::log10(period));
+        if (intDigits < 0) intDigits = 0;
+        dec = sig - intDigits;
+        if (dec < 0) dec = 0;
+    } else {
+        dec = sig - (int)std::floor(std::log10(period)) - 1; /* sig significant digits */
+    }
+    return QString::number(period, 'f', dec);
+}
+
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -641,27 +668,33 @@ int main(int argc, char *argv[]) {
     QGroupBox *modifyGroupBox = new QGroupBox("Period Modify");
     QVBoxLayout *modifyLayout = new QVBoxLayout(modifyGroupBox);
     QHBoxLayout *modifyBtns = new QHBoxLayout();
+    QPushButton *stepLeftBtn = new QPushButton("<");
     QLineEdit *periodVal = new QLineEdit("0.000");
     periodVal->setMaximumWidth(80);
+    QPushButton *stepRightBtn = new QPushButton(">");
+    QPushButton *x2Btn = new QPushButton("x2");
+    QPushButton *d2Btn = new QPushButton("/2");
+    QPushButton *otherBtn = new QPushButton("Other");
+    QMenu *otherMenu = new QMenu(otherBtn);
+    otherBtn->setMenu(otherMenu);
+    modifyBtns->addWidget(stepLeftBtn);
     modifyBtns->addWidget(periodVal);
-    modifyBtns->addWidget(new QPushButton("<"));
-    modifyBtns->addWidget(new QPushButton(">"));
-    modifyBtns->addWidget(new QPushButton("x2"));
-    modifyBtns->addWidget(new QPushButton("/2"));
-    modifyBtns->addWidget(new QPushButton("x3"));
-    modifyBtns->addWidget(new QPushButton("/3"));
-    modifyBtns->addWidget(new QPushButton("◄"));
-    modifyBtns->addWidget(new QPushButton("►"));
+    modifyBtns->addWidget(stepRightBtn);
+    modifyBtns->addWidget(x2Btn);
+    modifyBtns->addWidget(d2Btn);
+    modifyBtns->addWidget(otherBtn);
+    modifyBtns->addWidget(new QPushButton("◄")); /* mock-up: wired once all four widgets work */
+    modifyBtns->addWidget(new QPushButton("►")); /* mock-up: wired once all four widgets work */
     modifyLayout->addLayout(modifyBtns);
     
-    // Bottom layout for modify showing [-] and [+] on the side
+    // Bottom layout for zoomed spectrum showing [-] and [+] on the side
     QHBoxLayout *bottomModifyArea = new QHBoxLayout();
     QPushButton *minusBtn = new QPushButton("-");
     minusBtn->setMaximumSize(25, 50);
     QPushButton *plusBtn = new QPushButton("+");
     plusBtn->setMaximumSize(25, 50);
     
-    MockPlotWidget *modifyPlot = new MockPlotWidget("Period Modify", false, false, true);
+    ZoomedSpectrumWidget *zoomPlot = new ZoomedSpectrumWidget("Zoomed Spectrum");
 
     
     QVBoxLayout *leftCtrl = new QVBoxLayout();
@@ -673,7 +706,7 @@ int main(int argc, char *argv[]) {
     rightCtrl->addStretch();
     
     bottomModifyArea->addLayout(leftCtrl);
-    bottomModifyArea->addWidget(modifyPlot, 1);
+    bottomModifyArea->addWidget(zoomPlot, 1);
     bottomModifyArea->addLayout(rightCtrl);
     
     modifyLayout->addLayout(bottomModifyArea, 1);
@@ -681,6 +714,67 @@ int main(int argc, char *argv[]) {
     periodLayout->addWidget(modifyGroupBox, 1);
     
     mainLayout->addLayout(periodLayout, 2); // stretch factor 2
+
+    // ---- Zoomed spectrum wiring ----
+    QObject::connect(minusBtn, &QPushButton::clicked, zoomPlot, &ZoomedSpectrumWidget::zoomOut);
+    QObject::connect(plusBtn, &QPushButton::clicked, zoomPlot, &ZoomedSpectrumWidget::zoomIn);
+    QObject::connect(searchPlot, &SpectrumPlotWidget::frequencyClicked, zoomPlot,
+                     [zoomPlot](double freq) { zoomPlot->selectFrequency(freq, true); });
+    QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged,
+                     searchPlot, &SpectrumPlotWidget::setSelectedFrequency);
+    QObject::connect(searchPlot, &SpectrumPlotWidget::rangeSelected,
+                     zoomPlot, &ZoomedSpectrumWidget::setViewFromSelection);
+
+    /* x2 / /2 buttons and the "Other" multiplier menu (x3 /3 x5 /5 x7 /7):
+       scale the selected (pivot) frequency; the FOV re-centres on the pivot. */
+    static const struct {
+        const char *label;
+        double factor;
+    } otherMults[] = {{"x3", 3.0}, {"/3", 1.0 / 3.0}, {"x5", 5.0}, {"/5", 1.0 / 5.0}, {"x7", 7.0}, {"/7", 1.0 / 7.0}};
+    for (const auto &m : otherMults) {
+        QAction *act = otherMenu->addAction(QString::fromLatin1(m.label));
+        QObject::connect(act, &QAction::triggered, [zoomPlot, m] { zoomPlot->multiplyFrequency(m.factor); });
+    }
+    QObject::connect(x2Btn, &QPushButton::clicked, [zoomPlot] { zoomPlot->multiplyFrequency(2.0); });
+    QObject::connect(d2Btn, &QPushButton::clicked, [zoomPlot] { zoomPlot->multiplyFrequency(0.5); });
+
+    /* Period field: auto-displays the period (1/f) of the pivot formatted like
+       upstream ihsnpeaks --period peak output; editing it moves the pivot. */
+    QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged, periodVal,
+                     [&lcData, &ps, periodVal](double freq) {
+                         double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
+                         periodVal->setText(formatPeriodUpstream(freq, dT, ps.oversampling, ps.nterms));
+                     });
+    QObject::connect(periodVal, &QLineEdit::editingFinished, [periodVal, zoomPlot]() {
+        bool ok = false;
+        double p = periodVal->text().toDouble(&ok);
+        if (ok && p > 0.0) zoomPlot->selectFrequency(1.0 / p, false);
+    });
+
+    /* Arrow buttons: while held, move the selected frequency at 1/DeltaT per
+       second (DeltaT = time from the first to the last measurement). */
+    QTimer *stepTimer = new QTimer(&window);
+    stepTimer->setInterval(50);
+    QElapsedTimer stepClock;
+    int stepDir = 0;
+    QObject::connect(stepTimer, &QTimer::timeout, [&]() {
+        double dt = (double)stepClock.restart() * 1e-9; /* ns -> s */
+        double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
+        if (dT > 0.0 && stepDir != 0) zoomPlot->stepFrequency((double)stepDir * dt / dT);
+    });
+    auto startStep = [&](int dir) {
+        stepDir = dir;
+        stepClock.start();
+        stepTimer->start();
+    };
+    auto stopStep = [&]() {
+        stepTimer->stop();
+        stepDir = 0;
+    };
+    QObject::connect(stepLeftBtn, &QPushButton::pressed, [&] { startStep(-1); });
+    QObject::connect(stepLeftBtn, &QPushButton::released, stopStep);
+    QObject::connect(stepRightBtn, &QPushButton::pressed, [&] { startStep(+1); });
+    QObject::connect(stepRightBtn, &QPushButton::released, stopStep);
 
     // ---- Periodogram spectrum computation wiring ----
     lc_progress_t *progress = lc_progress_create();
@@ -766,6 +860,11 @@ int main(int argc, char *argv[]) {
         QObject::connect(workerThread, &QThread::started, task, &PeriodogramTask::run);
         QObject::connect(task, &PeriodogramTask::finished, searchPlot,
                          [searchPlot](double fmin, double fstep, QVector<float> nll) { searchPlot->setData(fmin, fstep, nll); });
+        QObject::connect(task, &PeriodogramTask::finished, zoomPlot,
+                         [zoomPlot, &ps](double fmin, double fstep, QVector<float> nll) {
+                             zoomPlot->setZoomFactor(ps.zoomFactor);
+                             zoomPlot->setFullSpectrum(fmin, fstep, nll);
+                         });
         QObject::connect(task, &PeriodogramTask::failed, &window,
                          [&window](QString msg) { QMessageBox::warning(&window, "Computation Failed", msg); });
 
