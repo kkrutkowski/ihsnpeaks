@@ -11,6 +11,8 @@
  * entry points (see lc_periodogram.h); no -fvisibility=hidden is used. nufft1.c is a separate
  * object (not #included here), mirroring the ihsnpeaks release dispatch model for future
  * multi-microarchitecture builds.
+ *
+ * The phased model overlay (lc_compute_phased_model) lives in lc_model.c.
  */
 
 /* Upstream constants normally defined at the top of src/main.c. They are referenced by
@@ -420,6 +422,7 @@ static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, 
     return ok;
 }
 
+
 /* Progress-aware AoV trig-sums ladder (mirrors aov_compute_trig_sums_ladder). */
 static void lc_aov_trig_sums_progress(buffer_t *buffer, double fmin, double fstep, size_t num_blocks, int max_factor, float epsilon, float ymean,
                                       bool yweighted, float *S, float *C, uint32_t total_count, lc_progress_t *progress) {
@@ -631,22 +634,17 @@ static bool lc_execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, 
 
 /* ===================================================================================
  * GB/BLS direct evaluation grid (bridge-side loop for progress + cancellation)
- *
- * Reuses upstream per-frequency math (get_eval_likelihood) and per-thread scratch
- * (alloc_direct_scratch / free_direct_scratch / direct_grid_chunk_size); only the
- * thin workset orchestration is custom so we can report progress and honour cancel,
- * which upstream execute_direct_grid does not expose.
  * =================================================================================== */
 
 typedef struct {
-    buffer_t *scratch; /* per-thread scratch (length nthreads) */
+    buffer_t *scratch;
     parameters *params;
     const eval_method_t *method;
     double fmin;
     double fstep;
     uint32_t nfreq;
     uint32_t chunk;
-    float *out; /* NLL output, length nfreq */
+    float *out;
     lc_progress_t *progress;
 } lc_direct_ctx_t;
 
@@ -659,7 +657,6 @@ static void lc_direct_worker(void *data, long i, int tid) {
     if (end > ctx->nfreq) end = ctx->nfreq;
     if (begin >= end) return;
 
-    /* Cooperative cancellation: stop at chunk boundaries. */
     if (lc_progress_is_cancelled(ctx->progress)) return;
 
     for (uint32_t idx = begin; idx < end; ++idx) {
@@ -670,7 +667,6 @@ static void lc_direct_worker(void *data, long i, int tid) {
     lc_progress_add_done(ctx->progress, end - begin);
 }
 
-/* Returns 0 on success, 1 if cancelled, <0 on error. */
 static int lc_run_direct_grid(buffer_t *buffer, parameters *params, const eval_method_t *method, kt_forpool_t *pool, double fmin, double fstep,
                               uint32_t nfreq, float *out, lc_progress_t *progress) {
     if (nfreq == 0U) return 0;
@@ -693,15 +689,8 @@ static int lc_run_direct_grid(buffer_t *buffer, parameters *params, const eval_m
     }
 
     if (ok) {
-        lc_direct_ctx_t ctx = {.scratch = scratch,
-                               .params = params,
-                               .method = method,
-                               .fmin = fmin,
-                               .fstep = fstep,
-                               .nfreq = nfreq,
-                               .chunk = chunk,
-                               .out = out,
-                               .progress = progress};
+        lc_direct_ctx_t ctx = {.scratch = scratch, .params = params, .method = method, .fmin = fmin, .fstep = fstep,
+                               .nfreq = nfreq, .chunk = chunk, .out = out, .progress = progress};
         if (pool && nthreads > 1) {
             kt_forpool(pool, lc_direct_worker, &ctx, (long)nwork);
         } else {
@@ -721,17 +710,12 @@ static int lc_run_direct_grid(buffer_t *buffer, parameters *params, const eval_m
 
 /* ===================================================================================
  * Parallel NLL conversion (power[] -> NLL)
- *
- * For AoV, capture_spectrum_column calls aov_likelihood_from_r2 -> lnFAP -> lnI ->
- * incbeta (regularized incomplete beta / continued fraction) per frequency, which is
- * ~1000x more expensive than IHS's correct_ihs_res. Parallelize it with kt_forpool
- * so it doesn't stall the UI after the sweep reaches 100%.
  * =================================================================================== */
 
 typedef struct {
-    const float *power; /* offset to this workset's start */
-    float *nll;         /* offset to this workset's start */
-    uint32_t count;     /* number of elements in this chunk */
+    const float *power;
+    float *nll;
+    uint32_t count;
     int nterms;
     int aov_n_eff;
     bool use_aov;
@@ -758,8 +742,6 @@ static void lc_nll_worker(void *data, long i, int tid) {
     lc_progress_add_done(ws->progress, 1U);
 }
 
-/* Parallel NLL conversion using the shared thread pool.
- * Returns number of progress blocks added (for total accounting). */
 static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t nfreq, int nterms, int aov_n_eff, bool use_aov,
                                         kt_forpool_t *pool, lc_progress_t *progress) {
     if (nfreq == 0) return 0;
@@ -771,7 +753,6 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
 
     lc_nll_workset_t *worksets = (lc_nll_workset_t *)calloc(nwork, sizeof(lc_nll_workset_t));
     if (!worksets) {
-        /* Fallback: serial */
         for (uint32_t j = 0; j < nfreq; ++j) {
             float magnitude;
             if (use_aov) magnitude = aov_likelihood_from_r2(power[j], nterms, aov_n_eff);
@@ -800,16 +781,11 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
         for (uint32_t w = 0; w < nwork; ++w) lc_nll_worker(&disp, (long)w, 0);
     }
     free(worksets);
-    return nwork; /* number of progress blocks consumed */
+    return nwork;
 }
 
 /* ===================================================================================
  * Peak detection (quadratic Lagrange, mode-0 style)
- *
- * Scans the NLL array for local maxima above a threshold, refines their position
- * with quadratic Lagrange interpolation (same formula as upstream
- * quadratic_peak_position in src/process.h), and stores up to LC_MAX_PEAKS peaks
- * sorted by NLL descending.
  * =================================================================================== */
 
 static bool lc_quadratic_peak_position(double freq, double fstep, float left, float center, float right, double oversampling, double *peak_freq,
@@ -838,7 +814,6 @@ static bool lc_quadratic_peak_position(double freq, double fstep, float left, fl
     return true;
 }
 
-/* Insert a peak into the sorted (descending NLL) list, keeping at most max_peaks entries. */
 static void lc_insert_peak(lc_peak_t *peaks, int *npeaks, int max_peaks, double freq, float nll) {
     if (*npeaks == max_peaks && nll <= peaks[max_peaks - 1].nll) return;
 
@@ -848,7 +823,6 @@ static void lc_insert_peak(lc_peak_t *peaks, int *npeaks, int max_peaks, double 
     } else {
         ++(*npeaks);
     }
-    /* Shift lower-ranked peaks down */
     while (pos > 0 && peaks[pos - 1].nll < nll) {
         peaks[pos] = peaks[pos - 1];
         --pos;
@@ -880,15 +854,12 @@ static void lc_detect_peaks(const float *nll, uint32_t nfreq, double fmin, doubl
  * Periodogram computation
  * =================================================================================== */
 
-/* Count physical cores by reading /proc/cpuinfo unique (physical id, core id) pairs.
- * Falls back to sysconf(_SC_NPROCESSORS_ONLN) on failure. */
 static int count_physical_cores(void) {
     FILE *fp = fopen("/proc/cpuinfo", "r");
     if (!fp) return (int)sysconf(_SC_NPROCESSORS_ONLN);
     char line[256];
     int phys_id = -1, core_id = -1;
     int count = 0;
-    /* Simple heuristic: count unique (physical_id * 1024 + core_id) combos */
     int seen[4096];
     int nseen = 0;
     while (fgets(line, sizeof(line), fp)) {
@@ -909,7 +880,6 @@ static int count_physical_cores(void) {
             core_id = -1;
         }
     }
-    /* Handle last entry if file doesn't end with blank line */
     if (phys_id >= 0 && core_id >= 0) {
         int key = phys_id * 1024 + core_id;
         int dup = 0;
@@ -934,8 +904,8 @@ LC_API void lc_periodogram_result_free(lc_periodogram_result_t *r) {
  * =================================================================================== */
 
 struct lc_compute_ctx {
-    int nthreads;        /* pool size: all logical CPUs (SMT) for GB/BLS */
-    int physical_cores;  /* physical core count: used to cap IHS/AoV worksets */
+    int nthreads;
+    int physical_cores;
     kt_forpool_t *pool;
     parameters params;
     buffer_t primary;
@@ -955,7 +925,6 @@ LC_API lc_compute_ctx_t *lc_compute_ctx_create(int nthreads) {
     if (!ctx) return NULL;
     ctx->physical_cores = count_physical_cores();
     if (ctx->physical_cores < 1) ctx->physical_cores = 1;
-    /* Pool uses all logical CPUs (SMT) — GB/BLS benefit from extra threads */
     ctx->nthreads = nthreads > 0 ? nthreads : (int)sysconf(_SC_NPROCESSORS_ONLN);
     if (ctx->nthreads < 1) ctx->nthreads = 1;
     if (ctx->nthreads > 1) ctx->pool = (kt_forpool_t *)kt_forpool_init(ctx->nthreads, false);
@@ -982,21 +951,18 @@ LC_API void lc_compute_ctx_destroy(lc_compute_ctx_t *ctx) {
     free(ctx);
 }
 
-/* Invalidate and rebuild cached plans/buffers when data size or config changes. */
 static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_span, const lc_periodogram_config_t *cfg) {
     int gridMode = (cfg->pswf == 21) ? NUFFT1_PSWF21 : NUFFT1_PSWF43;
     int nterms = cfg->nterms > 0 ? cfg->nterms : 3;
     int periMethod = (cfg->method == LC_SPEC_AOV) ? PERIODOGRAM_AOV : PERIODOGRAM_IHS;
     float fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
 
-    /* Check if we need to rebuild plans and buffers */
     bool need_rebuild = (ctx->cached_maxLen != n || ctx->cached_gridMode != gridMode || ctx->cached_nterms != nterms ||
                          ctx->cached_periodogramMethod != periMethod || ctx->cached_fmax != fmax ||
                          ctx->cached_method != (int)cfg->method || !ctx->primary_allocated);
 
     if (!need_rebuild) return 0;
 
-    /* Free old resources */
     if (ctx->workers_allocated) {
         for (int i = 0; i < ctx->params.nbuffers; ++i) {
             if (ctx->params.buffers[i]) {
@@ -1017,7 +983,6 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->params.target = NULL;
     free_targets(&ctx->params.targets);
 
-    /* Build fresh parameters */
     char arg0[] = "ihsnpeaks";
     char arg1[] = "lc.dat";
     char arg2[] = "24.0";
@@ -1044,12 +1009,10 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->params.maxFreqCount = estimate_frequency_count(&ctx->params, time_span);
     initialize_nufft_plan(&ctx->params);
 
-    /* Allocate primary buffer */
     memset(&ctx->primary, 0, sizeof(ctx->primary));
     if (alloc_buffer(&ctx->primary, &ctx->params) != 0) return -1;
     ctx->primary_allocated = 1;
 
-    /* Allocate worker buffers */
     int nthreads = ctx->nthreads;
     ctx->params.nbuffers = nthreads;
     alloc_buffers(&ctx->params);
@@ -1077,13 +1040,11 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     uint32_t n = data->n;
     double time_span = (n > 1U) ? (data->x[n - 1] - data->x[0]) : 0.0;
 
-    /* Ensure cached resources match current data/config */
     if (ctx_ensure_resources(ctx, n, time_span, cfg) != 0) return -1;
 
     parameters *params = &ctx->params;
     buffer_t *buf = &ctx->primary;
 
-    /* Update per-run config that doesn't require rebuild */
     params->oversamplingFactor = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
     params->fmin = (float)cfg->fmin;
     params->fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
@@ -1097,7 +1058,6 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     bool use_aov = (cfg->method == LC_SPEC_AOV);
     bool direct_grid = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS);
 
-    /* Copy data into primary buffer and preprocess */
     for (uint32_t i = 0; i < n; ++i) {
         buf->x[i] = data->x[i];
         buf->y[i] = data->y[i];
@@ -1106,10 +1066,8 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     buf->n = n;
     preprocess_buffer(buf, params->epsilon, params->mode);
 
-    /* Frequency grid — use time span (not absolute x[n-1]) since lc-qt data
-     * may not be zero-centered (upstream .dat files start near t=0, so x[n-1]≈span). */
     double grid_span = buf->x[buf->n - 1] - buf->x[0];
-    if (grid_span <= 0.0) grid_span = buf->x[buf->n - 1]; /* fallback for x[0]==0 */
+    if (grid_span <= 0.0) grid_span = buf->x[buf->n - 1];
     const eval_method_t *eval_method = eval_method_for_params(params);
     double fmin = effective_grid_fmin(params, grid_span);
     double fstep;
@@ -1144,9 +1102,6 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
         if (lc_progress_is_cancelled(progress)) { result_code = 1; goto done; }
 
         int aov_n_eff = periodogram_effective_n(buf);
-        /* Add conversion work to progress total BEFORE converting, so the UI
-         * doesn't show 100% until the NLL conversion is also complete.
-         * For AoV this matters (lnFAP is expensive); for IHS it's negligible but harmless. */
         int conv_threads = (pool && pool->n_threads > 1) ? pool->n_threads : 1;
         uint32_t conv_blocks = (uint32_t)conv_threads;
         if (conv_blocks > nfreq) conv_blocks = nfreq;
@@ -1160,7 +1115,6 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     out->nll = nll;
     nll = NULL;
 
-    /* Detect peaks from the NLL array (quadratic Lagrange, mode-0 style). */
     lc_detect_peaks(out->nll, nfreq, fmin, fstep, cfg->oversampling > 0.0 ? cfg->oversampling : 5.0, cfg->peak_threshold, out->peaks, &out->npeaks);
 
     result_code = 0;
@@ -1179,3 +1133,7 @@ LC_API int lc_compute_periodogram(const lc_data_t *data, const lc_periodogram_co
     lc_compute_ctx_destroy(ctx);
     return rc;
 }
+
+/* Phased model overlay — included here (single-TU) to avoid duplicate symbols from
+ * upstream header-only libraries (sds.h, convolution.h) that have non-static defs. */
+#include "lc_model.c"

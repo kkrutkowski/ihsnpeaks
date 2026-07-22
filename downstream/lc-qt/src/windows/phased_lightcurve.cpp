@@ -3,8 +3,10 @@
 #include <QPaintEvent>
 #include <QPen>
 #include <QFont>
+#include <QPainterPath>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 PhasedLightCurveWidget::PhasedLightCurveWidget(const QString &title, QWidget *parent)
     : QFrame(parent), m_title(title) {
@@ -39,6 +41,24 @@ void PhasedLightCurveWidget::clearData() {
 
 void PhasedLightCurveWidget::setFrequency(double freq) {
     m_freq = freq;
+    update();
+}
+
+void PhasedLightCurveWidget::setModel(const float *model, unsigned int n, lc_model_style_t style) {
+    if (!model || n == 0 || n != m_n) {
+        clearModel();
+        return;
+    }
+    m_model.resize(n);
+    for (unsigned int i = 0; i < n; i++) m_model[i] = model[i];
+    m_modelStyle = style;
+    m_hasModel = true;
+    update();
+}
+
+void PhasedLightCurveWidget::clearModel() {
+    m_model.clear();
+    m_hasModel = false;
     update();
 }
 
@@ -147,5 +167,62 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
         painter.drawEllipse(QPointF(px, py), 1.5, 1.5);
         px = padL + ((phase + 1.0 - xMin) / xSpan) * plotW;
         painter.drawEllipse(QPointF(px, py), 1.5, 1.5);
+    }
+
+    // Draw model overlay (semi-transparent, distinct colour)
+    if (m_hasModel && m_model.size() == (int)m_n) {
+        QColor modelColor(245, 158, 11, 200); // amber #f59e0b, alpha ~200
+
+        if (m_modelStyle == LC_MODEL_SCATTER) {
+            // Scatter: draw ellipses at model positions
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(modelColor);
+            for (unsigned int i = 0; i < m_n; i++) {
+                double phase = std::fmod((m_x[i] - t0) * m_freq, 1.0);
+                if (phase < 0.0) phase += 1.0;
+                double py = padT + ((double)(m_model[i] - yMin) / ySpan) * plotH;
+                double px = padL + ((phase - xMin) / xSpan) * plotW;
+                painter.drawEllipse(QPointF(px, py), 1.5, 1.5);
+                px = padL + ((phase + 1.0 - xMin) / xSpan) * plotW;
+                painter.drawEllipse(QPointF(px, py), 1.5, 1.5);
+            }
+        } else {
+            // Line: sort by phase, draw connected polyline
+            struct PhasePoint {
+                double phase;
+                float val;
+            };
+            std::vector<PhasePoint> pts;
+            pts.reserve(m_n);
+            for (unsigned int i = 0; i < m_n; i++) {
+                double phase = std::fmod((m_x[i] - t0) * m_freq, 1.0);
+                if (phase < 0.0) phase += 1.0;
+                pts.push_back({phase, m_model[i]});
+            }
+            std::sort(pts.begin(), pts.end(), [](const PhasePoint &a, const PhasePoint &b) {
+                return a.phase < b.phase;
+            });
+
+            painter.setPen(QPen(modelColor, 3.0));
+            painter.setBrush(Qt::NoBrush);
+
+            // Draw the model curve for [0,1] and [1,2] (wrap)
+            for (int wrap = 0; wrap < 2; wrap++) {
+                QPainterPath path;
+                bool first = true;
+                for (const auto &pt : pts) {
+                    double ph = pt.phase + (double)wrap;
+                    double px = padL + ((ph - xMin) / xSpan) * plotW;
+                    double py = padT + ((double)(pt.val - yMin) / ySpan) * plotH;
+                    if (first) {
+                        path.moveTo(px, py);
+                        first = false;
+                    } else {
+                        path.lineTo(px, py);
+                    }
+                }
+                painter.drawPath(path);
+            }
+        }
     }
 }

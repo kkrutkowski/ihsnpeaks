@@ -8,6 +8,7 @@
 
 extern "C" {
 #include "lc_readout.h"
+#include "lc_periodogram.h"
 }
 
 /*
@@ -36,6 +37,10 @@ public slots:
     /* Fold the curve at freq (cycles/day); freq <= 0 clears the folding. */
     void setFrequency(double freq);
 
+    /* Set the model overlay (same length as data). style determines rendering. */
+    void setModel(const float *model, unsigned int n, lc_model_style_t style);
+    void clearModel();
+
 protected:
     void paintEvent(QPaintEvent *event) override;
 
@@ -45,4 +50,9 @@ private:
     QVector<float> m_y;
     unsigned int m_n = 0;
     double m_freq = -1.0;
+
+    /* Model overlay */
+    QVector<float> m_model;
+    lc_model_style_t m_modelStyle = LC_MODEL_LINE;
+    bool m_hasModel = false;
 };

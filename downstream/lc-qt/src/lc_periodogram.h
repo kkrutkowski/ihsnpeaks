@@ -96,6 +96,25 @@ LC_API void lc_compute_ctx_destroy(lc_compute_ctx_t *ctx);
 LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *data, const lc_periodogram_config_t *cfg, lc_periodogram_result_t *out,
                                       lc_progress_t *progress);
 
+/*
+ * Phased model overlay: compute model y-values at each data point for a single
+ * frequency (the pivot). The model type matches the spectrum method:
+ *   IHS/AoV -> trigonometric (Szego / direct sine-cosine sums)
+ *   GB      -> convolution smoother (scatter style)
+ *   BLS     -> boxcar (line style)
+ *
+ * model_out must be pre-allocated with data->n floats.
+ * style_out indicates how the widget should render the model.
+ * Returns 0 on success, <0 on error.
+ */
+typedef enum {
+    LC_MODEL_LINE = 0, /* BLS, AoV, IHS: continuous line plot */
+    LC_MODEL_SCATTER   /* GB: scatter overlay */
+} lc_model_style_t;
+
+LC_API int lc_compute_phased_model(const lc_data_t *data, const lc_periodogram_config_t *cfg, double freq, float *model_out,
+                                   lc_model_style_t *style_out);
+
 #ifdef __cplusplus
 }
 #endif

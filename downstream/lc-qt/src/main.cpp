@@ -811,6 +811,34 @@ int main(int argc, char *argv[]) {
     /* Track which method's spectrum is currently displayed (-1 = none). */
     int activeMethodIdx = -1;
 
+    /* Phased model overlay: recompute model at every pivot frequency change. */
+    QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged,
+                     &window, [&](double freq) {
+                         if (lcData.n == 0 || activeMethodIdx < 0 || !(freq > 0.0)) {
+                             phasedPlot->clearModel();
+                             return;
+                         }
+                         lc_periodogram_config_t mcfg;
+                         memset(&mcfg, 0, sizeof(mcfg));
+                         mcfg.method = (lc_spec_method_t)activeMethodIdx;
+                         mcfg.nterms = ps.nterms;
+                         mcfg.oversampling = ps.oversampling;
+                         mcfg.fmin = ps.fmin;
+                         mcfg.fmax = ps.fmax;
+                         mcfg.pswf = ps.pswf;
+                         mcfg.oversmoothing = ps.oversmoothing;
+                         mcfg.nbins = ps.nbins;
+
+                         QVector<float> modelBuf((int)lcData.n);
+                         lc_model_style_t style = LC_MODEL_LINE;
+                         int rc = lc_compute_phased_model(&lcData, &mcfg, freq, modelBuf.data(), &style);
+                         if (rc == 0) {
+                             phasedPlot->setModel(modelBuf.constData(), lcData.n, style);
+                         } else {
+                             phasedPlot->clearModel();
+                         }
+                     });
+
     QLabel *progressLabel = new QLabel();
     progressLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     window.statusBar()->addPermanentWidget(progressLabel);
@@ -897,7 +925,8 @@ int main(int argc, char *argv[]) {
 
         QObject::connect(workerThread, &QThread::started, task, &PeriodogramTask::run);
         QObject::connect(task, &PeriodogramTask::finished, &window,
-                         [&](double fmin, double fstep, QVector<float> nll, QVector<QPair<double, float>>) {
+                         [&, methodIdx](double fmin, double fstep, QVector<float> nll, QVector<QPair<double, float>>) {
+                             activeMethodIdx = methodIdx; /* set BEFORE any centerFrequencyChanged fires */
                              searchPlot->setData(fmin, fstep, nll);
                              specFmin = fmin;
                              specFstep = fstep;
@@ -927,8 +956,7 @@ int main(int argc, char *argv[]) {
             if (workerThread) workerThread->quit();
         };
         QObject::connect(task, &PeriodogramTask::finished, &window,
-                         [&, onComplete, methodIdx](double, double, QVector<float>, QVector<QPair<double, float>>) {
-                             activeMethodIdx = methodIdx;
+                         [&, onComplete](double, double, QVector<float>, QVector<QPair<double, float>>) {
                              onComplete();
                          });
         QObject::connect(task, &PeriodogramTask::cancelled, &window, [&, onComplete, prevMethodIdx, methodBtns]() {
