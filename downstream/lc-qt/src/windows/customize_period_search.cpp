@@ -24,6 +24,7 @@ CustomizePeriodSearchDialog::CustomizePeriodSearchDialog(PeriodSearchSettings *s
         "  color: #f1f5f9; padding: 4px 12px; font-weight: bold; }"
         "QPushButton:hover { background-color: #3b82f6; border-color: #60a5fa; }"
         "QPushButton:pressed { background-color: #1d4ed8; }"
+        "QCheckBox { color: #cbd5e1; }"
         "QGroupBox { border: 1px solid #32323b; border-radius: 6px; margin-top: 10px; padding: 6px; "
         "  font-weight: bold; color: #60a5fa; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; "
@@ -109,6 +110,10 @@ CustomizePeriodSearchDialog::CustomizePeriodSearchDialog(PeriodSearchSettings *s
     grid->addWidget(new QLabel("Number of bins (BLS)"), row, 0);
     grid->addWidget(m_nbins, row++, 1);
 
+    m_autoCenter = new QCheckBox("Automatically center on highest peak");
+    m_autoCenter->setChecked(m_settings->autoCenter);
+    grid->addWidget(m_autoCenter, row++, 0, 1, 2);
+
     grid->setColumnStretch(1, 1);
     mainLayout->addWidget(box);
 
@@ -135,4 +140,5 @@ void CustomizePeriodSearchDialog::apply() {
     m_settings->pswf = m_pswf->currentData().toInt();
     m_settings->oversmoothing = m_oversmoothing->value();
     m_settings->nbins = m_nbins->value();
+    m_settings->autoCenter = m_autoCenter->isChecked();
 }

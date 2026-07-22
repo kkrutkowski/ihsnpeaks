@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <array>
 #include <functional>
 #include <QFile>
 #include <QFileInfo>
@@ -28,6 +29,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QVector>
+#include <QPair>
 #include <QThread>
 #include <QTimer>
 #include <QStatusBar>
@@ -111,10 +113,16 @@ static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *
         if (strcmp(key, "period_search") == 0 && el->value->type == json_type_object && ps) {
             json_object_s *pobj = json_value_as_object(el->value);
             for (json_object_element_s *pe = pobj->start; pe; pe = pe->next) {
+                const char *pk = pe->name->string;
+                /* Handle boolean fields stored as strings */
+                if (pe->value->type == json_type_string && strcmp(pk, "auto_center") == 0) {
+                    json_string_s *s = json_value_as_string(pe->value);
+                    if (s) ps->autoCenter = (strcmp(s->string, "true") == 0);
+                    continue;
+                }
                 if (pe->value->type != json_type_number) continue;
                 json_number_s *num = json_value_as_number(pe->value);
                 if (!num) continue;
-                const char *pk = pe->name->string;
                 if (strcmp(pk, "nterms") == 0) ps->nterms = atoi(num->number);
                 else if (strcmp(pk, "oversampling") == 0) ps->oversampling = atof(num->number);
                 else if (strcmp(pk, "fmin") == 0) ps->fmin = atof(num->number);
@@ -181,7 +189,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                     "\"search_radius\":%6,"
                     "\"pswf\":%7,"
                     "\"oversmoothing\":%8,"
-                    "\"nbins\":%9}")
+                    "\"nbins\":%9,"
+                    "\"auto_center\":\"%10\"}")
                 .arg(ps.nterms)
                 .arg(ps.oversampling, 0, 'g', 10)
                 .arg(ps.fmin, 0, 'g', 10)
@@ -190,7 +199,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                 .arg(ps.searchRadius, 0, 'g', 10)
                 .arg(ps.pswf)
                 .arg(ps.oversmoothing, 0, 'g', 10)
-                .arg(ps.nbins);
+                .arg(ps.nbins)
+                .arg(ps.autoCenter ? "true" : "false");
     json += "}";
 
     QFile f(CONFIG_FILE);
@@ -338,10 +348,14 @@ public slots:
         int rc = lc_compute_periodogram_ctx(m_ctx, &m_data, &m_cfg, &result, m_progress);
         if (rc == 0) {
             QVector<float> nll(result.nll, result.nll + result.nfreq);
+            QVector<QPair<double, float>> peaks;
+            peaks.reserve(result.npeaks);
+            for (int i = 0; i < result.npeaks; ++i)
+                peaks.append(qMakePair(result.peaks[i].freq, result.peaks[i].nll));
             double fmin = result.fmin;
             double fstep = result.fstep;
             lc_periodogram_result_free(&result);
-            emit finished(fmin, fstep, nll);
+            emit finished(fmin, fstep, nll, peaks);
         } else if (rc == 1) {
             emit cancelled();
         } else {
@@ -350,7 +364,7 @@ public slots:
     }
 
 signals:
-    void finished(double fmin, double fstep, QVector<float> nll);
+    void finished(double fmin, double fstep, QVector<float> nll, QVector<QPair<double, float>> peaks);
     void cancelled();
     void failed(QString msg);
 
@@ -454,6 +468,7 @@ int main(int argc, char *argv[]) {
         "QPushButton { background-color: #303038; border: 1px solid #3d3d47; border-radius: 4px; color: #f1f5f9; padding: 4px 8px; font-weight: bold; }"
         "QPushButton:hover { background-color: #3b82f6; border-color: #60a5fa; }"
         "QPushButton:pressed { background-color: #1d4ed8; }"
+        "QPushButton:checked { background-color: #1d4ed8; border-color: #60a5fa; color: #ffffff; }"
         "QGroupBox { border: 1px solid #32323b; border-radius: 6px; margin-top: 10px; padding: 6px; font-weight: bold; color: #60a5fa; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; background-color: #242429; }"
         "QLabel { color: #cbd5e1; }"
@@ -655,6 +670,10 @@ int main(int argc, char *argv[]) {
     QPushButton *blsBtn = new QPushButton("BLS");
     QPushButton *stopBtn = new QPushButton("Stop");
     QPushButton *moreBtn = new QPushButton("…");
+    aovBtn->setCheckable(true);
+    ihsBtn->setCheckable(true);
+    gbBtn->setCheckable(true);
+    blsBtn->setCheckable(true);
     searchBtns->addWidget(aovBtn);
     searchBtns->addWidget(ihsBtn);
     searchBtns->addWidget(gbBtn);
@@ -734,13 +753,13 @@ int main(int argc, char *argv[]) {
     static const struct {
         const char *label;
         double factor;
-    } otherMults[] = {{"x3", 3.0}, {"/3", 1.0 / 3.0}, {"x5", 5.0}, {"/5", 1.0 / 5.0}, {"x7", 7.0}, {"/7", 1.0 / 7.0}};
+    } otherMults[] = {{"x3", 1.0 / 3.0}, {"/3", 3.0}, {"x5", 1.0 / 5.0}, {"/5", 5.0}, {"x7", 1.0 / 7.0}, {"/7", 7.0}};
     for (const auto &m : otherMults) {
         QAction *act = otherMenu->addAction(QString::fromLatin1(m.label));
         QObject::connect(act, &QAction::triggered, [zoomPlot, m] { zoomPlot->multiplyFrequency(m.factor); });
     }
-    QObject::connect(x2Btn, &QPushButton::clicked, [zoomPlot] { zoomPlot->multiplyFrequency(2.0); });
-    QObject::connect(d2Btn, &QPushButton::clicked, [zoomPlot] { zoomPlot->multiplyFrequency(0.5); });
+    QObject::connect(x2Btn, &QPushButton::clicked, [zoomPlot] { zoomPlot->multiplyFrequency(0.5); });
+    QObject::connect(d2Btn, &QPushButton::clicked, [zoomPlot] { zoomPlot->multiplyFrequency(2.0); });
 
     /* Period field: auto-displays the period (1/f) of the pivot formatted like
        upstream ihsnpeaks --period peak output; editing it moves the pivot. */
@@ -783,6 +802,14 @@ int main(int argc, char *argv[]) {
     // ---- Periodogram spectrum computation wiring ----
     lc_progress_t *progress = lc_progress_create();
     lc_compute_ctx_t *computeCtx = lc_compute_ctx_create(0 /* auto: physical cores */);
+
+    /* Detected peaks from the last computation (freq, nll), sorted by NLL desc. */
+    QVector<QPair<double, float>> detectedPeaks;
+    /* Current spectrum NLL data (for MMB fallback scan). */
+    double specFmin = 0.0, specFstep = 1.0;
+    QVector<float> specNll;
+    /* Track which method's spectrum is currently displayed (-1 = none). */
+    int activeMethodIdx = -1;
 
     QLabel *progressLabel = new QLabel();
     progressLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -849,6 +876,13 @@ int main(int argc, char *argv[]) {
         cfg.nthreads = 0; /* auto: all online CPUs */
         cfg.oversmoothing = ps.oversmoothing;
         cfg.nbins = ps.nbins;
+        cfg.peak_threshold = 8.0; /* default threshold; adjustable for future tuning */
+
+        /* Button highlighting: check the launched button, uncheck others. */
+        std::array<QPushButton*, 4> methodBtns = {ihsBtn, aovBtn, gbBtn, blsBtn}; /* indexed by lc_spec_method_t */
+        int methodIdx = (int)method;
+        int prevMethodIdx = activeMethodIdx; /* save for restore on cancel/fail */
+        for (int i = 0; i < 4; ++i) methodBtns[i]->setChecked(i == methodIdx);
 
         lc_progress_reset(progress);
         setButtonsEnabled(false);
@@ -862,12 +896,25 @@ int main(int argc, char *argv[]) {
         task->moveToThread(workerThread);
 
         QObject::connect(workerThread, &QThread::started, task, &PeriodogramTask::run);
-        QObject::connect(task, &PeriodogramTask::finished, searchPlot,
-                         [searchPlot](double fmin, double fstep, QVector<float> nll) { searchPlot->setData(fmin, fstep, nll); });
+        QObject::connect(task, &PeriodogramTask::finished, &window,
+                         [&](double fmin, double fstep, QVector<float> nll, QVector<QPair<double, float>>) {
+                             searchPlot->setData(fmin, fstep, nll);
+                             specFmin = fmin;
+                             specFstep = fstep;
+                             specNll = nll;
+                         });
         QObject::connect(task, &PeriodogramTask::finished, zoomPlot,
-                         [zoomPlot, &ps](double fmin, double fstep, QVector<float> nll) {
+                         [zoomPlot, &ps](double fmin, double fstep, QVector<float> nll, QVector<QPair<double, float>>) {
                              zoomPlot->setZoomFactor(ps.zoomFactor);
                              zoomPlot->setFullSpectrum(fmin, fstep, nll);
+                         });
+        /* Store detected peaks and auto-center on highest peak. */
+        QObject::connect(task, &PeriodogramTask::finished, &window,
+                         [&](double, double, QVector<float>, QVector<QPair<double, float>> peaks) {
+                             detectedPeaks = peaks;
+                             if (ps.autoCenter && !peaks.isEmpty()) {
+                                 zoomPlot->selectFrequency(peaks[0].first, true);
+                             }
                          });
         QObject::connect(task, &PeriodogramTask::failed, &window,
                          [&window](QString msg) { QMessageBox::warning(&window, "Computation Failed", msg); });
@@ -879,9 +926,21 @@ int main(int argc, char *argv[]) {
             setButtonsEnabled(true);
             if (workerThread) workerThread->quit();
         };
-        QObject::connect(task, &PeriodogramTask::finished, &window, [onComplete](double, double, QVector<float>) { onComplete(); });
-        QObject::connect(task, &PeriodogramTask::cancelled, &window, [onComplete]() { onComplete(); });
-        QObject::connect(task, &PeriodogramTask::failed, &window, [onComplete](QString) { onComplete(); });
+        QObject::connect(task, &PeriodogramTask::finished, &window,
+                         [&, onComplete, methodIdx](double, double, QVector<float>, QVector<QPair<double, float>>) {
+                             activeMethodIdx = methodIdx;
+                             onComplete();
+                         });
+        QObject::connect(task, &PeriodogramTask::cancelled, &window, [&, onComplete, prevMethodIdx, methodBtns]() {
+            /* Restore previous button state on cancel. */
+            for (int i = 0; i < 4; ++i) methodBtns[i]->setChecked(i == prevMethodIdx);
+            onComplete();
+        });
+        QObject::connect(task, &PeriodogramTask::failed, &window, [&, onComplete, prevMethodIdx, methodBtns](QString) {
+            /* Restore previous button state on failure. */
+            for (int i = 0; i < 4; ++i) methodBtns[i]->setChecked(i == prevMethodIdx);
+            onComplete();
+        });
 
         QObject::connect(workerThread, &QThread::finished, task, &QObject::deleteLater);
         QObject::connect(workerThread, &QThread::finished, workerThread, &QObject::deleteLater);
@@ -898,6 +957,105 @@ int main(int argc, char *argv[]) {
     QObject::connect(gbBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_GB); });
     QObject::connect(blsBtn, &QPushButton::clicked, [&]() { launchSpectrum(LC_SPEC_BLS); });
     QObject::connect(stopBtn, &QPushButton::clicked, [&]() { lc_progress_request_cancel(progress); });
+
+    // ---- MMB peak-find wiring ----
+    /* Quadratic Lagrange vertex (same formula as upstream quadratic_peak_position). */
+    auto quadraticVertex = [](double freq, double fstep, float left, float center, float right, double oversampling, double *peakFreq, float *peakNll) {
+        *peakFreq = freq;
+        *peakNll = center;
+        if (oversampling < 3.0) return;
+        double x0 = freq - fstep, x1 = freq, x2 = freq + fstep;
+        double slope01 = ((double)center - (double)left) / (x1 - x0);
+        double slope12 = ((double)right - (double)center) / (x2 - x1);
+        double curvature = (slope12 - slope01) / (x2 - x0);
+        if (curvature == 0.0) return;
+        double linear = slope01 - curvature * (x0 + x1);
+        double vx = -linear / (2.0 * curvature);
+        double vy = (double)left + slope01 * (vx - x0) + curvature * (vx - x0) * (vx - x1);
+        if (std::isfinite(vx) && std::isfinite(vy) && vx >= x0 && vx <= x2) {
+            *peakFreq = vx;
+            *peakNll = (float)vy;
+        }
+    };
+
+    /* Find the best peak near clickFreq within +/- searchHalfWidth.
+       First checks the stored peak list, then falls back to scanning the NLL array. */
+    auto findPeakNear = [&](double clickFreq, double searchHalfWidth) -> double {
+        if (specNll.isEmpty()) return clickFreq;
+        double lo = clickFreq - searchHalfWidth;
+        double hi = clickFreq + searchHalfWidth;
+
+        /* 1. Check stored peaks (sorted by NLL desc): return first within range. */
+        for (const auto &pk : detectedPeaks) {
+            if (pk.first >= lo && pk.first <= hi) return pk.first;
+        }
+
+        /* 2. Fallback: scan the NLL array for local maxima in [lo, hi]. */
+        int i0 = (int)std::ceil((lo - specFmin) / specFstep);
+        int i1 = (int)std::floor((hi - specFmin) / specFstep);
+        if (i0 < 1) i0 = 1;
+        if (i1 > specNll.size() - 2) i1 = specNll.size() - 2;
+
+        double bestFreq = clickFreq;
+        float bestNll = -1.0f;
+        bool found = false;
+        double oversampling = ps.oversampling;
+
+        for (int i = i0; i <= i1; ++i) {
+            float left = specNll[i - 1], center = specNll[i], right = specNll[i + 1];
+            if (center > left && center > right) {
+                double freq = specFmin + (double)i * specFstep;
+                double pf = freq;
+                float pn = center;
+                quadraticVertex(freq, specFstep, left, center, right, oversampling, &pf, &pn);
+                if (!found || pn > bestNll) {
+                    bestFreq = pf;
+                    bestNll = pn;
+                    found = true;
+                }
+            }
+        }
+
+        /* 3. If no local max found, return the highest NLL value in range. */
+        if (!found) {
+            for (int i = i0; i <= i1; ++i) {
+                if (specNll[i] > bestNll) {
+                    bestNll = specNll[i];
+                    bestFreq = specFmin + (double)i * specFstep;
+                    found = true;
+                }
+            }
+        }
+        return bestFreq;
+    };
+
+    /* After finding a peak, move the pivot there and zoom FOV to 2/DeltaT each side. */
+    auto moveToPeak = [&](double peakFreq) {
+        double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
+        if (dT > 0.0) {
+            double halfFov = 2.0 / dT;
+            zoomPlot->setViewFromSelection(peakFreq - halfFov, peakFreq + halfFov);
+        } else {
+            zoomPlot->selectFrequency(peakFreq, false);
+        }
+    };
+
+    /* MMB on full spectrum: search radius = searchRadius * full spectrum span. */
+    QObject::connect(searchPlot, &SpectrumPlotWidget::middleClicked, [&](double freq) {
+        if (specNll.isEmpty()) return;
+        double fullSpan = (specNll.size() > 1) ? (double)(specNll.size() - 1) * specFstep : 1.0;
+        double halfWidth = ps.searchRadius * fullSpan;
+        double peakFreq = findPeakNear(freq, halfWidth);
+        moveToPeak(peakFreq);
+    });
+
+    /* MMB on zoomed spectrum: search radius = entire visible FOV / 2. */
+    QObject::connect(zoomPlot, &ZoomedSpectrumWidget::middleClicked, [&](double freq, double fov) {
+        if (specNll.isEmpty()) return;
+        double halfWidth = fov / 2.0;
+        double peakFreq = findPeakNear(freq, halfWidth);
+        moveToPeak(peakFreq);
+    });
 
     auto openPeriodSearchDialog = [&]() {
         CustomizePeriodSearchDialog dlg(&ps, &window);

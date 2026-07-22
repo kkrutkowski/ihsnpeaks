@@ -42,13 +42,24 @@ typedef struct {
     int nthreads;         /* worker threads; 0 = auto (all online CPUs) */
     double oversmoothing; /* default 0.2 -> gbAlpha (GBLS) AND blsMinRelWidth (BLS) */
     int nbins;            /* default 10 -> blsWidthCount (BLS only) */
+    double peak_threshold;/* peak detection threshold in CLI units (default 8.0 -> 8*ln10 internally); 0 = use default 8.0 */
 } lc_periodogram_config_t;
+
+/* Detected peak (quadratic-Lagrange refined). */
+typedef struct {
+    double freq; /* refined frequency */
+    float nll;   /* NLL at the refined position */
+} lc_peak_t;
+
+#define LC_MAX_PEAKS 25
 
 typedef struct {
     uint32_t nfreq;
     double fmin;
     double fstep;
     float *nll; /* length nfreq; release with lc_periodogram_result_free */
+    lc_peak_t peaks[LC_MAX_PEAKS]; /* detected peaks, sorted by NLL descending */
+    int npeaks;
 } lc_periodogram_result_t;
 
 /* Opaque progress/cancellation handle (C11 atomics live inside the .c file). */

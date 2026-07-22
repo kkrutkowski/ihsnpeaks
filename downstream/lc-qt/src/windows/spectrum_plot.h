@@ -48,6 +48,8 @@ signals:
     void frequencyClicked(double freq);
     /* Rubber-band selection: frequency range only (NLL axis auto-scales). */
     void rangeSelected(double fMin, double fMax);
+    /* Middle mouse button click: peak-find at the clicked frequency. */
+    void middleClicked(double freq);
 
 protected:
     void paintEvent(QPaintEvent *event) override;

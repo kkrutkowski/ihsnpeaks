@@ -58,6 +58,10 @@ public:
        zoom to m_zoomFactor. */
     void selectFrequency(double freq, bool resetZoom);
 
+    /* Current view edges (frequency). */
+    double viewMin() const;
+    double viewMax() const;
+
 public slots:
     void zoomIn();  /* factor 2 */
     void zoomOut(); /* factor 2 */
@@ -73,6 +77,8 @@ public slots:
 
 signals:
     void centerFrequencyChanged(double freq);
+    /* Middle mouse button click: peak-find at the clicked frequency within the current FOV. */
+    void middleClicked(double freq, double fov);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -120,8 +126,6 @@ private:
     void viewChanged(); /* clamp + regen + emit + repaint */
 
     /* Pixel <-> data conversions for the current view (used by mouse handling). */
-    double viewMin() const;
-    double viewMax() const;
     double freqAtPixel(int px) const;
     void applyRubberBand(const QPoint &a, const QPoint &b);
     bool wheelIdle() const; /* true if no recent wheel event blocks the selection */

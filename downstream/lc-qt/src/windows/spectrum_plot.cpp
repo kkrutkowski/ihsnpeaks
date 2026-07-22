@@ -126,6 +126,11 @@ double SpectrumPlotWidget::freqAtPixel(int px) const {
 }
 
 void SpectrumPlotWidget::mousePressEvent(QMouseEvent *event) {
+    if (event->button() == Qt::MiddleButton && m_nfreq > 0) {
+        double freq = freqAtPixel(event->position().toPoint().x());
+        emit middleClicked(freq);
+        return;
+    }
     if (event->button() == Qt::LeftButton && m_nfreq > 0) {
         m_pressPos = event->position().toPoint();
         m_dragCurrent = m_pressPos;

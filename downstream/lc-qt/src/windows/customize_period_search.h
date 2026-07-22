@@ -5,6 +5,7 @@
 #include <QDoubleSpinBox>
 #include <QComboBox>
 #include <QLineEdit>
+#include <QCheckBox>
 
 /* Persisted period-search configuration (mirrors the ihsnpeaks CLI options). */
 struct PeriodSearchSettings {
@@ -17,6 +18,7 @@ struct PeriodSearchSettings {
     int pswf = 43;             /* NuFFT backend: 43 (pswf43) or 21 (pswf21) */
     double oversmoothing = 0.2;/* -> gbAlpha (GBLS) AND blsMinRelWidth (BLS) */
     int nbins = 10;            /* -> blsWidthCount (BLS only) */
+    bool autoCenter = true;    /* automatically center on highest peak after computation */
 };
 
 class CustomizePeriodSearchDialog : public QDialog {
@@ -38,4 +40,5 @@ private:
     QComboBox *m_pswf;
     QDoubleSpinBox *m_oversmoothing;
     QSpinBox *m_nbins;
+    QCheckBox *m_autoCenter;
 };

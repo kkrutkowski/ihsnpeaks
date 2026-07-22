@@ -804,6 +804,79 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
 }
 
 /* ===================================================================================
+ * Peak detection (quadratic Lagrange, mode-0 style)
+ *
+ * Scans the NLL array for local maxima above a threshold, refines their position
+ * with quadratic Lagrange interpolation (same formula as upstream
+ * quadratic_peak_position in src/process.h), and stores up to LC_MAX_PEAKS peaks
+ * sorted by NLL descending.
+ * =================================================================================== */
+
+static bool lc_quadratic_peak_position(double freq, double fstep, float left, float center, float right, double oversampling, double *peak_freq,
+                                       float *peak_nll) {
+    if (!float_is_finite_bits(left) || !float_is_finite_bits(center) || !float_is_finite_bits(right)) return false;
+    *peak_freq = freq;
+    *peak_nll = center;
+    if (oversampling < 3.0) return true;
+
+    double x0 = freq - fstep;
+    double x1 = freq;
+    double x2 = freq + fstep;
+    double slope01 = ((double)center - (double)left) / (x1 - x0);
+    double slope12 = ((double)right - (double)center) / (x2 - x1);
+    double curvature = (slope12 - slope01) / (x2 - x0);
+    if (curvature == 0.0) return true;
+
+    double linear = slope01 - curvature * (x0 + x1);
+    double vx = -linear / (2.0 * curvature);
+    double vy = (double)left + slope01 * (vx - x0) + curvature * (vx - x0) * (vx - x1);
+    float vyf = (float)vy;
+    if (double_is_finite_bits(vx) && float_is_finite_bits(vyf) && vx >= x0 && vx <= x2) {
+        *peak_freq = vx;
+        *peak_nll = vyf;
+    }
+    return true;
+}
+
+/* Insert a peak into the sorted (descending NLL) list, keeping at most max_peaks entries. */
+static void lc_insert_peak(lc_peak_t *peaks, int *npeaks, int max_peaks, double freq, float nll) {
+    if (*npeaks == max_peaks && nll <= peaks[max_peaks - 1].nll) return;
+
+    int pos = *npeaks;
+    if (pos == max_peaks) {
+        pos = max_peaks - 1;
+    } else {
+        ++(*npeaks);
+    }
+    /* Shift lower-ranked peaks down */
+    while (pos > 0 && peaks[pos - 1].nll < nll) {
+        peaks[pos] = peaks[pos - 1];
+        --pos;
+    }
+    peaks[pos].freq = freq;
+    peaks[pos].nll = nll;
+}
+
+static void lc_detect_peaks(const float *nll, uint32_t nfreq, double fmin, double fstep, double oversampling, double threshold_cli,
+                            lc_peak_t *peaks, int *npeaks) {
+    *npeaks = 0;
+    if (nfreq < 3) return;
+
+    double threshold = (threshold_cli > 0.0 ? threshold_cli : 8.0) * M_LN10;
+
+    for (uint32_t i = 1; i + 1 < nfreq; ++i) {
+        float left = nll[i - 1], center = nll[i], right = nll[i + 1];
+        if (center > left && center > right && (double)center > threshold) {
+            double freq = fmin + (double)i * fstep;
+            double peak_freq = freq;
+            float peak_nll = center;
+            lc_quadratic_peak_position(freq, fstep, left, center, right, oversampling, &peak_freq, &peak_nll);
+            lc_insert_peak(peaks, npeaks, LC_MAX_PEAKS, peak_freq, peak_nll);
+        }
+    }
+}
+
+/* ===================================================================================
  * Periodogram computation
  * =================================================================================== */
 
@@ -961,7 +1034,7 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->params.blsMaxRelWidth = 0.5;
     ctx->params.blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
     ctx->params.periodogramMethod = periMethod;
-    ctx->params.mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 2;
+    ctx->params.mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 0;
     if (cfg->method == LC_SPEC_GB) ctx->params.gbEvalMode = GB_EVAL_GBLS;
     if (cfg->method == LC_SPEC_BLS) ctx->params.gbEvalMode = GB_EVAL_BLS;
 
@@ -1017,7 +1090,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     params->gbAlpha = (float)cfg->oversmoothing;
     params->blsMinRelWidth = cfg->oversmoothing;
     params->blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
-    params->mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 2;
+    params->mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 0;
     if (cfg->method == LC_SPEC_GB) params->gbEvalMode = GB_EVAL_GBLS;
     if (cfg->method == LC_SPEC_BLS) params->gbEvalMode = GB_EVAL_BLS;
 
@@ -1086,6 +1159,10 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     out->fstep = fstep;
     out->nll = nll;
     nll = NULL;
+
+    /* Detect peaks from the NLL array (quadratic Lagrange, mode-0 style). */
+    lc_detect_peaks(out->nll, nfreq, fmin, fstep, cfg->oversampling > 0.0 ? cfg->oversampling : 5.0, cfg->peak_threshold, out->peaks, &out->npeaks);
+
     result_code = 0;
 
 done:

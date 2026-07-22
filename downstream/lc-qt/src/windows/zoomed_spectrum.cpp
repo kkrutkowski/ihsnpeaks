@@ -377,6 +377,11 @@ void ZoomedSpectrumWidget::mousePressEvent(QMouseEvent *event) {
         }
         return;
     }
+    if (event->button() == Qt::MiddleButton && m_nfreq > 0 && m_pivotFreq >= 0.0) {
+        double freq = freqAtPixel(event->position().toPoint().x());
+        emit middleClicked(freq, fov());
+        return;
+    }
     if (event->button() == Qt::LeftButton && m_nfreq > 0 && m_pivotFreq >= 0.0) {
         m_pressPos = event->position().toPoint();
         m_dragCurrent = m_pressPos;
