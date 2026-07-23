@@ -100,7 +100,7 @@ static inline uint32_t lc_model_pad_len(uint32_t n) {
 
 /* -----------------------------------------------------------------------------------
  * AoV model: Szego recursion at a single frequency (vectorized inner loop)
- * Reference: aov_single_freq.c.ref (aovmh routine)
+ * Reference: aovdist (aovmh routine)
  *
  * The reference multiplies data by exp(i*nh*angle) before projecting onto Szego
  * polynomials (cfr/cfi initialization). The model reconstruction must undo this
@@ -437,7 +437,7 @@ static int lc_model_gb(const double *x, const float *y, const float *dy, uint32_
     /* Map model values back to original indices.
      * model[i] in projection is the smoothed value for sorted[i];
      * the fitted model = scale * smoothed. */
-    double scale = projection.scale;
+    double scale = clamp_gbls_scale(projection.scale);
     for (int i = 0; i < projection.n; i++) {
         uint32_t orig_idx = projection.sorted[i].parts.idx;
         if (orig_idx < n) {
