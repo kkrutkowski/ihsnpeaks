@@ -38,8 +38,9 @@
  *    never leaves the computed range);
  *  - zoomIn()/zoomOut() slots: zoom by factor 2 about the pivot;
  *  - stepFrequency()/multiplyFrequency() slots: move the pivot (arrow buttons,
- *    x2//2 and the "Other" multiplier menu). The multiplier buttons may move the
- *    pivot outside the computed range (the FOV itself never leaves it).
+ *    x2//2 and the "Other" multiplier menu). Both may move the pivot outside the
+ *    computed range (the FOV itself never leaves it); stepFrequency() only keeps
+ *    the frequency positive.
  */
 class ZoomedSpectrumWidget : public QFrame {
     Q_OBJECT

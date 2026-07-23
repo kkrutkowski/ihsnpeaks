@@ -143,10 +143,14 @@ void ZoomedSpectrumWidget::zoomOut() {
 }
 
 void ZoomedSpectrumWidget::stepFrequency(double deltaFreq) {
-    /* Arrow buttons: shift the pivot (clamped to the computed range); the FOV
-       re-centres on it via selectFrequency(). */
+    /* Arrow buttons: shift the pivot by deltaFreq. Like the multiplier buttons,
+       the pivot is NOT clamped to the computed range (it may leave it, e.g. when
+       scrolled past an edge; clampView() keeps the FOV itself inside [fmin, fmax]
+       by pinning it there), but the frequency is kept positive. */
     if (m_nfreq == 0 || m_pivotFreq < 0.0) return;
-    selectFrequency(std::clamp(m_pivotFreq + deltaFreq, specFmin(), specFmax()), false);
+    double f = m_pivotFreq + deltaFreq;
+    if (f <= 0.0) f = 1e-9; /* keep the pivot at a positive frequency */
+    selectFrequency(f, false);
 }
 
 void ZoomedSpectrumWidget::multiplyFrequency(double factor) {

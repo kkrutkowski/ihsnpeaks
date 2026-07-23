@@ -37,8 +37,11 @@ public slots:
     /* Fold the curve at freq (cycles/day); freq <= 0 clears the folding. */
     void setFrequency(double freq);
 
-    /* Set the model overlay (same length as data). style determines rendering. */
-    void setModel(const float *model, unsigned int n, lc_model_style_t style);
+    /* Set the model overlay (same length as data). style determines rendering.
+       freq is the frequency the model was computed at: the overlay is folded at
+       that frequency (not the live fold frequency) so it always renders as a
+       clean curve even while the pivot is still moving. */
+    void setModel(const float *model, unsigned int n, lc_model_style_t style, double freq);
     void clearModel();
 
 protected:
@@ -55,4 +58,6 @@ private:
     QVector<float> m_model;
     lc_model_style_t m_modelStyle = LC_MODEL_LINE;
     bool m_hasModel = false;
+    double m_modelFreq = -1.0; /* frequency the stored model was computed at */
+    double m_r2 = 0.0;         /* coefficient of determination of the stored model */
 };

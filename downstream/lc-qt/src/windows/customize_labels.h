@@ -20,7 +20,7 @@ signals:
 
 private slots:
     void apply();
-    void toggleNumpadNav(int state);
+    void toggleNumpadNav(Qt::CheckState state);
 
 private:
     QString *m_labels;

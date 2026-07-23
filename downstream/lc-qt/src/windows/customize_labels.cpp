@@ -86,13 +86,13 @@ CustomizeLabelsDialog::CustomizeLabelsDialog(QString labels[10], bool *numpadNav
     btnLayout->addWidget(cancelBtn);
     m_mainLayout->addLayout(btnLayout);
 
-    connect(m_numpadCheck, &QCheckBox::stateChanged, this, &CustomizeLabelsDialog::toggleNumpadNav);
+    connect(m_numpadCheck, &QCheckBox::checkStateChanged, this, &CustomizeLabelsDialog::toggleNumpadNav);
     connect(okBtn, &QPushButton::clicked, this, &CustomizeLabelsDialog::apply);
     connect(okBtn, &QPushButton::clicked, this, &QDialog::accept);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
 }
 
-void CustomizeLabelsDialog::toggleNumpadNav(int state) {
+void CustomizeLabelsDialog::toggleNumpadNav(Qt::CheckState state) {
     *m_numpadNav = (state == Qt::Checked);
     updateVisibility();
     if (*m_numpadNav && isVisible()) {

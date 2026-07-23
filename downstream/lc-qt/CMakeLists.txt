@@ -90,6 +90,7 @@ add_executable(lc-qt
     src/windows/spectrum_plot.cpp
     src/windows/zoomed_spectrum.cpp
     src/windows/customize_period_search.cpp
+    src/windows/period_scroll.cpp
 )
 
 # Global include paths (safe for moc)

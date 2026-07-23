@@ -50,6 +50,7 @@ extern "C" {
 #include "windows/spectrum_plot.h"
 #include "windows/zoomed_spectrum.h"
 #include "windows/customize_period_search.h"
+#include "windows/period_scroll.h"
 
 static const char *CONFIG_FILE = ".lc-config.json";
 
@@ -132,6 +133,7 @@ static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *
                 else if (strcmp(pk, "pswf") == 0) ps->pswf = atoi(num->number);
                 else if (strcmp(pk, "oversmoothing") == 0) ps->oversmoothing = atof(num->number);
                 else if (strcmp(pk, "nbins") == 0) ps->nbins = atoi(num->number);
+                else if (strcmp(pk, "scroll_rate") == 0) ps->scrollRate = atof(num->number);
             }
             continue;
         }
@@ -190,7 +192,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                     "\"pswf\":%7,"
                     "\"oversmoothing\":%8,"
                     "\"nbins\":%9,"
-                    "\"auto_center\":\"%10\"}")
+                    "\"scroll_rate\":%10,"
+                    "\"auto_center\":\"%11\"}")
                 .arg(ps.nterms)
                 .arg(ps.oversampling, 0, 'g', 10)
                 .arg(ps.fmin, 0, 'g', 10)
@@ -200,6 +203,7 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                 .arg(ps.pswf)
                 .arg(ps.oversmoothing, 0, 'g', 10)
                 .arg(ps.nbins)
+                .arg(ps.scrollRate, 0, 'g', 10)
                 .arg(ps.autoCenter ? "true" : "false");
     json += "}";
 
@@ -316,6 +320,57 @@ public:
 };
 
 
+/* Global key filter: holding '+' or '-' (numpad or top row) scrolls the pivot
+   exactly like holding the '>'/'<' arrow buttons; with Ctrl held they instead
+   perform a single zoom-in / zoom-out (like the +/- buttons beside the zoomed
+   spectrum). Ignored while a text-editing widget has focus so the keys can
+   still be typed into fields. */
+class PeriodScrollKeyFilter : public QObject {
+    std::function<void(int)> m_start;
+    std::function<void()> m_stop;
+    std::function<void()> m_zoomIn;
+    std::function<void()> m_zoomOut;
+public:
+    PeriodScrollKeyFilter(std::function<void(int)> start, std::function<void()> stop,
+                          std::function<void()> zoomIn, std::function<void()> zoomOut)
+        : m_start(std::move(start)), m_stop(std::move(stop)),
+          m_zoomIn(std::move(zoomIn)), m_zoomOut(std::move(zoomOut)) {}
+
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
+            return QObject::eventFilter(watched, event);
+        QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+        int key = ke->key();
+        /* '+' on the number row is Shift+'='; also accept the unshifted '=' so
+           the shortcut works without holding Shift. */
+        bool isPlus = (key == Qt::Key_Plus || key == Qt::Key_Equal);
+        if (!isPlus && key != Qt::Key_Minus)
+            return QObject::eventFilter(watched, event);
+        QWidget *focus = QApplication::focusWidget();
+        bool textHasFocus = focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus));
+        if (textHasFocus)
+            return QObject::eventFilter(watched, event);
+        /* Ctrl + '+'/'-': a single zoom-in / zoom-out step (like the side
+           buttons), not a continuous scroll. */
+        if (ke->modifiers() & Qt::ControlModifier) {
+            if (event->type() == QEvent::KeyPress && !ke->isAutoRepeat()) {
+                if (isPlus) m_zoomIn(); else m_zoomOut();
+            }
+            return true;
+        }
+        /* Act only on the real press/release (not OS auto-repeat) so the rate
+           stays accurate; auto-repeat events are still consumed. */
+        if (!ke->isAutoRepeat()) {
+            if (event->type() == QEvent::KeyPress)
+                m_start(isPlus ? +1 : -1);
+            else
+                m_stop();
+        }
+        return true;
+    }
+};
+
+
 /* Deep copy of an lc_data_t for use on the worker thread (frees only x/y/dy; _buf stays null). */
 static lc_data_t cloneLcData(const lc_data_t *src) {
     lc_data_t copy;
@@ -374,6 +429,35 @@ private:
     lc_periodogram_config_t m_cfg;
     lc_progress_t *m_progress;
 };
+
+/* Worker that computes the phased model overlay off the GUI thread so the UI
+   stays responsive while the pivot is being scrolled. Each request carries a
+   deep-cloned lc_data_t (freed here after the computation) so the GUI's data
+   may change freely while a computation is in flight. */
+class PhasedModelWorker : public QObject {
+    Q_OBJECT
+public:
+    /* Runs on the worker thread; takes ownership of the cloned data. */
+    void compute(lc_data_t data, lc_periodogram_config_t cfg, double freq) {
+        QVector<float> model;
+        lc_model_style_t style = LC_MODEL_LINE;
+        int rc = -1;
+        qint64 ns = 0;
+        if (data.n > 0) {
+            model.resize((int)data.n);
+            QElapsedTimer t;
+            t.start();
+            rc = lc_compute_phased_model(&data, &cfg, freq, model.data(), &style);
+            ns = t.nsecsElapsed();
+        }
+        lc_free(&data);
+        emit done(rc, freq, model, (int)style, ns);
+    }
+
+signals:
+    void done(int rc, double freq, QVector<float> model, int style, qint64 elapsedNs);
+};
+
 
 /* Format the period (1/freq) the same way upstream ihsnpeaks formats peak
    periods with --period (src/utils/strings.h: custom_coordinate_dtoa):
@@ -441,6 +525,7 @@ int main(int argc, char *argv[]) {
     //optionsMenu->addAction("Light Curve");
     optionsMenu->addAction("Plot Options");
     optionsMenu->addAction("Period Scroll");
+    QAction *periodScrollAction = optionsMenu->actions().last();
     //optionsMenu->addAction("Multi-Period Window");
     //optionsMenu->addAction("Auto Equalize");
     optionsMenu->addAction("Auto Power Spec Calc");
@@ -774,16 +859,17 @@ int main(int argc, char *argv[]) {
         if (ok && p > 0.0) zoomPlot->selectFrequency(1.0 / p, false);
     });
 
-    /* Arrow buttons: while held, move the selected frequency at 1/DeltaT per
-       second (DeltaT = time from the first to the last measurement). */
+    /* Arrow buttons: while held, move the selected frequency at
+       scrollRate / DeltaT per second (DeltaT = time from the first to the last
+       measurement; scrollRate is configurable via Options > Period Scroll). */
     QTimer *stepTimer = new QTimer(&window);
-    stepTimer->setInterval(50);
+    stepTimer->setInterval(20); /* 50 Hz pivot updates while held (speed is time-based, so the rate is unchanged) */
     QElapsedTimer stepClock;
     int stepDir = 0;
     QObject::connect(stepTimer, &QTimer::timeout, [&]() {
-        double dt = (double)stepClock.restart() * 1e-9; /* ns -> s */
+        double dt = (double)stepClock.restart() * 1e-3; /* ms -> s */
         double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
-        if (dT > 0.0 && stepDir != 0) zoomPlot->stepFrequency((double)stepDir * dt / dT);
+        if (dT > 0.0 && stepDir != 0) zoomPlot->stepFrequency((double)stepDir * ps.scrollRate * dt / dT);
     });
     auto startStep = [&](int dir) {
         stepDir = dir;
@@ -799,6 +885,13 @@ int main(int argc, char *argv[]) {
     QObject::connect(stepRightBtn, &QPushButton::pressed, [&] { startStep(+1); });
     QObject::connect(stepRightBtn, &QPushButton::released, stopStep);
 
+    /* Keyboard: holding '+'/'-' (numpad or top row) scrolls the pivot like the
+       '>'/'<' arrow buttons. */
+    PeriodScrollKeyFilter scrollFilter(startStep, stopStep,
+                                       [zoomPlot]() { zoomPlot->zoomIn(); },
+                                       [zoomPlot]() { zoomPlot->zoomOut(); });
+    app.installEventFilter(&scrollFilter);
+
     // ---- Periodogram spectrum computation wiring ----
     lc_progress_t *progress = lc_progress_create();
     lc_compute_ctx_t *computeCtx = lc_compute_ctx_create(0 /* auto: physical cores */);
@@ -811,32 +904,82 @@ int main(int argc, char *argv[]) {
     /* Track which method's spectrum is currently displayed (-1 = none). */
     int activeMethodIdx = -1;
 
-    /* Phased model overlay: recompute model at every pivot frequency change. */
+    /* Phased model overlay: recomputed asynchronously off the GUI thread so the
+       UI stays responsive while the pivot is scrolled. Refreshes are throttled to
+       50 Hz (a new computation starts at most every 20 ms) and never overlap: if
+       the previous computation is still running, the driver re-checks every
+       10 ms until it finishes before starting the next one. The computation time
+       is reported in the status bar. */
+    QThread *modelThread = new QThread(&window);
+    PhasedModelWorker *modelWorker = new PhasedModelWorker();
+    modelWorker->moveToThread(modelThread);
+    QObject::connect(modelThread, &QThread::finished, modelWorker, &QObject::deleteLater);
+    modelThread->start();
+
+    bool modelBusy = false;            /* a model computation is currently in flight */
+    bool modelRefreshPending = false;  /* a refresh was requested but not yet started */
+    double pendingModelFreq = -1.0;    /* frequency the model should be computed at */
+    QElapsedTimer lastModelStart;      /* time since the last computation started */
+    bool lastModelStartValid = false;
+
+    QLabel *phasedTimeLabel = new QLabel();
+    phasedTimeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    window.statusBar()->addPermanentWidget(phasedTimeLabel);
+
+    QTimer *modelRefreshTimer = new QTimer(&window);
+    modelRefreshTimer->setInterval(10); /* re-check in 10 ms increments while waiting */
+    QObject::connect(modelRefreshTimer, &QTimer::timeout, [&]() {
+        if (modelBusy) return; /* previous computation still running: wait, re-check next tick */
+        if (!modelRefreshPending) { modelRefreshTimer->stop(); return; }
+        if (lastModelStartValid && lastModelStart.elapsed() < 20) return; /* 50 Hz cap */
+        if (lcData.n == 0 || activeMethodIdx < 0 || !(pendingModelFreq > 0.0)) {
+            modelRefreshPending = false;
+            modelRefreshTimer->stop();
+            return;
+        }
+        modelRefreshPending = false;
+        modelBusy = true;
+        lastModelStart.start();
+        lastModelStartValid = true;
+
+        lc_periodogram_config_t mcfg;
+        memset(&mcfg, 0, sizeof(mcfg));
+        mcfg.method = (lc_spec_method_t)activeMethodIdx;
+        mcfg.nterms = ps.nterms;
+        mcfg.oversampling = ps.oversampling;
+        mcfg.fmin = ps.fmin;
+        mcfg.fmax = ps.fmax;
+        mcfg.pswf = ps.pswf;
+        mcfg.oversmoothing = ps.oversmoothing;
+        mcfg.nbins = ps.nbins;
+
+        lc_data_t clone = cloneLcData(&lcData);
+        double freq = pendingModelFreq;
+        QMetaObject::invokeMethod(modelWorker, [modelWorker, clone, mcfg, freq]() {
+            modelWorker->compute(clone, mcfg, freq);
+        }, Qt::QueuedConnection);
+    });
+
+    QObject::connect(modelWorker, &PhasedModelWorker::done, &window,
+                     [&](int rc, double freq, QVector<float> model, int style, qint64 elapsedNs) {
+                         modelBusy = false;
+                         phasedTimeLabel->setText(QString("Phased model: %1 ms").arg((double)elapsedNs * 1e-6, 0, 'f', 2));
+                         if (rc == 0 && lcData.n > 0 && model.size() == (int)lcData.n)
+                             phasedPlot->setModel(model.constData(), lcData.n, (lc_model_style_t)style, freq);
+                     });
+
+    /* Request a model refresh at every pivot frequency change (the scatter fold
+       itself is cheap and updates synchronously via setFrequency). */
     QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged,
                      &window, [&](double freq) {
                          if (lcData.n == 0 || activeMethodIdx < 0 || !(freq > 0.0)) {
                              phasedPlot->clearModel();
+                             modelRefreshPending = false;
                              return;
                          }
-                         lc_periodogram_config_t mcfg;
-                         memset(&mcfg, 0, sizeof(mcfg));
-                         mcfg.method = (lc_spec_method_t)activeMethodIdx;
-                         mcfg.nterms = ps.nterms;
-                         mcfg.oversampling = ps.oversampling;
-                         mcfg.fmin = ps.fmin;
-                         mcfg.fmax = ps.fmax;
-                         mcfg.pswf = ps.pswf;
-                         mcfg.oversmoothing = ps.oversmoothing;
-                         mcfg.nbins = ps.nbins;
-
-                         QVector<float> modelBuf((int)lcData.n);
-                         lc_model_style_t style = LC_MODEL_LINE;
-                         int rc = lc_compute_phased_model(&lcData, &mcfg, freq, modelBuf.data(), &style);
-                         if (rc == 0) {
-                             phasedPlot->setModel(modelBuf.constData(), lcData.n, style);
-                         } else {
-                             phasedPlot->clearModel();
-                         }
+                         pendingModelFreq = freq;
+                         modelRefreshPending = true;
+                         if (!modelRefreshTimer->isActive()) modelRefreshTimer->start();
                      });
 
     QLabel *progressLabel = new QLabel();
@@ -1094,6 +1237,14 @@ int main(int argc, char *argv[]) {
     QObject::connect(moreBtn, &QPushButton::clicked, openPeriodSearchDialog);
     QObject::connect(periodSearchAction, &QAction::triggered, openPeriodSearchDialog);
 
+    auto openPeriodScrollDialog = [&]() {
+        PeriodScrollDialog dlg(&ps, &window);
+        if (dlg.exec() == QDialog::Accepted) {
+            saveConfig(labels, numpadNav, files, ps);
+        }
+    };
+    QObject::connect(periodScrollAction, &QAction::triggered, openPeriodScrollDialog);
+
     setButtonsEnabled(true); /* initial state: disabled until a light curve is loaded */
 
     window.show();
@@ -1104,6 +1255,8 @@ int main(int argc, char *argv[]) {
     }
 
     int rc = app.exec();
+    modelThread->quit();
+    modelThread->wait();
     lc_compute_ctx_destroy(computeCtx);
     lc_progress_destroy(progress);
     return rc;

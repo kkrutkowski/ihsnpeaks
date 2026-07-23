@@ -19,6 +19,7 @@ struct PeriodSearchSettings {
     double oversmoothing = 0.2;/* -> gbAlpha (GBLS) AND blsMinRelWidth (BLS) */
     int nbins = 10;            /* -> blsWidthCount (BLS only) */
     bool autoCenter = true;    /* automatically center on highest peak after computation */
+    double scrollRate = 1.0;   /* period scroll: pivot rate in 1/DeltaT per second */
 };
 
 class CustomizePeriodSearchDialog : public QDialog {

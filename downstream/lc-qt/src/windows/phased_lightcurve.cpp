@@ -44,7 +44,7 @@ void PhasedLightCurveWidget::setFrequency(double freq) {
     update();
 }
 
-void PhasedLightCurveWidget::setModel(const float *model, unsigned int n, lc_model_style_t style) {
+void PhasedLightCurveWidget::setModel(const float *model, unsigned int n, lc_model_style_t style, double freq) {
     if (!model || n == 0 || n != m_n) {
         clearModel();
         return;
@@ -52,13 +52,29 @@ void PhasedLightCurveWidget::setModel(const float *model, unsigned int n, lc_mod
     m_model.resize(n);
     for (unsigned int i = 0; i < n; i++) m_model[i] = model[i];
     m_modelStyle = style;
+    m_modelFreq = freq;
     m_hasModel = true;
+    /* Coefficient of determination: fraction of the data variance explained by
+       the model (R^2 = 1 - SS_res / SS_tot). */
+    double mean = 0.0;
+    for (unsigned int i = 0; i < n; i++) mean += (double)m_y[i];
+    mean /= (double)n;
+    double ssTot = 0.0, ssRes = 0.0;
+    for (unsigned int i = 0; i < n; i++) {
+        double dTot = (double)m_y[i] - mean;
+        ssTot += dTot * dTot;
+        double dRes = (double)m_y[i] - (double)m_model[i];
+        ssRes += dRes * dRes;
+    }
+    m_r2 = (ssTot > 0.0) ? (1.0 - ssRes / ssTot) : 0.0;
     update();
 }
 
 void PhasedLightCurveWidget::clearModel() {
     m_model.clear();
     m_hasModel = false;
+    m_modelFreq = -1.0;
+    m_r2 = 0.0;
     update();
 }
 
@@ -178,7 +194,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(modelColor);
             for (unsigned int i = 0; i < m_n; i++) {
-                double phase = std::fmod((m_x[i] - t0) * m_freq, 1.0);
+                double phase = std::fmod((m_x[i] - t0) * m_modelFreq, 1.0);
                 if (phase < 0.0) phase += 1.0;
                 double py = padT + ((double)(m_model[i] - yMin) / ySpan) * plotH;
                 double px = padL + ((phase - xMin) / xSpan) * plotW;
@@ -195,7 +211,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
             std::vector<PhasePoint> pts;
             pts.reserve(m_n);
             for (unsigned int i = 0; i < m_n; i++) {
-                double phase = std::fmod((m_x[i] - t0) * m_freq, 1.0);
+                double phase = std::fmod((m_x[i] - t0) * m_modelFreq, 1.0);
                 if (phase < 0.0) phase += 1.0;
                 pts.push_back({phase, m_model[i]});
             }
@@ -224,5 +240,13 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
                 painter.drawPath(path);
             }
         }
+    }
+
+    /* R^2 overlay — top-right, same style as the computation percentage. */
+    if (m_hasModel) {
+        painter.setPen(QColor(203, 213, 225));
+        painter.setFont(QFont("sans-serif", 12, QFont::Bold));
+        painter.drawText(QRect(padL, padT, plotW - 6, 22), Qt::AlignRight | Qt::AlignVCenter,
+                         QString("R\u00B2 = %1").arg(m_r2, 0, 'f', 3));
     }
 }
