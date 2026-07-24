@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cmath>
 #include <array>
+#include <algorithm>
 #include <functional>
 #include <QFile>
 #include <QFileInfo>
@@ -59,7 +60,12 @@ struct FileEntry {
     int n = 0;
 };
 
-static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *files, PeriodSearchSettings *ps) {
+struct TargetEntry {
+    QString path;
+    int cls = 0;
+};
+
+static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *files, PeriodSearchSettings *ps, QVector<TargetEntry> *targets) {
     QFile f(CONFIG_FILE);
     if (!f.open(QIODevice::ReadOnly))
         return;
@@ -106,6 +112,27 @@ static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *
                     }
                 }
                 if (!entry.path.isEmpty()) files->append(entry);
+            }
+            continue;
+        }
+
+        /* "targets" as JSON array of {path, class} objects */
+        if (strcmp(key, "targets") == 0 && el->value->type == json_type_array && targets) {
+            json_array_s *arr = json_value_as_array(el->value);
+            for (json_array_element_s *ae = arr->start; ae; ae = ae->next) {
+                if (ae->value->type != json_type_object) continue;
+                json_object_s *tobj = json_value_as_object(ae->value);
+                TargetEntry entry;
+                for (json_object_element_s *te = tobj->start; te; te = te->next) {
+                    if (strcmp(te->name->string, "path") == 0 && te->value->type == json_type_string) {
+                        json_string_s *s = json_value_as_string(te->value);
+                        if (s) entry.path = QString::fromUtf8(s->string, s->string_size);
+                    } else if (strcmp(te->name->string, "class") == 0 && te->value->type == json_type_number) {
+                        json_number_s *num = json_value_as_number(te->value);
+                        if (num) entry.cls = atoi(num->number);
+                    }
+                }
+                if (!entry.path.isEmpty()) targets->append(entry);
             }
             continue;
         }
@@ -167,7 +194,7 @@ static QString escapeJsonString(const QString &s) {
     return out;
 }
 
-static void saveConfig(const QString labels[10], bool numpadNav, const QVector<FileEntry> &files, const PeriodSearchSettings &ps) {
+static void saveConfig(const QString labels[10], bool numpadNav, const QVector<FileEntry> &files, const PeriodSearchSettings &ps, const QVector<TargetEntry> &targets) {
     QString json = "{\"labels\":[";
     for (int i = 0; i < 10; ++i) {
         json += QString("\"%1\"").arg(escapeJsonString(labels[i]));
@@ -179,6 +206,13 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
     for (int i = 0; i < files.size(); ++i) {
         json += QString("{\"path\":\"%1\",\"n\":%2}").arg(escapeJsonString(files[i].path)).arg(files[i].n);
         if (i < files.size() - 1) json += ',';
+    }
+    json += "]";
+
+    json += ",\"targets\":[";
+    for (int i = 0; i < targets.size(); ++i) {
+        json += QString("{\"path\":\"%1\",\"class\":%2}").arg(escapeJsonString(targets[i].path)).arg(targets[i].cls);
+        if (i < targets.size() - 1) json += ',';
     }
     json += "]";
 
@@ -264,6 +298,7 @@ class ClassificationDisplay : public QLineEdit {
     QString *m_labels;
     int m_current;
     QLineEdit *m_typeEdit;
+    std::function<void()> m_saveCallback;
 public:
     ClassificationDisplay(QString labels[10], QWidget *parent = nullptr)
         : QLineEdit(parent), m_labels(labels), m_current(0), m_typeEdit(nullptr) {
@@ -288,8 +323,14 @@ public:
         refreshDisplay();
     }
 
+    int current() const { return m_current; }
+
     void setTypeEdit(QLineEdit *typeEdit) {
         m_typeEdit = typeEdit;
+    }
+
+    void setSaveCallback(std::function<void()> cb) {
+        m_saveCallback = std::move(cb);
     }
 
     bool eventFilter(QObject *watched, QEvent *event) override {
@@ -311,6 +352,7 @@ public:
                     if (m_typeEdit) {
                         m_typeEdit->setText(m_labels[m_current]);
                     }
+                    if (m_saveCallback) m_saveCallback();
                     return true;
                 }
             }
@@ -500,9 +542,11 @@ int main(int argc, char *argv[]) {
                           "unknown", "unknown", "unknown", "unknown", "unknown"};
     bool numpadNav = false;
     QVector<FileEntry> files;
+    QVector<TargetEntry> targets;
     PeriodSearchSettings ps;
-    loadConfig(labels, &numpadNav, &files, &ps);
+    loadConfig(labels, &numpadNav, &files, &ps, &targets);
     int counts[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    QString currentPath; /* path of the currently loaded light curve */
     
     // Menu Bar
     QMenuBar *menuBar = window.menuBar();
@@ -562,28 +606,46 @@ int main(int argc, char *argv[]) {
 
 
     
-    // Type / HJDO / Max,Amp / Object bar
+    // Type / HDJ0 / Med,MAD,Amp / Object bar
     QHBoxLayout *topBarLayout = new QHBoxLayout();
     
     topBarLayout->addWidget(new QLabel("Type"));
     QLineEdit *typeEdit = new QLineEdit("unknown");
     typeEdit->setMaximumWidth(120);
     typeEdit->setReadOnly(true);
+    typeEdit->setFocusPolicy(Qt::NoFocus);
     topBarLayout->addWidget(typeEdit);
     
-    topBarLayout->addWidget(new QLabel("HJDO"));
-    QLineEdit *hjdoEdit = new QLineEdit("2450000");
-    hjdoEdit->setMaximumWidth(80);
-    topBarLayout->addWidget(hjdoEdit);
+    topBarLayout->addWidget(new QLabel("HDJ0"));
+    QLineEdit *hdj0Edit = new QLineEdit("0.000");
+    hdj0Edit->setMaximumWidth(100);
+    hdj0Edit->setReadOnly(true);
+    hdj0Edit->setFocusPolicy(Qt::NoFocus);
+    topBarLayout->addWidget(hdj0Edit);
     
-    topBarLayout->addWidget(new QLabel("Max"));
-    QLineEdit *maxEdit = new QLineEdit("0");
-    maxEdit->setMaximumWidth(60);
-    topBarLayout->addWidget(maxEdit);
+    topBarLayout->addWidget(new QLabel("Med"));
+    QLineEdit *medEdit = new QLineEdit("0.000");
+    medEdit->setMaximumWidth(58);
+    medEdit->setReadOnly(true);
+    medEdit->setFocusPolicy(Qt::NoFocus);
+    topBarLayout->addWidget(medEdit);
 
-    topBarLayout->addWidget(new QLabel("Amp"));
-    QLineEdit *ampEdit = new QLineEdit("0");
-    ampEdit->setMaximumWidth(60);
+    QLabel *madLabel = new QLabel("MAD");
+    madLabel->setContentsMargins(0, 0, 0, 0);
+    topBarLayout->addWidget(madLabel);
+    QLineEdit *madEdit = new QLineEdit("0.000");
+    madEdit->setMaximumWidth(48);
+    madEdit->setReadOnly(true);
+    madEdit->setFocusPolicy(Qt::NoFocus);
+    topBarLayout->addWidget(madEdit);
+
+    QLabel *ampLabel = new QLabel("Amp");
+    ampLabel->setContentsMargins(0, 0, 0, 0);
+    topBarLayout->addWidget(ampLabel);
+    QLineEdit *ampEdit = new QLineEdit("0.000");
+    ampEdit->setMaximumWidth(48);
+    ampEdit->setReadOnly(true);
+    ampEdit->setFocusPolicy(Qt::NoFocus);
     topBarLayout->addWidget(ampEdit);
     
     topBarLayout->addWidget(new QLabel("Object"));
@@ -658,6 +720,19 @@ int main(int argc, char *argv[]) {
 
     app.installEventFilter(classDisplay);
 
+    /* Persist the classification of the currently loaded file to the config's
+       "targets" array (batch-mode preparation) when Enter confirms it. */
+    classDisplay->setSaveCallback([&]() {
+        if (currentPath.isEmpty()) return;
+        int cls = classDisplay->current();
+        bool found = false;
+        for (auto &t : targets) {
+            if (t.path == currentPath) { t.cls = cls; found = true; break; }
+        }
+        if (!found) targets.append(TargetEntry{currentPath, cls});
+        saveConfig(labels, numpadNav, files, ps, targets);
+    });
+
     // Light curve loading logic
     std::function<void()> onLightCurveLoaded;
 
@@ -698,6 +773,27 @@ int main(int argc, char *argv[]) {
         /* Update UI labels */
         noPointsLabel->setText(QString("No. points    %1").arg(lcData.n));
         objectEdit->setText(fi.fileName());
+        currentPath = path;
+
+        /* HDJ0: time of the first measurement */
+        hdj0Edit->setText(QString::number(lcData.x[0], 'f', 3));
+
+        /* Med: median of the measurements */
+        QVector<float> sorted(lcData.y, lcData.y + lcData.n);
+        std::sort(sorted.begin(), sorted.end());
+        double median;
+        if (sorted.size() % 2 == 0)
+            median = ((double)sorted[sorted.size() / 2 - 1] + (double)sorted[sorted.size() / 2]) / 2.0;
+        else
+            median = (double)sorted[sorted.size() / 2];
+        medEdit->setText(QString::number(median, 'f', 3));
+
+        /* MAD: mean absolute deviation from the median */
+        double mad = 0.0;
+        for (unsigned int i = 0; i < lcData.n; i++)
+            mad += std::fabs((double)lcData.y[i] - median);
+        mad /= (double)lcData.n;
+        madEdit->setText(QString::number(mad, 'f', 3));
 
         /* Update files list in config */
         bool found = false;
@@ -711,7 +807,7 @@ int main(int argc, char *argv[]) {
         if (!found) {
             files.append(FileEntry{path, (int)lcData.n});
         }
-        saveConfig(labels, numpadNav, files, ps);
+        saveConfig(labels, numpadNav, files, ps, targets);
         if (onLightCurveLoaded) onLightCurveLoaded();
     };
 
@@ -727,9 +823,9 @@ int main(int argc, char *argv[]) {
         while (reopen) {
             reopen = false;
             CustomizeLabelsDialog dlg(labels, &numpadNav, &window);
-            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav, &files, &ps]() {
+            QObject::connect(&dlg, &CustomizeLabelsDialog::labelsChanged, classDisplay, [classDisplay, labels, &numpadNav, &files, &ps, &targets]() {
                 classDisplay->refreshDisplay();
-                saveConfig(labels, numpadNav, files, ps);
+                saveConfig(labels, numpadNav, files, ps, targets);
             });
             dlg.exec();
             if (dlg.shouldReopen()) {
@@ -859,6 +955,15 @@ int main(int argc, char *argv[]) {
         if (ok && p > 0.0) zoomPlot->selectFrequency(1.0 / p, false);
     });
 
+    /* Pressing Enter on any editable field commits the edit, drops the
+       selection and returns focus to classification mode (digit keys). */
+    for (QLineEdit *field : {objectEdit, periodVal, entryNoEdit, objListEdit}) {
+        QObject::connect(field, &QLineEdit::editingFinished, [field]() {
+            field->deselect();
+            field->clearFocus();
+        });
+    }
+
     /* Arrow buttons: while held, move the selected frequency at
        scrollRate / DeltaT per second (DeltaT = time from the first to the last
        measurement; scrollRate is configurable via Options > Period Scroll). */
@@ -964,8 +1069,16 @@ int main(int argc, char *argv[]) {
                      [&](int rc, double freq, QVector<float> model, int style, qint64 elapsedNs) {
                          modelBusy = false;
                          phasedTimeLabel->setText(QString("Phased model: %1 ms").arg((double)elapsedNs * 1e-6, 0, 'f', 2));
-                         if (rc == 0 && lcData.n > 0 && model.size() == (int)lcData.n)
+                         if (rc == 0 && lcData.n > 0 && model.size() == (int)lcData.n) {
                              phasedPlot->setModel(model.constData(), lcData.n, (lc_model_style_t)style, freq);
+                             /* Amp: distance between the fitted model's minimum and maximum */
+                             float mn = model[0], mx = model[0];
+                             for (int i = 1; i < model.size(); ++i) {
+                                 if (model[i] < mn) mn = model[i];
+                                 if (model[i] > mx) mx = model[i];
+                             }
+                             ampEdit->setText(QString::number((double)(mx - mn), 'f', 3));
+                         }
                      });
 
     /* Request a model refresh at every pivot frequency change (the scatter fold
@@ -974,6 +1087,7 @@ int main(int argc, char *argv[]) {
                      &window, [&](double freq) {
                          if (lcData.n == 0 || activeMethodIdx < 0 || !(freq > 0.0)) {
                              phasedPlot->clearModel();
+                             ampEdit->setText(QStringLiteral("0.000"));
                              modelRefreshPending = false;
                              return;
                          }
@@ -1231,7 +1345,7 @@ int main(int argc, char *argv[]) {
     auto openPeriodSearchDialog = [&]() {
         CustomizePeriodSearchDialog dlg(&ps, &window);
         if (dlg.exec() == QDialog::Accepted) {
-            saveConfig(labels, numpadNav, files, ps);
+            saveConfig(labels, numpadNav, files, ps, targets);
         }
     };
     QObject::connect(moreBtn, &QPushButton::clicked, openPeriodSearchDialog);
@@ -1240,7 +1354,7 @@ int main(int argc, char *argv[]) {
     auto openPeriodScrollDialog = [&]() {
         PeriodScrollDialog dlg(&ps, &window);
         if (dlg.exec() == QDialog::Accepted) {
-            saveConfig(labels, numpadNav, files, ps);
+            saveConfig(labels, numpadNav, files, ps, targets);
         }
     };
     QObject::connect(periodScrollAction, &QAction::triggered, openPeriodScrollDialog);
