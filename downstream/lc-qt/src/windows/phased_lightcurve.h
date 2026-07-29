@@ -15,8 +15,9 @@ extern "C" {
  * PhasedLightCurveWidget — scatter plot of the light curve folded at the
  * pivot frequency.
  *
- * Phase is defined as (x[i] - x[0]) * freq mod 1 (time relative to the first
- * measurement, not the HJD value). The x-axis spans [0, 2]; every point is
+ * Phase is defined as (x[i] - t0) * freq mod 1 (where t0 is the average of the
+ * first and last measurement times, keeping the center of the lightcurve
+ * stationary). The x-axis spans [0, 2]; every point is
  * drawn twice (at its phase and at phase + 1) so the wrap-around is visible.
  * The y-axis (magnitude, inverted: brighter on top) and overall formatting
  * match LightCurvePlotWidget exactly.
@@ -36,6 +37,9 @@ public:
 public slots:
     /* Fold the curve at freq (cycles/day); freq <= 0 clears the folding. */
     void setFrequency(double freq);
+
+    /* Show or hide the model overlay and R^2 indicator */
+    void setDisplayModel(bool show);
 
     /* Set the model overlay (same length as data). style determines rendering.
        freq is the frequency the model was computed at: the overlay is folded at
@@ -60,4 +64,5 @@ private:
     bool m_hasModel = false;
     double m_modelFreq = -1.0; /* frequency the stored model was computed at */
     double m_r2 = 0.0;         /* coefficient of determination of the stored model */
+    bool m_displayModel = true; /* whether the model overlay should be rendered */
 };

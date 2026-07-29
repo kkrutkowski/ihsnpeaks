@@ -78,6 +78,13 @@ void PhasedLightCurveWidget::clearModel() {
     update();
 }
 
+void PhasedLightCurveWidget::setDisplayModel(bool show) {
+    if (m_displayModel != show) {
+        m_displayModel = show;
+        update();
+    }
+}
+
 void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
     QFrame::paintEvent(event);
     QPainter painter(this);
@@ -174,7 +181,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(59, 130, 246)); // #3b82f6 accent
 
-    const double t0 = m_x[0];
+    const double t0 = (m_x[0] + m_x[m_n - 1]) / 2.0;
     for (unsigned int i = 0; i < m_n; i++) {
         double phase = std::fmod((m_x[i] - t0) * m_freq, 1.0);
         if (phase < 0.0) phase += 1.0;
@@ -186,7 +193,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
     }
 
     // Draw model overlay (semi-transparent, distinct colour)
-    if (m_hasModel && m_model.size() == (int)m_n) {
+    if (m_displayModel && m_hasModel && m_model.size() == (int)m_n) {
         QColor modelColor(245, 158, 11, 200); // amber #f59e0b, alpha ~200
 
         if (m_modelStyle == LC_MODEL_SCATTER) {
@@ -243,7 +250,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
     }
 
     /* R^2 overlay — top-right, same style as the computation percentage. */
-    if (m_hasModel) {
+    if (m_displayModel && m_hasModel) {
         painter.setPen(QColor(203, 213, 225));
         painter.setFont(QFont("sans-serif", 12, QFont::Bold));
         painter.drawText(QRect(padL, padT, plotW - 6, 22), Qt::AlignRight | Qt::AlignVCenter,

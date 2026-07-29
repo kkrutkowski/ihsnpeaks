@@ -682,10 +682,12 @@ int main(int argc, char *argv[]) {
     QGroupBox *lcGroupBox = new QGroupBox("Light Curve");
     QHBoxLayout *lcLayout = new QHBoxLayout(lcGroupBox);
     QLabel *noPointsLabel = new QLabel("No. points    0");
-    QPushButton *equBtn = new QPushButton("Equ");
+    QPushButton *displayModelBtn = new QPushButton("Display model");
+    displayModelBtn->setCheckable(true);
+    displayModelBtn->setChecked(true);
     lcLayout->addWidget(noPointsLabel);
     lcLayout->addStretch();
-    lcLayout->addWidget(equBtn);
+    lcLayout->addWidget(displayModelBtn);
     listAndCurveLayout->addWidget(lcGroupBox, 1);
     
     mainLayout->addLayout(listAndCurveLayout);
@@ -1009,12 +1011,10 @@ int main(int argc, char *argv[]) {
     /* Track which method's spectrum is currently displayed (-1 = none). */
     int activeMethodIdx = -1;
 
-    /* Phased model overlay: recomputed asynchronously off the GUI thread so the
-       UI stays responsive while the pivot is scrolled. Refreshes are throttled to
-       50 Hz (a new computation starts at most every 20 ms) and never overlap: if
-       the previous computation is still running, the driver re-checks every
-       10 ms until it finishes before starting the next one. The computation time
-       is reported in the status bar. */
+    /* Phased model overlay: recomputed asynchronously off the GUI thread.
+       Refreshes never overlap: if the previous computation is still running,
+       the request is deferred until the worker finishes, at which point it is
+       dispatched immediately. */
     QThread *modelThread = new QThread(&window);
     PhasedModelWorker *modelWorker = new PhasedModelWorker();
     modelWorker->moveToThread(modelThread);
@@ -1024,28 +1024,20 @@ int main(int argc, char *argv[]) {
     bool modelBusy = false;            /* a model computation is currently in flight */
     bool modelRefreshPending = false;  /* a refresh was requested but not yet started */
     double pendingModelFreq = -1.0;    /* frequency the model should be computed at */
-    QElapsedTimer lastModelStart;      /* time since the last computation started */
-    bool lastModelStartValid = false;
 
     QLabel *phasedTimeLabel = new QLabel();
     phasedTimeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     window.statusBar()->addPermanentWidget(phasedTimeLabel);
 
-    QTimer *modelRefreshTimer = new QTimer(&window);
-    modelRefreshTimer->setInterval(10); /* re-check in 10 ms increments while waiting */
-    QObject::connect(modelRefreshTimer, &QTimer::timeout, [&]() {
-        if (modelBusy) return; /* previous computation still running: wait, re-check next tick */
-        if (!modelRefreshPending) { modelRefreshTimer->stop(); return; }
-        if (lastModelStartValid && lastModelStart.elapsed() < 20) return; /* 50 Hz cap */
+    auto tryDispatchModel = [&]() {
+        if (modelBusy) return; /* previous computation still running */
+        if (!modelRefreshPending) return;
         if (lcData.n == 0 || activeMethodIdx < 0 || !(pendingModelFreq > 0.0)) {
             modelRefreshPending = false;
-            modelRefreshTimer->stop();
             return;
         }
         modelRefreshPending = false;
         modelBusy = true;
-        lastModelStart.start();
-        lastModelStartValid = true;
 
         lc_periodogram_config_t mcfg;
         memset(&mcfg, 0, sizeof(mcfg));
@@ -1063,7 +1055,7 @@ int main(int argc, char *argv[]) {
         QMetaObject::invokeMethod(modelWorker, [modelWorker, clone, mcfg, freq]() {
             modelWorker->compute(clone, mcfg, freq);
         }, Qt::QueuedConnection);
-    });
+    };
 
     QObject::connect(modelWorker, &PhasedModelWorker::done, &window,
                      [&](int rc, double freq, QVector<float> model, int style, qint64 elapsedNs) {
@@ -1079,6 +1071,7 @@ int main(int argc, char *argv[]) {
                              }
                              ampEdit->setText(QString::number((double)(mx - mn), 'f', 3));
                          }
+                         tryDispatchModel();
                      });
 
     /* Request a model refresh at every pivot frequency change (the scatter fold
@@ -1093,8 +1086,10 @@ int main(int argc, char *argv[]) {
                          }
                          pendingModelFreq = freq;
                          modelRefreshPending = true;
-                         if (!modelRefreshTimer->isActive()) modelRefreshTimer->start();
+                         tryDispatchModel();
                      });
+
+    QObject::connect(displayModelBtn, &QPushButton::toggled, phasedPlot, &PhasedLightCurveWidget::setDisplayModel);
 
     QLabel *progressLabel = new QLabel();
     progressLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
