@@ -17,8 +17,10 @@ public:
 
 private slots:
     void apply();
+    void toggleDisplay();
 
 private:
     PeriodSearchSettings *m_settings;
     QDoubleSpinBox *m_rate;
+    QPushButton *m_displayToggle;
 };

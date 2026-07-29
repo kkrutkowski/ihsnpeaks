@@ -62,6 +62,7 @@ public:
     /* Current view edges (frequency). */
     double viewMin() const;
     double viewMax() const;
+    double centerFrequency() const { return m_pivotFreq; }
 
 public slots:
     void zoomIn();  /* factor 2 */

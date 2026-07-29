@@ -20,6 +20,7 @@ struct PeriodSearchSettings {
     int nbins = 10;            /* -> blsWidthCount (BLS only) */
     bool autoCenter = true;    /* automatically center on highest peak after computation */
     double scrollRate = 1.0;   /* period scroll: pivot rate in 1/DeltaT per second */
+    bool displayFrequency = false; /* false = period, true = frequency */
 };
 
 class CustomizePeriodSearchDialog : public QDialog {

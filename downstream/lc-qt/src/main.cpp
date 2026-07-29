@@ -148,6 +148,11 @@ static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *
                     if (s) ps->autoCenter = (strcmp(s->string, "true") == 0);
                     continue;
                 }
+                if (pe->value->type == json_type_string && strcmp(pk, "display_frequency") == 0) {
+                    json_string_s *s = json_value_as_string(pe->value);
+                    if (s) ps->displayFrequency = (strcmp(s->string, "true") == 0);
+                    continue;
+                }
                 if (pe->value->type != json_type_number) continue;
                 json_number_s *num = json_value_as_number(pe->value);
                 if (!num) continue;
@@ -227,7 +232,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                     "\"oversmoothing\":%8,"
                     "\"nbins\":%9,"
                     "\"scroll_rate\":%10,"
-                    "\"auto_center\":\"%11\"}")
+                    "\"auto_center\":\"%11\","
+                    "\"display_frequency\":\"%12\"}")
                 .arg(ps.nterms)
                 .arg(ps.oversampling, 0, 'g', 10)
                 .arg(ps.fmin, 0, 'g', 10)
@@ -238,7 +244,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                 .arg(ps.oversmoothing, 0, 'g', 10)
                 .arg(ps.nbins)
                 .arg(ps.scrollRate, 0, 'g', 10)
-                .arg(ps.autoCenter ? "true" : "false");
+                .arg(ps.autoCenter ? "true" : "false")
+                .arg(ps.displayFrequency ? "true" : "false");
     json += "}";
 
     QFile f(CONFIG_FILE);
@@ -413,6 +420,91 @@ public:
 };
 
 
+class PeriodModifyKeyFilter : public QObject {
+    std::function<void(double)> m_setFreq;
+    std::function<void()> m_toggleDisplay;
+    std::function<double()> m_getFreq;
+
+    bool m_multKeyHeld = false;
+    bool m_divKeyHeld = false;
+    bool m_numberPressed = false;
+    double m_baseFreq = 0.0;
+public:
+    PeriodModifyKeyFilter(std::function<void(double)> setFreq,
+                          std::function<void()> toggleDisplay,
+                          std::function<double()> getFreq)
+        : m_setFreq(std::move(setFreq)), m_toggleDisplay(std::move(toggleDisplay)), m_getFreq(std::move(getFreq)) {}
+
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
+            return QObject::eventFilter(watched, event);
+
+        QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+        int key = ke->key();
+
+        QWidget *focus = QApplication::focusWidget();
+        bool textHasFocus = focus && (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus));
+        if (textHasFocus) return QObject::eventFilter(watched, event);
+
+        if (ke->isAutoRepeat()) {
+            if (key == Qt::Key_Asterisk || key == Qt::Key_Slash || key == Qt::Key_Backslash ||
+                ((m_multKeyHeld || m_divKeyHeld) && key >= Qt::Key_0 && key <= Qt::Key_9)) {
+                return true;
+            }
+            return QObject::eventFilter(watched, event);
+        }
+
+        if (event->type() == QEvent::KeyPress) {
+            if (key == Qt::Key_Backslash) {
+                m_toggleDisplay();
+                return true;
+            }
+            if (key == Qt::Key_Asterisk && !m_divKeyHeld) {
+                m_multKeyHeld = true;
+                m_numberPressed = false;
+                m_baseFreq = m_getFreq();
+                return true;
+            }
+            if (key == Qt::Key_Slash && !m_multKeyHeld) {
+                m_divKeyHeld = true;
+                m_numberPressed = false;
+                m_baseFreq = m_getFreq();
+                return true;
+            }
+            if ((m_multKeyHeld || m_divKeyHeld) && key >= Qt::Key_1 && key <= Qt::Key_9) {
+                m_numberPressed = true;
+                double factor = key - Qt::Key_0;
+                if (m_multKeyHeld) {
+                    m_setFreq(m_baseFreq / factor);
+                } else if (m_divKeyHeld) {
+                    m_setFreq(m_baseFreq * factor);
+                }
+                return true;
+            }
+            if ((m_multKeyHeld || m_divKeyHeld) && key == Qt::Key_0) {
+                return true;
+            }
+        } else if (event->type() == QEvent::KeyRelease) {
+            if (key == Qt::Key_Asterisk && m_multKeyHeld) {
+                m_multKeyHeld = false;
+                if (!m_numberPressed) m_setFreq(m_baseFreq / 2.0);
+                return true;
+            }
+            if (key == Qt::Key_Slash && m_divKeyHeld) {
+                m_divKeyHeld = false;
+                if (!m_numberPressed) m_setFreq(m_baseFreq * 2.0);
+                return true;
+            }
+        }
+
+        if ((m_multKeyHeld || m_divKeyHeld) && key >= Qt::Key_0 && key <= Qt::Key_9) {
+            return true;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+
 /* Deep copy of an lc_data_t for use on the worker thread (frees only x/y/dy; _buf stays null). */
 static lc_data_t cloneLcData(const lc_data_t *src) {
     lc_data_t copy;
@@ -506,24 +598,24 @@ signals:
    significant digits = precision + ceil(log10(freq)) clamped to [1, 17], where
    precision = 1 + log10(DeltaT * oversampling * nterms); the fractional part is
    zero-padded so the value shows that many significant digits. */
-static QString formatPeriodUpstream(double freq, double deltaT, double oversampling, int nterms) {
+static QString formatCoordinateUpstream(double freq, double deltaT, double oversampling, int nterms, bool formatFrequency) {
     if (!(freq > 0.0) || !std::isfinite(freq)) return QStringLiteral("inf");
     double arg = deltaT * oversampling * (double)nterms;
     int precision = (arg > 0.0) ? 1 + (int)std::log10(arg) : 1;
     int sig = precision + (int)std::ceil(std::log10(freq));
     if (sig < 1) sig = 1;
     if (sig > 17) sig = 17;
-    double period = 1.0 / freq;
+    double val = formatFrequency ? freq : (1.0 / freq);
     int dec;
-    if (period >= 1.0) {
-        int intDigits = (int)std::ceil(std::log10(period));
+    if (val >= 1.0) {
+        int intDigits = (int)std::ceil(std::log10(val));
         if (intDigits < 0) intDigits = 0;
         dec = sig - intDigits;
         if (dec < 0) dec = 0;
     } else {
-        dec = sig - (int)std::floor(std::log10(period)) - 1; /* sig significant digits */
+        dec = sig - (int)std::floor(std::log10(val)) - 1; /* sig significant digits */
     }
-    return QString::number(period, 'f', dec);
+    return QString::number(val, 'f', dec);
 }
 
 
@@ -949,12 +1041,15 @@ int main(int argc, char *argv[]) {
     QObject::connect(zoomPlot, &ZoomedSpectrumWidget::centerFrequencyChanged, periodVal,
                      [&lcData, &ps, periodVal](double freq) {
                          double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
-                         periodVal->setText(formatPeriodUpstream(freq, dT, ps.oversampling, ps.nterms));
+                         periodVal->setText(formatCoordinateUpstream(freq, dT, ps.oversampling, ps.nterms, ps.displayFrequency));
                      });
-    QObject::connect(periodVal, &QLineEdit::editingFinished, [periodVal, zoomPlot]() {
+    QObject::connect(periodVal, &QLineEdit::editingFinished, [periodVal, zoomPlot, &ps]() {
         bool ok = false;
-        double p = periodVal->text().toDouble(&ok);
-        if (ok && p > 0.0) zoomPlot->selectFrequency(1.0 / p, false);
+        double val = periodVal->text().toDouble(&ok);
+        if (ok && val > 0.0) {
+            double f = ps.displayFrequency ? val : (1.0 / val);
+            zoomPlot->selectFrequency(f, false);
+        }
     });
 
     /* Pressing Enter on any editable field commits the edit, drops the
@@ -998,6 +1093,21 @@ int main(int argc, char *argv[]) {
                                        [zoomPlot]() { zoomPlot->zoomIn(); },
                                        [zoomPlot]() { zoomPlot->zoomOut(); });
     app.installEventFilter(&scrollFilter);
+
+    PeriodModifyKeyFilter modifyFilter(
+        [zoomPlot](double f) { zoomPlot->selectFrequency(f, false); },
+        [&ps, zoomPlot, periodVal, &lcData, &labels, &numpadNav, &files, &targets]() {
+            ps.displayFrequency = !ps.displayFrequency;
+            saveConfig(labels, numpadNav, files, ps, targets);
+            double freq = zoomPlot->centerFrequency();
+            double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
+            if (freq > 0.0) {
+                periodVal->setText(formatCoordinateUpstream(freq, dT, ps.oversampling, ps.nterms, ps.displayFrequency));
+            }
+        },
+        [zoomPlot]() { return zoomPlot->centerFrequency(); }
+    );
+    app.installEventFilter(&modifyFilter);
 
     // ---- Periodogram spectrum computation wiring ----
     lc_progress_t *progress = lc_progress_create();

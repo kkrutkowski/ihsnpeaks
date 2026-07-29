@@ -47,6 +47,16 @@ PeriodScrollDialog::PeriodScrollDialog(PeriodSearchSettings *settings, QWidget *
     grid->addWidget(new QLabel("Scroll rate (1/\u0394T per second)"), 0, 0);
     grid->addWidget(m_rate, 0, 1);
 
+    m_displayToggle = new QPushButton();
+    m_displayToggle->setCheckable(true);
+    m_displayToggle->setChecked(m_settings->displayFrequency);
+    connect(m_displayToggle, &QPushButton::toggled, this, &PeriodScrollDialog::toggleDisplay);
+    
+    grid->addWidget(new QLabel("Display mode"), 1, 0);
+    grid->addWidget(m_displayToggle, 1, 1);
+
+    toggleDisplay(); // Initialise text and style
+
     grid->setColumnStretch(1, 1);
     mainLayout->addWidget(box);
 
@@ -65,4 +75,15 @@ PeriodScrollDialog::PeriodScrollDialog(PeriodSearchSettings *settings, QWidget *
 
 void PeriodScrollDialog::apply() {
     m_settings->scrollRate = m_rate->value();
+    m_settings->displayFrequency = m_displayToggle->isChecked();
+}
+
+void PeriodScrollDialog::toggleDisplay() {
+    if (m_displayToggle->isChecked()) {
+        m_displayToggle->setText("Frequency");
+        m_displayToggle->setStyleSheet("background-color: #3b82f6; color: white;");
+    } else {
+        m_displayToggle->setText("Period");
+        m_displayToggle->setStyleSheet("");
+    }
 }
