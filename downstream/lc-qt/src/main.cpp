@@ -311,7 +311,7 @@ public:
         : QLineEdit(parent), m_labels(labels), m_current(0), m_typeEdit(nullptr) {
         setReadOnly(true);
         setFocusPolicy(Qt::NoFocus);
-        setMinimumWidth(200);
+        setMinimumWidth(120);
         setAlignment(Qt::AlignCenter);
         refreshDisplay();
     }
@@ -755,21 +755,13 @@ int main(int argc, char *argv[]) {
     mainLayout->addLayout(plotsLayout, 3); // stretch factor 3
 
     
-    // Object List / Light Curve row
+    // Detrending / Light Curve row (formerly Object List / Light Curve row)
     QHBoxLayout *listAndCurveLayout = new QHBoxLayout();
     
-    QGroupBox *objGroupBox = new QGroupBox("Object List");
-    QHBoxLayout *objLayout = new QHBoxLayout(objGroupBox);
-    QLineEdit *objListEdit = new QLineEdit();
-    QPushButton *openObjBtn = new QPushButton("Open");
-    QLabel *entryNoLabel = new QLabel("Entry No.");
-    QLineEdit *entryNoEdit = new QLineEdit("0");
-    entryNoEdit->setMaximumWidth(50);
-    objLayout->addWidget(objListEdit);
-    objLayout->addWidget(openObjBtn);
-    objLayout->addWidget(entryNoLabel);
-    objLayout->addWidget(entryNoEdit);
-    listAndCurveLayout->addWidget(objGroupBox, 1);
+    QGroupBox *statsGroupBox = new QGroupBox("Detrending and prewhitening");
+    QHBoxLayout *statsLayout = new QHBoxLayout(statsGroupBox);
+    statsLayout->addStretch();
+    listAndCurveLayout->addWidget(statsGroupBox, 1);
     
     QGroupBox *lcGroupBox = new QGroupBox("Light Curve");
     QHBoxLayout *lcLayout = new QHBoxLayout(lcGroupBox);
@@ -784,28 +776,36 @@ int main(int argc, char *argv[]) {
     
     mainLayout->addLayout(listAndCurveLayout);
     
-    // Log Files Section — split into Statistics (left) + Classification (right)
+    // Log Files Section — split into Object List (left) + Classification (right)
     QHBoxLayout *logFilesLayout = new QHBoxLayout();
 
-    QGroupBox *statsGroupBox = new QGroupBox("Statistics");
-    QHBoxLayout *statsLayout = new QHBoxLayout(statsGroupBox);
-    QPushButton *statsBtn = new QPushButton("Class stats");
-    statsLayout->addStretch();
-    statsLayout->addWidget(statsBtn);
-    statsLayout->addStretch();
-    logFilesLayout->addWidget(statsGroupBox, 1);
+    QGroupBox *objGroupBox = new QGroupBox("Object List");
+    QHBoxLayout *objLayout = new QHBoxLayout(objGroupBox);
+    QLineEdit *objListEdit = new QLineEdit();
+    QPushButton *openObjBtn = new QPushButton("Open");
+    QLabel *entryNoLabel = new QLabel("Entry No.");
+    QLineEdit *entryNoEdit = new QLineEdit("0");
+    entryNoEdit->setMaximumWidth(50);
+    objLayout->addWidget(objListEdit);
+    objLayout->addWidget(openObjBtn);
+    objLayout->addWidget(entryNoLabel);
+    objLayout->addWidget(entryNoEdit);
+    logFilesLayout->addWidget(objGroupBox, 1);
 
     QGroupBox *classGroupBox = new QGroupBox("Classification");
     QHBoxLayout *classLayout = new QHBoxLayout(classGroupBox);
 
     QPushButton *customizeBtn = new QPushButton("Customize labels");
+    QPushButton *statsBtn = new QPushButton("Class stats");
     ClassificationDisplay *classDisplay = new ClassificationDisplay(labels);
     classDisplay->setTypeEdit(typeEdit);
 
     classLayout->addStretch();
     classLayout->addWidget(customizeBtn);
     classLayout->addStretch();
-    classLayout->addWidget(new QLabel("Current:"));
+    classLayout->addWidget(statsBtn);
+    classLayout->addStretch();
+    classLayout->addWidget(new QLabel("Cur:"));
     classLayout->addWidget(classDisplay);
     classLayout->addStretch();
     logFilesLayout->addWidget(classGroupBox, 1);

@@ -30,11 +30,14 @@ target_include_directories(phased_verify PRIVATE
     ${EXTERNAL_INCLUDE_DIR}
 )
 
+# Find the compiled nufft1.c.o object file dynamically in the build directory
+file(GLOB_RECURSE NUFFT_OBJ "${LCQT_BUILD_DIR}/CMakeFiles/lc_backend.dir/*nufft1.c.o")
+
 # Reuse the already-compiled backend objects (loader + detrend + NuFFT)
 target_link_libraries(phased_verify PRIVATE
     Qt6::Widgets
     m
     ${LCQT_BUILD_DIR}/CMakeFiles/lc_backend.dir/src/lc_periodogram.c.o
-    ${LCQT_BUILD_DIR}/CMakeFiles/lc_backend.dir/upstream_src/nufft/nufft1.c.o
+    ${NUFFT_OBJ}
 )
-target_link_options(phased_verify PRIVATE -static -pthread)
+target_link_options(phased_verify PRIVATE -pthread)

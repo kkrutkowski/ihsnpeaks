@@ -133,7 +133,7 @@ int main(int argc, char *argv[]) {
 
     /* Every measurement must have scatter coverage near BOTH expected pixels */
     int missFirst = 0, missCopy = 0;
-    const double t0 = d.x[0];
+    const double t0 = (d.x[0] + d.x[d.n - 1]) / 2.0;
     for (unsigned int i = 0; i < d.n; ++i) {
         double phase = std::fmod((d.x[i] - t0) * f1, 1.0);
         if (phase < 0.0) phase += 1.0;
