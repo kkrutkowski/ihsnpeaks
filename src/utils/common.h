@@ -154,6 +154,7 @@ typedef struct {
     uint32_t paddedLen;
 
     float* power;
+    size_t powerCap;
     float* blockReal;
     float* blockImag;
     float* inputReal;

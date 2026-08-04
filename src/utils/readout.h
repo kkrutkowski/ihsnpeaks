@@ -51,6 +51,7 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->nufftWorkspace = NULL;
     free(buffer->power);
     buffer->power = NULL;
+    buffer->powerCap = 0;
     free(buffer->blockReal);
     buffer->blockReal = NULL;
     free(buffer->blockImag);
@@ -143,6 +144,19 @@ static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nt
     return true;
 }
 
+// Lazily allocate (or grow) the power grid to exactly the required capacity.
+// Sweep-time callers pass slice_nfreq+1 so parallel workers only allocate what
+// their frequency slice actually needs; the primary gets the full grid up front.
+static inline bool buffer_ensure_power(buffer_t* buffer, size_t cap) {
+    if (buffer->power && buffer->powerCap >= cap) return true;
+    float* np = aligned_alloc(64, round_buffer(cap * sizeof(float)));
+    if (!np) return false;
+    free(buffer->power);
+    buffer->power = np;
+    buffer->powerCap = cap;
+    return true;
+}
+
 static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
     buffer->len = params->maxLen;
     buffer->allocated = true;
@@ -183,9 +197,18 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
     }
     if (!buffer->readBuf) goto error;
     if (!buffer->power) {
-        buffer->power = aligned_alloc(64, round_buffer(((size_t)params->maxFreqCount + 2U) * sizeof(float)));
+        // Power grid: full frequency grid only when spectrum mode needs it;
+        // otherwise lazily grown per slice by buffer_ensure_power() at sweep time.
+        bool needs_power_grid = mode_uses_direct_eval_grid(params->mode) || !periodogram_uses_aov(params->periodogramMethod) || params->spectrum;
+        if (needs_power_grid) {
+            size_t power_entries = params->spectrum ? ((size_t)params->maxFreqCount + 2U) : ((size_t)params->outputLen + 2U);
+            buffer->power = aligned_alloc(64, round_buffer(power_entries * sizeof(float)));
+            if (buffer->power) buffer->powerCap = power_entries;
+        }
     }
-    if (!buffer->power) goto error;
+    if (params->spectrum && !buffer->power) goto error;
+    if (mode_uses_direct_eval_grid(params->mode) && !buffer->power) goto error;
+    if (!periodogram_uses_aov(params->periodogramMethod) && !buffer->power) goto error;
     if (!buffer->blockReal) {
         buffer->blockReal = aligned_alloc(64, round_buffer((size_t)params->outputLen * sizeof(float)));
     }

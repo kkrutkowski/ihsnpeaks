@@ -917,8 +917,8 @@ double lnI(double a, double b, double x) {
 
     // Tail case: use the hypergeometric approximation
     double lnB = betaln(a, b);
-
     double hyp = sf_hyperg_2F1(a + b, 1.0, a + 1.0, x);
+
     if (hyp <= 0.0) return -INFINITY;
 
     return a * log(x) + b * log1p(-x) - log(a) - lnB + log(hyp);

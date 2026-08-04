@@ -128,11 +128,14 @@ int main(int argc, char *argv[]) {
 
     if (topology_probed) {
         if (kv_size(params.targets) == 1 && topo->total_cores >= 1) {
-            nThreads = topo->total_cores;  // single target: one worker per physical core
+            // Single target: m5+ direct GB-grid modes can use all logical PUs;
+            // m0-m4 NuFFT/AoV sweeps stay capped at one worker per physical core.
+            nThreads = mode_uses_direct_gb_grid(params.mode) ? topo->total_workers : topo->total_cores;
         } else {
             nThreads = topo->total_workers;  // batch: use all logical PUs
         }
         if (nThreads < 1) nThreads = 1;
+        if (params.jobs > 0 && nThreads > params.jobs) nThreads = params.jobs;  // keep explicit -j cap
     }
 
     if (params.debug) {
@@ -159,12 +162,18 @@ int main(int argc, char *argv[]) {
             if (mode_uses_direct_eval_grid(params.mode)) {
                 directPool = kt_forpool_init(nThreads, params.idle);
             } else if (!mode_uses_direct_gb_grid(params.mode)) {
-                // m0-m4: allocate per-worker buffers for parallel NuFFT/AoV sweep
+                // m0-m4: allocate per-worker buffers for parallel NuFFT/AoV sweep.
+                // Workers only need their frequency slice of the power grid, which is
+                // grown lazily at sweep time, so allocate them without the spectrum-sized
+                // power array (aggressive memory reduction).
                 params.nbuffers = nThreads;
                 alloc_buffers(&params);
+                bool saved_spectrum = params.spectrum;
+                params.spectrum = false;
                 for (int i = 0; i < params.nbuffers; i++) {
                     alloc_buffer(params.buffers[i], &params);
                 }
+                params.spectrum = saved_spectrum;
                 directPool = kt_forpool_init(nThreads, params.idle);
             }
         }

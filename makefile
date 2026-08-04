@@ -90,8 +90,8 @@ else
     $(error Unsupported PROFILE_ISA '$(PROFILE_ISA)'; expected native, x86-64, x86-64-v2, x86-64-v2-avx, x86-64-v3, or x86-64-v4)
 endif
 
-PROFILE_CFLAGS = $(STDFLAG) -O3 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DIHSNPEAKS_PROFILE=1 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(PROFILE_BUILD_DIR)
-PROFILE_SCALING_CFLAGS = $(STDFLAG) -O3 -ffast-math -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=8 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)src/nufft
+PROFILE_CFLAGS = $(STDFLAG) -O3 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DIHSNPEAKS_PROFILE=1 -DMAX_TWIDDLE_REUSE=16 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(PROFILE_BUILD_DIR)
+PROFILE_SCALING_CFLAGS = $(STDFLAG) -O3 -ffast-math -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=16 -fno-sanitize=all $(PROFILE_ARCH_FLAGS) -I$(MAKEFILE_DIR)src/nufft
 
 ifeq ($(MIMALLOC),1)
 MIMALLOC_HEADER_PATH := $(shell for d in /usr/local/include /usr/include "$$HOME/include"; do [ -d "$$d" ] || continue; p=$$(find "$$d" -maxdepth 3 -type f -name mimalloc.h -print -quit 2>/dev/null); if [ -n "$$p" ]; then printf '%s\n' "$$p"; break; fi; done)
@@ -158,7 +158,7 @@ else
     ALLOCATOR_CFLAGS := -DHAS_MIMALLOC=0
 endif
 
-CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -march=native $(LTOFLAGS) -fno-sanitize=all -Wno-stringop-overflow -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -I$(HWLOC_INC)
+CFLAGS_BASE = -D_GNU_SOURCE $(ALLOCATOR_CFLAGS) -DMAX_TWIDDLE_REUSE=16 -march=native $(LTOFLAGS) -fno-sanitize=all -Wno-stringop-overflow -I$(MAKEFILE_DIR)include -I$(MAKEFILE_DIR)src/nufft -I$(BUILD_DIR) -I$(HWLOC_INC)
 LDFLAGS_BASE := -Wl,--gc-sections
 LDLIBS := -lm $(ALLOCATOR_LDLIBS)
 
@@ -291,10 +291,10 @@ $(MIMALLOC_OVERRIDE_HEADER): $(MIMALLOC_COMPAT_HEADER) | $(BUILD_DIR)
 	@printf '#ifndef IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#define IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#include <mimalloc/mimalloc.h>\n#define malloc(n) mi_malloc(n)\n#define calloc(c,n) mi_calloc(c,n)\n#define realloc(p,n) mi_realloc(p,n)\n#define free(p) mi_free(p)\n#define strdup(s) mi_strdup(s)\n#define strndup(s,n) mi_strndup(s,n)\n#define realpath(f,n) mi_realpath(f,n)\n#define aligned_alloc(a,n) mi_aligned_alloc(a,n)\n#define posix_memalign(p,a,n) mi_posix_memalign(p,a,n)\n#define reallocarray(p,c,n) mi_reallocarray(p,c,n)\n#endif\n' > $@
 
 $(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(MIMALLOC_HEADER_DEP) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -DMAX_TWIDDLE_REUSE=8 -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
-	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra $(SCALING_WARNFLAGS) -D_GNU_SOURCE -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=8 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
+	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra $(SCALING_WARNFLAGS) -D_GNU_SOURCE -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=16 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
 
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@

@@ -16,13 +16,6 @@
 #    define M_SQRT1_2 0.70710678118654752440
 #endif
 
-#ifndef MAX_TWIDDLE_REUSE
-#    define MAX_TWIDDLE_REUSE 8
-#endif
-#if MAX_TWIDDLE_REUSE < 2 || (MAX_TWIDDLE_REUSE & (MAX_TWIDDLE_REUSE - 1)) != 0
-#    error "MAX_TWIDDLE_REUSE must be a power of two greater than or equal to 2"
-#endif
-
 #define VECF_LEN (VEC_BYTES / 4)
 typedef float VECF __attribute__((vector_size(VEC_BYTES)));
 typedef uint32_t VECF_INT __attribute__((vector_size(VEC_BYTES)));

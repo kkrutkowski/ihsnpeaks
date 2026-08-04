@@ -268,6 +268,13 @@ static bool process_path(parameters *params) {
             inspect_dat_file(params->target, &newline_count, &time_span);
         } else if (has_fits_suffix(params->target)) {
             inspect_fits_file(params->target, &newline_count, &time_span);
+        } else {
+            fprintf(stderr, "Unsupported input file format: '%s' (expected .dat or .fits)\n", params->target);
+            exit(EXIT_FAILURE);
+        }
+        if (newline_count == 0U) {
+            fprintf(stderr, "No data rows found in '%s'\n", params->target);
+            exit(EXIT_FAILURE);
         }
         params->maxLen = newline_count;
         params->maxTimeSpan = time_span;

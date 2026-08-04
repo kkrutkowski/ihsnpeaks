@@ -288,7 +288,8 @@ static int lc_progress_is_cancelled(lc_progress_t *p) { return p ? atomic_load(&
 
 /* Progress-aware serial IHS sweep (mirrors execute_nufft_sweep).
  * If skip_precompute is true, the caller has already precomputed (and this workspace copied it). */
-static void lc_ihs_sweep_progress(buffer_t *buffer, double fmin, double fstep, uint32_t nfreq, lc_progress_t *progress, bool skip_precompute) {
+static bool lc_ihs_sweep_progress(buffer_t *buffer, double fmin, double fstep, uint32_t nfreq, lc_progress_t *progress, bool skip_precompute) {
+    if (!buffer_ensure_power(buffer, (size_t)nfreq + 1U)) return false;
     memset(buffer->power, 0, ((size_t)nfreq + 1U) * sizeof(float));
     if (!skip_precompute) {
         nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
@@ -311,6 +312,7 @@ static void lc_ihs_sweep_progress(buffer_t *buffer, double fmin, double fstep, u
             lc_progress_add_done(progress, 1U);
         }
     }
+    return true;
 }
 
 typedef struct {
@@ -350,8 +352,7 @@ static void lc_ihs_slice_worker(void *data, long i, int tid) {
     nufft1_workspace_copy_precomputed(buf->nufftWorkspace, primary->nufftWorkspace);
 
     double slice_fmin = ctx->fmin + (double)work->freq_start * ctx->fstep;
-    lc_ihs_sweep_progress(buf, slice_fmin, ctx->fstep, work->slice_nfreq, ctx->progress, true);
-    work->status = 0;
+    work->status = lc_ihs_sweep_progress(buf, slice_fmin, ctx->fstep, work->slice_nfreq, ctx->progress, true) ? 0 : -1;
 
     buf->x = own_x; buf->y = own_y; buf->dy = own_dy; buf->wy = own_wy;
 }
@@ -364,8 +365,7 @@ static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, 
         uint32_t outLen = buffer->activeOutputLen > 0 ? buffer->activeOutputLen : 1;
         uint32_t nb = (nfreq + outLen - 1U) / outLen;
         lc_progress_set_total(progress, (uint32_t)buffer->terms * nb);
-        lc_ihs_sweep_progress(buffer, fmin, fstep, nfreq, progress, false);
-        return true;
+        return lc_ihs_sweep_progress(buffer, fmin, fstep, nfreq, progress, false);
     }
 
     int nthreads = pool->n_threads;
@@ -375,9 +375,12 @@ static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, 
     if (nworksets < 2U) nworksets = 2U;
 
     uint32_t per_thread_nfreq = (nfreq + nworksets - 1U) / nworksets;
-    activate_target_nufft_plan(buffer, params, per_thread_nfreq);
+    (void)per_thread_nfreq;
 
-    /* Hoist nufft1_precompute: compute once on primary, workers will copy (thread-safe) */
+    /* Hoist nufft1_precompute: compute once on primary, workers will copy (thread-safe).
+     * NOTE: keep the primary's full plan (activated with nfreq before this sweep) instead
+     * of re-activating a per-thread plan: the smaller plan/ladder changes the numerics and
+     * shifts the grid vs serial. Workers copy this plan, so parallel == serial bit-for-bit. */
     nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
 
     uint32_t outLen = buffer->activeOutputLen > 0 ? buffer->activeOutputLen : 1;
@@ -423,26 +426,31 @@ static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, 
 }
 
 
-/* Progress-aware AoV trig-sums ladder (mirrors aov_compute_trig_sums_ladder). */
-static void lc_aov_trig_sums_progress(buffer_t *buffer, double fmin, double fstep, size_t num_blocks, int max_factor, float epsilon, float ymean,
-                                      bool yweighted, float *S, float *C, uint32_t total_count, lc_progress_t *progress) {
+/* Progress-aware AoV trig-sums ladder (mirrors aov_compute_trig_sums_ladder): computes
+ * blocks [block_begin, block_end) with the hierarchical work state at block_begin and
+ * sequential advance between blocks. base_offset is the absolute freq index of the
+ * start of the output arrays (global base of the current sweep block). */
+static void lc_aov_trig_sums_progress(buffer_t *buffer, double fmin, double fstep, size_t block_begin, size_t block_end, int max_factor, float epsilon,
+                                      float ymean, bool yweighted, float *S, float *C, uint32_t total_count, uint32_t base_offset,
+                                      lc_progress_t *progress) {
     uint32_t block_len = buffer->activeOutputLen;
     for (int q = 1; q <= max_factor; ++q) {
         double freq_factor = (double)q;
         aov_fill_complex_input(buffer, fmin, freq_factor, epsilon, ymean, yweighted);
         fill_twiddle_ladder(buffer, fstep, freq_factor);
-        compute_work_at_block(buffer, 0);
+        compute_work_at_block(buffer, block_begin);
 
-        for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        for (size_t block_idx = block_begin; block_idx < block_end; ++block_idx) {
             uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
             uint32_t count = block_len;
-            if (base + count > total_count) count = total_count - base;
+            if (base + count > base_offset + total_count) count = base_offset + total_count - base;
+            uint32_t rel_base = base - base_offset;
 
             nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, q);
-            memcpy(C + ((size_t)q * (size_t)total_count) + base, buffer->blockReal, (size_t)count * sizeof(float));
-            memcpy(S + ((size_t)q * (size_t)total_count) + base, buffer->blockImag, (size_t)count * sizeof(float));
+            memcpy(C + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockReal, (size_t)count * sizeof(float));
+            memcpy(S + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockImag, (size_t)count * sizeof(float));
 
-            if (block_idx + 1U < num_blocks) advance_work_ladder(buffer, block_idx + 1U);
+            if (block_idx + 1U < block_end) advance_work_ladder(buffer, block_idx + 1U);
             lc_progress_add_done(progress, 1U);
         }
     }
@@ -452,6 +460,7 @@ static void lc_aov_trig_sums_progress(buffer_t *buffer, double fmin, double fste
 static int lc_aov_sweep_progress(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq, const aov_reference_t *ref,
                                  lc_progress_t *progress, bool skip_precompute) {
     if (nfreq == 0) return 0;
+    if (!buffer_ensure_power(buffer, (size_t)nfreq + 1U)) return -1;
     if (!aov_target_has_dof(buffer, params->nterms)) {
         for (uint32_t i = 0; i < nfreq; ++i) buffer->power[i] = 0.0f;
         return 0;
@@ -460,51 +469,43 @@ static int lc_aov_sweep_progress(buffer_t *buffer, parameters *params, double fm
     int degree = params->nterms;
     int max_factor = 2 * degree;
     uint32_t block_len = buffer->activeOutputLen;
+    if (block_len == 0U) return -1;
 
-    bool aov_arrays_owned = false;
-    float *Sw, *Cw, *Syw, *Cyw, *power_arr;
-    if (buffer->aovSw && buffer->aovArrayCap >= (size_t)nfreq) {
-        Sw = buffer->aovSw; Cw = buffer->aovCw; Syw = buffer->aovSyw; Cyw = buffer->aovCyw; power_arr = buffer->aovPower;
-    } else {
-        aov_arrays_owned = true;
-        Sw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
-        Cw = (float *)aov_aligned_alloc((size_t)(max_factor + 1) * (size_t)nfreq, sizeof(float));
-        Syw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
-        Cyw = (float *)aov_aligned_alloc((size_t)(degree + 1) * (size_t)nfreq, sizeof(float));
-        power_arr = (float *)aov_aligned_alloc((size_t)nfreq, sizeof(float));
-        if (!Sw || !Cw || !Syw || !Cyw || !power_arr) {
-            free(Sw); free(Cw); free(Syw); free(Cyw); free(power_arr);
-            return -1;
-        }
-    }
+    // Block-sized arrays (stride = count <= block_len): each outputLen-sized block is
+    // filled with trig sums, solved, and stored, then its arrays are reused by the
+    // next block, so memory scales with one FFT-grid block instead of the full grid.
+    if (!buffer_ensure_aov_arrays(buffer, (size_t)block_len, params->nterms)) return -1;
+    float *Sw = buffer->aovSw, *Cw = buffer->aovCw, *Syw = buffer->aovSyw, *Cyw = buffer->aovCyw, *power_arr = buffer->aovPower;
 
     if (!skip_precompute && nufft1_workspace_get_active_mpoints(buffer->nufftWorkspace) != (int)buffer->n) {
         nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
     }
 
-    for (uint32_t i = 0; i < nfreq; ++i) {
-        Sw[i] = 0.0f; Cw[i] = ref->ws; Syw[i] = 0.0f; Cyw[i] = ref->yws;
-    }
-
     size_t num_blocks = ((size_t)nfreq + (size_t)block_len - 1U) / (size_t)block_len;
-    lc_aov_trig_sums_progress(buffer, fmin, fstep, num_blocks, max_factor, params->epsilon, ref->ymean, false, Sw, Cw, nfreq, progress);
-    lc_aov_trig_sums_progress(buffer, fmin, fstep, num_blocks, degree, params->epsilon, ref->ymean, true, Syw, Cyw, nfreq, progress);
+    for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
+        uint32_t count = block_len;
+        if (base + count > nfreq) count = nfreq - base;
 
-    int status = 0;
-    if (degree == 1) {
-        aov_gls_impl(Sw, Cw, Syw, Cyw, (int)nfreq, ref->ws, ref->yws, ref->chi2_ref, power_arr);
-    } else {
-        status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)nfreq, degree, ref->chi2_ref, power_arr);
-    }
+        for (uint32_t i = 0; i < count; ++i) {
+            Sw[i] = 0.0f; Cw[i] = ref->ws; Syw[i] = 0.0f; Cyw[i] = ref->yws;
+        }
 
-    if (status == 0) {
-        for (uint32_t idx = 0; idx < nfreq; ++idx) buffer->power[idx] = power_arr[idx];
-    }
+        lc_aov_trig_sums_progress(buffer, fmin, fstep, block_idx, block_idx + 1U, max_factor, params->epsilon, ref->ymean, false, Sw, Cw, count, base,
+                                  progress);
+        lc_aov_trig_sums_progress(buffer, fmin, fstep, block_idx, block_idx + 1U, degree, params->epsilon, ref->ymean, true, Syw, Cyw, count, base,
+                                  progress);
 
-    if (aov_arrays_owned) {
-        free(Sw); free(Cw); free(Syw); free(Cyw); free(power_arr);
+        if (degree == 1) {
+            aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref->ws, ref->yws, ref->chi2_ref, power_arr);
+        } else {
+            int status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref->chi2_ref, power_arr);
+            if (status != 0) return status;
+        }
+
+        for (uint32_t i = 0; i < count; ++i) buffer->power[base + i] = power_arr[i];
     }
-    return status;
+    return 0;
 }
 
 typedef struct {
@@ -525,9 +526,12 @@ static void lc_aov_slice_worker(void *data, long i, int tid) {
     parameters *params = ctx->params;
 
     work->buffer_idx = (int)i;
+    work->power_direct = false;
     if (work->slice_nfreq == 0) { work->status = 0; return; }
 
     double *own_x = buf->x; float *own_y = buf->y; float *own_dy = buf->dy; float *own_wy = buf->wy;
+    float *own_power = buf->power;
+    size_t own_powerCap = buf->powerCap;
     buf->n = primary->n; buf->paddedLen = primary->paddedLen; buf->terms = primary->terms;
     buf->neff = primary->neff; buf->amp_neff = primary->amp_neff;
     buf->x = primary->x; buf->y = primary->y; buf->dy = primary->dy; buf->wy = primary->wy;
@@ -536,6 +540,7 @@ static void lc_aov_slice_worker(void *data, long i, int tid) {
     if (nufft1_workspace_set_plan(buf->nufftWorkspace, entry->plan) != NUFFT1_UTIL_OK) {
         work->status = -1;
         buf->x = own_x; buf->y = own_y; buf->dy = own_dy; buf->wy = own_wy;
+        buf->power = own_power; buf->powerCap = own_powerCap;
         return;
     }
     buf->activePlanIndex = primary->activePlanIndex;
@@ -545,10 +550,27 @@ static void lc_aov_slice_worker(void *data, long i, int tid) {
 
     nufft1_workspace_copy_precomputed(buf->nufftWorkspace, primary->nufftWorkspace);
 
+    // Aggressive path: workers write their power slice directly into the primary's
+    // full power grid at global offsets (disjoint ranges, 1-freq overlap at boundaries
+    // gets the same value rewritten by both neighbors). Borrow at freq_start (NOT
+    // freq_start+skip): lc_aov_sweep_progress writes all local indices [0, slice_nfreq)
+    // into buf->power, so local i must map to global freq_start+i.
+    bool power_borrowed = false;
+    if (primary->power) {
+        size_t borrowed = (size_t)work->freq_start;
+        if (primary->powerCap >= borrowed + (size_t)work->slice_nfreq + 1U) {
+            buf->power = primary->power + borrowed;
+            buf->powerCap = primary->powerCap - borrowed;
+            power_borrowed = true;
+        }
+    }
+    work->power_direct = power_borrowed;
+
     double slice_fmin = ctx->fmin + (double)work->freq_start * ctx->fstep;
     int status = lc_aov_sweep_progress(buf, params, slice_fmin, ctx->fstep, work->slice_nfreq, &ctx->ref, ctx->progress, true);
     work->status = (status == 0) ? 0 : -1;
 
+    if (power_borrowed) { buf->power = own_power; buf->powerCap = own_powerCap; }
     buf->x = own_x; buf->y = own_y; buf->dy = own_dy; buf->wy = own_wy;
 }
 
@@ -575,9 +597,12 @@ static bool lc_execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, 
     if (nworksets < 2U) nworksets = 2U;
 
     uint32_t per_thread_nfreq = (nfreq + nworksets - 1U) / nworksets;
-    activate_target_nufft_plan(buffer, params, per_thread_nfreq);
+    (void)per_thread_nfreq;
 
-    /* Hoist nufft1_precompute: compute once on primary, workers will copy (thread-safe) */
+    /* Hoist nufft1_precompute: compute once on primary, workers will copy (thread-safe).
+     * NOTE: keep the primary's full plan (activated with nfreq before this sweep) instead
+     * of re-activating a per-thread plan: the smaller plan/ladder changes the numerics and
+     * shifts the grid vs serial. Workers copy this plan, so parallel == serial bit-for-bit. */
     nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
 
     uint32_t outLen = buffer->activeOutputLen > 0 ? buffer->activeOutputLen : 1;
@@ -603,14 +628,8 @@ static bool lc_execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, 
     }
     lc_progress_set_total(progress, total_blocks);
 
-    for (uint32_t w = 0; w < nworksets; ++w) {
-        if (worksets[w].slice_nfreq == 0) continue;
-        buffer_t *buf = params->buffers[w];
-        if (!buffer_ensure_aov_arrays(buf, (size_t)worksets[w].slice_nfreq, params->nterms)) {
-            free(worksets);
-            return false;
-        }
-    }
+    // AoV arrays are ensured block-sized inside lc_aov_sweep_progress (per-worker,
+    // on demand); allocation failure surfaces via work->status.
 
     lc_aov_slice_ctx_t ctx = {.primary = buffer, .params = params, .fmin = fmin, .fstep = fstep, .nfreq = nfreq,
                               .worksets = worksets, .progress = progress, .ref = ref};
@@ -621,8 +640,9 @@ static bool lc_execute_aov_sweep_parallel(buffer_t *buffer, parameters *params, 
         if (worksets[w].status != 0) ok = false;
 
     if (ok) {
+        // Workers that wrote directly into primary->power are already in place.
         for (uint32_t w = 0; w < nworksets; ++w) {
-            if (worksets[w].slice_nfreq == 0) continue;
+            if (worksets[w].slice_nfreq == 0 || worksets[w].power_direct) continue;
             buffer_t *buf = params->buffers[w];
             uint32_t skip = (w == 0) ? 0U : 1U;
             memcpy(buffer->power + worksets[w].freq_start + skip, buf->power + skip, (size_t)(worksets[w].slice_nfreq - skip) * sizeof(float));
@@ -1010,6 +1030,7 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     initialize_nufft_plan(&ctx->params);
 
     memset(&ctx->primary, 0, sizeof(ctx->primary));
+    ctx->params.spectrum = 1;  // primary holds the full power grid (NLL conversion reads it)
     if (alloc_buffer(&ctx->primary, &ctx->params) != 0) return -1;
     ctx->primary_allocated = 1;
 
@@ -1017,9 +1038,11 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->params.nbuffers = nthreads;
     alloc_buffers(&ctx->params);
     ctx->workers_allocated = 1;
+    ctx->params.spectrum = 0;  // workers only need FFT-grid baseline; per-slice power grown lazily
     for (int i = 0; i < ctx->params.nbuffers; ++i) {
         if (alloc_buffer(ctx->params.buffers[i], &ctx->params) != 0) return -1;
     }
+    ctx->params.spectrum = 1;  // restore: sweeps and NLL conversion run in spectrum mode
 
     ctx->cached_maxLen = n;
     ctx->cached_maxFreqCount = ctx->params.maxFreqCount;
