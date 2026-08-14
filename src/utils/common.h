@@ -88,8 +88,12 @@ static inline bool mode_eagerly_refines_peaks(int mode) { return mode == 4 || mo
 
 static inline bool mode_evaluates_all_local_peaks(int mode) { return mode == 3 || mode == 4 || mode == 6; }
 
+#ifndef M_PI
+#    define M_PI 3.14159265358979323846
+#endif
+
 static inline int gb_convolution_radius(uint32_t n, float gbAlpha) {
-    int r = (int)ceil(0.5 * sqrt((2.0 * (double)n) + 1.0) + ((double)n * 0.25 * (double)gbAlpha));
+    int r = (int)ceil(0.5 * sqrt((2.0 * (double)n) + 1.0) + ((double)n * 0.25 * (sqrt(12.0) / M_PI) * (double)gbAlpha));
     r >>= 1;
     if (r < 1) r = 1;
     return r;
