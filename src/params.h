@@ -28,7 +28,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.threshold = 10.0 * M_LN10;
     params.oversamplingFactor = 5.0;
     params.epsilon = 0.001;
-    params.gbAlpha = 0.025f;
+    params.gbAlpha = 0.125f;
     params.blsMinRelWidth = 0.01;
     params.blsMaxRelWidth = 0.5;
     params.blsWidthCount = 10;
