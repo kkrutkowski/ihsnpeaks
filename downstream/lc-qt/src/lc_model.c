@@ -452,10 +452,11 @@ static int lc_model_gb(const double *x, const float *y, const float *dy, uint32_
 /* -----------------------------------------------------------------------------------
  * BLS model: boxcar fit at a single frequency.
  * Passes the same options (blsMinRelWidth, blsMaxRelWidth, blsWidthCount) as
- * the period search and returns the fitted boxcar levels.
+ * the period search and returns the fitted boxcar levels and/or transit midpoint index.
  * ----------------------------------------------------------------------------------- */
-static int lc_model_bls(const double *x, const float *y, const float *dy, uint32_t n, double freq,
-                        double blsMinRelWidth, double blsMaxRelWidth, int blsWidthCount, float *model_out) {
+static int lc_bls_fit(const double *x, const float *y, const float *dy, uint32_t n, double freq,
+                      double blsMinRelWidth, double blsMaxRelWidth, int blsWidthCount,
+                      float *model_out, uint32_t *mid_idx_out) {
     if (n <= 2) return -1;
 
     /* Allocate a minimal buffer_t for get_bls_result */
@@ -558,26 +559,39 @@ static int lc_model_bls(const double *x, const float *y, const float *dy, uint32
         return -1;
     }
 
-    /* Mark which original indices fall in the transit window */
-    uint8_t *in_transit = (uint8_t *)calloc(n, 1);
-    if (!in_transit) {
-        free(buf0); free(buf1); free(pidx);
-        return -1;
-    }
-    for (int j = 0; j < best_width; ++j) {
-        int pos = best_start + j;
-        if (pos >= nn) pos %= nn;
-        uint32_t orig_idx = bls_unpack_index(sorted[pos]);
-        if (orig_idx < n) in_transit[orig_idx] = 1;
+    if (mid_idx_out) {
+        int pos = (best_start + best_width / 2) % nn;
+        *mid_idx_out = bls_unpack_index(sorted[pos]);
     }
 
-    for (uint32_t i = 0; i < n; i++) {
-        model_out[i] = (float)(in_transit[i] ? best_in_level : best_out_level);
+    if (model_out) {
+        /* Mark which original indices fall in the transit window */
+        uint8_t *in_transit = (uint8_t *)calloc(n, 1);
+        if (!in_transit) {
+            free(buf0); free(buf1); free(pidx);
+            return -1;
+        }
+        for (int j = 0; j < best_width; ++j) {
+            int pos = best_start + j;
+            if (pos >= nn) pos %= nn;
+            uint32_t orig_idx = bls_unpack_index(sorted[pos]);
+            if (orig_idx < n) in_transit[orig_idx] = 1;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            model_out[i] = (float)(in_transit[i] ? best_in_level : best_out_level);
+        }
+
+        free(in_transit);
     }
 
-    free(in_transit);
     free(buf0); free(buf1); free(pidx);
     return 0;
+}
+
+static int lc_model_bls(const double *x, const float *y, const float *dy, uint32_t n, double freq,
+                        double blsMinRelWidth, double blsMaxRelWidth, int blsWidthCount, float *model_out) {
+    return lc_bls_fit(x, y, dy, n, freq, blsMinRelWidth, blsMaxRelWidth, blsWidthCount, model_out, NULL);
 }
 
 /* -----------------------------------------------------------------------------------
@@ -591,7 +605,7 @@ LC_API int lc_compute_phased_model(const lc_data_t *data, const lc_periodogram_c
     uint32_t n = data->n;
     int nterms = cfg->nterms > 0 ? cfg->nterms : 3;
 
-    /* Set default style */
+    /* Set default style: all models are now continuous line plots */
     *style_out = LC_MODEL_LINE;
 
     switch (cfg->method) {
@@ -602,10 +616,10 @@ LC_API int lc_compute_phased_model(const lc_data_t *data, const lc_periodogram_c
         return lc_model_aov(data->x, data->y, data->dy, n, freq, nterms, model_out);
 
     case LC_SPEC_GB: {
-        /* GB: convolution smoother. Scatter style (not continuous).
+        /* GB: convolution smoother. Line style.
          * The period search works on zero-mean preprocessed data, so we subtract
          * the mean before fitting and add it back afterwards. */
-        *style_out = LC_MODEL_SCATTER;
+        *style_out = LC_MODEL_LINE;
         float gbAlpha = (float)(cfg->oversmoothing > 0.0 ? cfg->oversmoothing : 0.2);
         float mean = 0.0f;
         for (uint32_t i = 0; i < n; i++) mean += data->y[i];
@@ -641,5 +655,220 @@ LC_API int lc_compute_phased_model(const lc_data_t *data, const lc_periodogram_c
 
     default:
         return -1;
+    }
+}
+
+/* -----------------------------------------------------------------------------------
+ * Helper functions for phase offset & extremum alignment
+ * ----------------------------------------------------------------------------------- */
+static int lc_cmp_float_asc(const void *a, const void *b) {
+    float fa = *(const float *)a;
+    float fb = *(const float *)b;
+    if (fa < fb) return -1;
+    if (fa > fb) return 1;
+    return 0;
+}
+
+static double lc_compute_median(const float *y, uint32_t n) {
+    if (n == 0) return 0.0;
+    float *sorted_y = (float *)malloc((size_t)n * sizeof(float));
+    if (!sorted_y) return 0.0;
+    memcpy(sorted_y, y, (size_t)n * sizeof(float));
+    qsort(sorted_y, (size_t)n, sizeof(float), lc_cmp_float_asc);
+    double med = 0.0;
+    if (n % 2 == 1) {
+        med = (double)sorted_y[n / 2];
+    } else {
+        med = 0.5 * ((double)sorted_y[n / 2 - 1] + (double)sorted_y[n / 2]);
+    }
+    free(sorted_y);
+    return med;
+}
+
+static inline double lc_wrap_phase(double ph) {
+    ph = fmod(ph, 1.0);
+    if (ph < 0.0) ph += 1.0;
+    return ph;
+}
+
+typedef struct {
+    double phase;
+    float val;
+    uint32_t orig_idx;
+} lc_phase_point_t;
+
+static int lc_cmp_phase_point(const void *a, const void *b) {
+    const lc_phase_point_t *pa = (const lc_phase_point_t *)a;
+    const lc_phase_point_t *pb = (const lc_phase_point_t *)b;
+    if (pa->phase < pb->phase) return -1;
+    if (pa->phase > pb->phase) return 1;
+    return 0;
+}
+
+/*
+ * Compute the phase offset required to place the model's extremum at phase 0.5.
+ */
+LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogram_config_t *cfg, double freq,
+                                      const float *model) {
+    if (!data || data->n == 0 || !cfg || !(freq > 0.0)) return 0.0;
+
+    uint32_t n = data->n;
+    const double t0 = (data->x[0] + data->x[n - 1]) / 2.0;
+
+    switch (cfg->method) {
+    case LC_SPEC_IHS:
+    case LC_SPEC_AOV: {
+        if (!model) return 0.0;
+        double med = lc_compute_median(data->y, n);
+
+        /* Find min magnitude (max brightness) and max magnitude (min brightness) */
+        uint32_t min_idx = 0, max_idx = 0;
+        float min_val = model[0], max_val = model[0];
+        for (uint32_t i = 1; i < n; ++i) {
+            if (model[i] < min_val) {
+                min_val = model[i];
+                min_idx = i;
+            }
+            if (model[i] > max_val) {
+                max_val = model[i];
+                max_idx = i;
+            }
+        }
+
+        /* Distance from median with bias 1.2 on maximum brightness (minimum magnitude) */
+        double d_bright = fabs((double)min_val - med) * LC_BRIGHTNESS_BIAS;
+        double d_faint = fabs((double)max_val - med) * 1.0;
+
+        uint32_t ext_idx = (d_bright > d_faint) ? min_idx : max_idx;
+        double phi_ext = lc_wrap_phase((data->x[ext_idx] - t0) * freq);
+        return lc_wrap_phase(0.5 - phi_ext);
+    }
+
+    case LC_SPEC_BLS: {
+        /* BLS: boxcar fit midpoint at phase 0.5 (no bias factor) */
+        double blsMinRelWidth = cfg->oversmoothing > 0.0 ? cfg->oversmoothing : 0.01;
+        double blsMaxRelWidth = 0.5;
+        int blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
+        float mean = 0.0f;
+        for (uint32_t i = 0; i < n; i++) mean += data->y[i];
+        mean /= (float)n;
+        float *y_centered = (float *)malloc((size_t)n * sizeof(float));
+        if (!y_centered) return 0.0;
+        for (uint32_t i = 0; i < n; i++) y_centered[i] = data->y[i] - mean;
+
+        uint32_t mid_idx = 0;
+        int rc = lc_bls_fit(data->x, y_centered, data->dy, n, freq, blsMinRelWidth, blsMaxRelWidth, blsWidthCount, NULL, &mid_idx);
+        free(y_centered);
+        if (rc != 0) return 0.0;
+
+        double phi_mid = lc_wrap_phase((data->x[mid_idx] - t0) * freq);
+        return lc_wrap_phase(0.5 - phi_mid);
+    }
+
+    case LC_SPEC_GB: {
+        if (!model) return 0.0;
+        double med = lc_compute_median(data->y, n);
+
+        /* Iterate over all Gaussian Blur smoothed values, find point farthest away after bias scaling */
+        uint32_t ext_idx = 0;
+        double max_dist = -1.0;
+        for (uint32_t i = 0; i < n; ++i) {
+            double v = (double)model[i];
+            double dist = (v < med) ? (med - v) * LC_BRIGHTNESS_BIAS : (v - med);
+            if (dist > max_dist) {
+                max_dist = dist;
+                ext_idx = i;
+            }
+        }
+
+        /* Initial phase offset to set extremum at phase 0.5 */
+        double phi_ext = lc_wrap_phase((data->x[ext_idx] - t0) * freq);
+        double phi_offset0 = lc_wrap_phase(0.5 - phi_ext);
+
+        if (n < 3) return phi_offset0;
+
+        /* Fold all points with phi_offset0 */
+        lc_phase_point_t *pts = (lc_phase_point_t *)malloc((size_t)n * sizeof(lc_phase_point_t));
+        if (!pts) return phi_offset0;
+
+        for (uint32_t i = 0; i < n; ++i) {
+            pts[i].phase = lc_wrap_phase((data->x[i] - t0) * freq + phi_offset0);
+            pts[i].val = model[i];
+            pts[i].orig_idx = i;
+        }
+
+        qsort(pts, (size_t)n, sizeof(lc_phase_point_t), lc_cmp_phase_point);
+
+        /* Find index k of the chosen extremum point (which is near/at phase 0.5) */
+        int k = -1;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (pts[i].orig_idx == ext_idx) {
+                k = (int)i;
+                break;
+            }
+        }
+        if (k < 0) {
+            free(pts);
+            return phi_offset0;
+        }
+
+        /* Find left neighbour with distinct phase (searching backwards with wrap) */
+        int k_left = -1;
+        for (int step = 1; step < (int)n; ++step) {
+            int cand = (k - step + (int)n) % (int)n;
+            if (pts[cand].phase != pts[k].phase) {
+                k_left = cand;
+                break;
+            }
+        }
+
+        /* Find right neighbour with distinct phase (searching forwards with wrap) */
+        int k_right = -1;
+        for (int step = 1; step < (int)n; ++step) {
+            int cand = (k + step) % (int)n;
+            if (pts[cand].phase != pts[k].phase) {
+                k_right = cand;
+                break;
+            }
+        }
+
+        if (k_left < 0 || k_right < 0) {
+            free(pts);
+            return phi_offset0;
+        }
+
+        double x0 = (k_left < k) ? pts[k_left].phase : (pts[k_left].phase - 1.0);
+        double y0 = (double)pts[k_left].val;
+
+        double x1 = 0.5;
+        double y1 = (double)pts[k].val;
+
+        double x2 = (k_right > k) ? pts[k_right].phase : (pts[k_right].phase + 1.0);
+        double y2 = (double)pts[k_right].val;
+
+        free(pts);
+
+        if (!(x0 < x1 && x1 < x2)) return phi_offset0;
+
+        /* Fit parabola to (x0, y0), (x1, y1), (x2, y2) via Lagrange interpolation */
+        double slope01 = (y1 - y0) / (x1 - x0);
+        double slope12 = (y2 - y1) / (x2 - x1);
+        double curvature = (slope12 - slope01) / (x2 - x0);
+        double vx = x1;
+
+        if (curvature != 0.0 && isfinite(curvature)) {
+            double linear = slope01 - curvature * (x0 + x1);
+            double cand_vx = -linear / (2.0 * curvature);
+            if (isfinite(cand_vx) && cand_vx >= x0 && cand_vx <= x2) {
+                vx = cand_vx;
+            }
+        }
+
+        /* Refine phase offset using the parabola vertex */
+        return lc_wrap_phase(phi_offset0 + (0.5 - vx));
+    }
+
+    default:
+        return 0.0;
     }
 }

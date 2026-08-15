@@ -29,6 +29,7 @@ void PhasedLightCurveWidget::setData(const lc_data_t *data) {
         m_x[i] = data->x[i];
         m_y[i] = data->y[i];
     }
+    m_phaseOffset = 0.0;
     update();
 }
 
@@ -36,12 +37,22 @@ void PhasedLightCurveWidget::clearData() {
     m_x.clear();
     m_y.clear();
     m_n = 0;
+    m_phaseOffset = 0.0;
     update();
 }
 
 void PhasedLightCurveWidget::setFrequency(double freq) {
     m_freq = freq;
     update();
+}
+
+void PhasedLightCurveWidget::setPhaseOffset(double offset) {
+    double wrapped = std::fmod(offset, 1.0);
+    if (wrapped < 0.0) wrapped += 1.0;
+    if (m_phaseOffset != wrapped) {
+        m_phaseOffset = wrapped;
+        update();
+    }
 }
 
 void PhasedLightCurveWidget::setModel(const float *model, unsigned int n, lc_model_style_t style, double freq) {
@@ -183,7 +194,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
 
     const double t0 = (m_x[0] + m_x[m_n - 1]) / 2.0;
     for (unsigned int i = 0; i < m_n; i++) {
-        double phase = std::fmod((m_x[i] - t0) * m_freq, 1.0);
+        double phase = std::fmod((m_x[i] - t0) * m_freq + m_phaseOffset, 1.0);
         if (phase < 0.0) phase += 1.0;
         double py = padT + ((double)(m_y[i] - yMin) / ySpan) * plotH;
         double px = padL + ((phase - xMin) / xSpan) * plotW;
@@ -201,7 +212,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(modelColor);
             for (unsigned int i = 0; i < m_n; i++) {
-                double phase = std::fmod((m_x[i] - t0) * m_modelFreq, 1.0);
+                double phase = std::fmod((m_x[i] - t0) * m_modelFreq + m_phaseOffset, 1.0);
                 if (phase < 0.0) phase += 1.0;
                 double py = padT + ((double)(m_model[i] - yMin) / ySpan) * plotH;
                 double px = padL + ((phase - xMin) / xSpan) * plotW;
@@ -218,7 +229,7 @@ void PhasedLightCurveWidget::paintEvent(QPaintEvent *event) {
             std::vector<PhasePoint> pts;
             pts.reserve(m_n);
             for (unsigned int i = 0; i < m_n; i++) {
-                double phase = std::fmod((m_x[i] - t0) * m_modelFreq, 1.0);
+                double phase = std::fmod((m_x[i] - t0) * m_modelFreq + m_phaseOffset, 1.0);
                 if (phase < 0.0) phase += 1.0;
                 pts.push_back({phase, m_model[i]});
             }

@@ -7,15 +7,52 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_AUTOMOC ON)
 
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
+
 if(NOT DEFINED EXTERNAL_INCLUDE_DIR)
     set(EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../include")
+endif()
+if(NOT DEFINED UPSTREAM_SRC_DIR)
+    set(UPSTREAM_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../src")
 endif()
 if(NOT DEFINED LCQT_DIR)
     set(LCQT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
-if(NOT DEFINED LCQT_BUILD_DIR)
-    set(LCQT_BUILD_DIR "${LCQT_DIR}/build")
-endif()
+
+# Generate scaling.h
+set(SCALING_NUFFT_OBJ "${CMAKE_BINARY_DIR}/nufft1.scaling.o")
+set(SCALING_GEN "${CMAKE_BINARY_DIR}/scaling_gen")
+set(SCALING_HEADER "${CMAKE_BINARY_DIR}/scaling.h")
+set(SCALING_FLAGS -std=gnu23 -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=8 -O3 -ffast-math -fno-sanitize=all)
+
+add_custom_command(
+    OUTPUT "${SCALING_HEADER}"
+    COMMAND ${CMAKE_C_COMPILER} ${SCALING_FLAGS} -I${UPSTREAM_SRC_DIR}/nufft
+            -c ${UPSTREAM_SRC_DIR}/nufft/nufft1.c -o ${SCALING_NUFFT_OBJ}
+    COMMAND ${CMAKE_C_COMPILER} ${SCALING_FLAGS} -I${UPSTREAM_SRC_DIR}/nufft
+            ${UPSTREAM_SRC_DIR}/nufft/scaling.c ${SCALING_NUFFT_OBJ}
+            -static -lm -o ${SCALING_GEN}
+    COMMAND ${SCALING_GEN} ${SCALING_HEADER}
+    DEPENDS ${UPSTREAM_SRC_DIR}/nufft/nufft1.c ${UPSTREAM_SRC_DIR}/nufft/scaling.c ${UPSTREAM_SRC_DIR}/nufft/nufft1.h
+    COMMENT "Generating scaling.h via scaling_gen"
+    VERBATIM
+)
+add_custom_target(scaling_header DEPENDS "${SCALING_HEADER}")
+
+add_library(lc_backend OBJECT
+    ${LCQT_DIR}/src/lc_periodogram.c
+    ${UPSTREAM_SRC_DIR}/nufft/nufft1.c
+)
+add_dependencies(lc_backend scaling_header)
+target_compile_definitions(lc_backend PRIVATE _GNU_SOURCE HAS_MIMALLOC=0 MAX_TWIDDLE_REUSE=8)
+target_compile_options(lc_backend PRIVATE -fno-sanitize=all -pthread)
+target_include_directories(lc_backend PRIVATE
+    ${LCQT_DIR}/src
+    ${EXTERNAL_INCLUDE_DIR}
+    ${UPSTREAM_SRC_DIR}/nufft
+    ${UPSTREAM_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
+)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
@@ -30,14 +67,9 @@ target_include_directories(phased_verify PRIVATE
     ${EXTERNAL_INCLUDE_DIR}
 )
 
-# Find the compiled nufft1.c.o object file dynamically in the build directory
-file(GLOB_RECURSE NUFFT_OBJ "${LCQT_BUILD_DIR}/CMakeFiles/lc_backend.dir/*nufft1.c.o")
-
-# Reuse the already-compiled backend objects (loader + detrend + NuFFT)
 target_link_libraries(phased_verify PRIVATE
     Qt6::Widgets
     m
-    ${LCQT_BUILD_DIR}/CMakeFiles/lc_backend.dir/src/lc_periodogram.c.o
-    ${NUFFT_OBJ}
+    lc_backend
 )
-target_link_options(phased_verify PRIVATE -pthread)
+target_link_options(phased_verify PRIVATE -static -pthread)

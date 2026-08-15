@@ -937,6 +937,10 @@ struct lc_compute_ctx {
     int cached_nterms;
     int cached_periodogramMethod;
     float cached_fmax;
+    float cached_fmin;
+    float cached_oversampling;
+    double cached_oversmoothing;
+    int cached_nbins;
     int cached_method;
 };
 
@@ -976,9 +980,15 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     int nterms = cfg->nterms > 0 ? cfg->nterms : 3;
     int periMethod = (cfg->method == LC_SPEC_AOV) ? PERIODOGRAM_AOV : PERIODOGRAM_IHS;
     float fmax = cfg->fmax > 0.0 ? (float)cfg->fmax : 24.0f;
+    float fmin = (float)cfg->fmin;
+    float oversampling = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
+    double oversmoothing = cfg->oversmoothing;
+    int nbins = cfg->nbins > 0 ? cfg->nbins : 10;
 
     bool need_rebuild = (ctx->cached_maxLen != n || ctx->cached_gridMode != gridMode || ctx->cached_nterms != nterms ||
                          ctx->cached_periodogramMethod != periMethod || ctx->cached_fmax != fmax ||
+                         ctx->cached_fmin != fmin || ctx->cached_oversampling != oversampling ||
+                         ctx->cached_oversmoothing != oversmoothing || ctx->cached_nbins != nbins ||
                          ctx->cached_method != (int)cfg->method || !ctx->primary_allocated);
 
     if (!need_rebuild) return 0;
@@ -1050,6 +1060,10 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->cached_nterms = nterms;
     ctx->cached_periodogramMethod = periMethod;
     ctx->cached_fmax = fmax;
+    ctx->cached_fmin = fmin;
+    ctx->cached_oversampling = oversampling;
+    ctx->cached_oversmoothing = oversmoothing;
+    ctx->cached_nbins = nbins;
     ctx->cached_method = (int)cfg->method;
     return 0;
 }

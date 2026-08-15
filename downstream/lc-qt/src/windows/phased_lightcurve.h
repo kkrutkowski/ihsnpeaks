@@ -38,6 +38,10 @@ public slots:
     /* Fold the curve at freq (cycles/day); freq <= 0 clears the folding. */
     void setFrequency(double freq);
 
+    /* Set the phase offset [0, 1) applied during folding. */
+    void setPhaseOffset(double offset);
+    double phaseOffset() const { return m_phaseOffset; }
+
     /* Show or hide the model overlay and R^2 indicator */
     void setDisplayModel(bool show);
 
@@ -57,6 +61,7 @@ private:
     QVector<float> m_y;
     unsigned int m_n = 0;
     double m_freq = -1.0;
+    double m_phaseOffset = 0.0;
 
     /* Model overlay */
     QVector<float> m_model;

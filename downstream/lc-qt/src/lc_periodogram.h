@@ -100,7 +100,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
  * Phased model overlay: compute model y-values at each data point for a single
  * frequency (the pivot). The model type matches the spectrum method:
  *   IHS/AoV -> trigonometric (Szego / direct sine-cosine sums)
- *   GB      -> convolution smoother (scatter style)
+ *   GB      -> convolution smoother (line style)
  *   BLS     -> boxcar (line style)
  *
  * model_out must be pre-allocated with data->n floats.
@@ -108,12 +108,28 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
  * Returns 0 on success, <0 on error.
  */
 typedef enum {
-    LC_MODEL_LINE = 0, /* BLS, AoV, IHS: continuous line plot */
-    LC_MODEL_SCATTER   /* GB: scatter overlay */
+    LC_MODEL_LINE = 0, /* BLS, AoV, IHS, GB: continuous line plot */
+    LC_MODEL_SCATTER   /* scatter overlay */
 } lc_model_style_t;
+
+/* Bias multiplier applied to maximum brightness (minimum magnitude) distance from median */
+#define LC_BRIGHTNESS_BIAS 1.2
 
 LC_API int lc_compute_phased_model(const lc_data_t *data, const lc_periodogram_config_t *cfg, double freq, float *model_out,
                                    lc_model_style_t *style_out);
+
+/*
+ * Compute the phase offset required to place the model's extremum at phase 0.5.
+ * - IHS/AoV: finds model min and max, multiplies brightness distance by LC_BRIGHTNESS_BIAS,
+ *            picks the farther point.
+ * - BLS:     places the middle of the fitted boxcar at phase 0.5 (no bias).
+ * - GB:      finds extremum with LC_BRIGHTNESS_BIAS, sets it to 0.5, then fits a parabola
+ *            to the 3 nearest phase points using Lagrange polynomial interpolation and
+ *            refines the phase shift using the parabola vertex.
+ * Returns phase offset in [0, 1) on success, or 0.0 on error.
+ */
+LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogram_config_t *cfg, double freq,
+                                      const float *model);
 
 #ifdef __cplusplus
 }

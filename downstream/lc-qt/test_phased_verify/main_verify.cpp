@@ -213,6 +213,117 @@ int main(int argc, char *argv[]) {
     QImage imgWired2 = renderWidget(w);
     CHECK(diffPixels(imgWired2, imgF2) == 0, "pivot -> f2 reproduces the direct-set fold exactly");
 
+    /* --- 6. Phase Offset & Extremum alignment at 0.5 --- */
+    printf("[6] Phase offset and model extremum alignment at phase 0.5\n");
+    CHECK(w.phaseOffset() == 0.0, "initial phase offset is 0.0");
+    w.setPhaseOffset(0.25);
+    CHECK(std::abs(w.phaseOffset() - 0.25) < 1e-6, "setPhaseOffset updates offset to 0.25");
+    QImage imgShifted = renderWidget(w);
+    CHECK(diffPixels(imgShifted, imgF2) > 0, "phase offset shift produces visually shifted scatter");
+
+    /* Test all 4 methods (IHS, AoV, GB, BLS) */
+    lc_spec_method_t methods[] = {LC_SPEC_IHS, LC_SPEC_AOV, LC_SPEC_GB, LC_SPEC_BLS};
+    const char *methodNames[] = {"IHS", "AoV", "GB", "BLS"};
+
+    for (int mi = 0; mi < 4; ++mi) {
+        lc_periodogram_config_t cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.method = methods[mi];
+        cfg.nterms = 3;
+        cfg.oversampling = 5.0;
+        cfg.oversmoothing = 0.2;
+        cfg.nbins = 10;
+
+        QVector<float> model(d.n);
+        lc_model_style_t style = LC_MODEL_SCATTER;
+        int rc = lc_compute_phased_model(&d, &cfg, f1, model.data(), &style);
+        CHECK(rc == 0, "[%s] model computed successfully at f1", methodNames[mi]);
+        CHECK(style == LC_MODEL_LINE, "[%s] model style is LC_MODEL_LINE", methodNames[mi]);
+
+        double offset = lc_compute_phase_offset(&d, &cfg, f1, model.constData());
+        CHECK(offset >= 0.0 && offset < 1.0, "[%s] phase offset in [0, 1): %f", methodNames[mi], offset);
+
+        /* Set model and phase offset on widget */
+        w.setPhaseOffset(offset);
+        w.setModel(model.constData(), d.n, style, f1);
+        CHECK(std::abs(w.phaseOffset() - offset) < 1e-6, "[%s] widget phase offset matches calculated offset", methodNames[mi]);
+
+        /* Verify extremum alignment near 0.5 */
+        if (methods[mi] == LC_SPEC_IHS || methods[mi] == LC_SPEC_AOV) {
+            /* Compute median of dataset */
+            QVector<float> ys(d.y, d.y + d.n);
+            std::sort(ys.begin(), ys.end());
+            double med = (d.n % 2 == 1) ? ys[d.n / 2] : 0.5 * (ys[d.n / 2 - 1] + ys[d.n / 2]);
+
+            float minV = model[0], maxV = model[0];
+            uint32_t minI = 0, maxI = 0;
+            for (uint32_t i = 1; i < d.n; ++i) {
+                if (model[i] < minV) { minV = model[i]; minI = i; }
+                if (model[i] > maxV) { maxV = model[i]; maxI = i; }
+            }
+            double dBright = std::abs((double)minV - med) * LC_BRIGHTNESS_BIAS;
+            double dFaint = std::abs((double)maxV - med) * 1.0;
+            uint32_t extI = (dBright > dFaint) ? minI : maxI;
+
+            double foldedPhase = std::fmod((d.x[extI] - t0) * f1 + offset, 1.0);
+            if (foldedPhase < 0.0) foldedPhase += 1.0;
+            CHECK(std::abs(foldedPhase - 0.5) < 1e-5, "[%s] extremum point lands at phase 0.5 (actual: %f)", methodNames[mi], foldedPhase);
+        } else if (methods[mi] == LC_SPEC_GB) {
+            QVector<float> ys(d.y, d.y + d.n);
+            std::sort(ys.begin(), ys.end());
+            double med = (d.n % 2 == 1) ? ys[d.n / 2] : 0.5 * (ys[d.n / 2 - 1] + ys[d.n / 2]);
+
+            uint32_t extI = 0;
+            double maxDist = -1.0;
+            for (uint32_t i = 0; i < d.n; ++i) {
+                double v = model[i];
+                double dist = (v < med) ? (med - v) * LC_BRIGHTNESS_BIAS : (v - med);
+                if (dist > maxDist) { maxDist = dist; extI = i; }
+            }
+            double foldedPhase = std::fmod((d.x[extI] - t0) * f1 + offset, 1.0);
+            if (foldedPhase < 0.0) foldedPhase += 1.0;
+            /* Folded phase of initial extremum should be within neighbourhood of 0.5 */
+            CHECK(std::abs(foldedPhase - 0.5) < 0.05, "[GB] initial extremum point is near phase 0.5 (actual: %f)", foldedPhase);
+        }
+    }
+
+    /* --- 7. Recomputing GB/BLS spectrum after changing alpha with persistent context --- */
+    printf("[7] GB/BLS recomputation after changing alpha with persistent computeCtx\n");
+    lc_compute_ctx_t *pCtx = lc_compute_ctx_create(0);
+    CHECK(pCtx != nullptr, "created persistent computeCtx");
+
+    for (lc_spec_method_t m : {LC_SPEC_GB, LC_SPEC_BLS}) {
+        const char *mName = (m == LC_SPEC_GB) ? "GB" : "BLS";
+        lc_periodogram_config_t cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.method = m;
+        cfg.oversampling = 5.0;
+        cfg.fmax = 24.0;
+        cfg.oversmoothing = 0.2; /* initial alpha */
+        cfg.nbins = 10;
+
+        lc_periodogram_result_t res1;
+        memset(&res1, 0, sizeof(res1));
+        int rc1 = lc_compute_periodogram_ctx(pCtx, &d, &cfg, &res1, nullptr);
+        CHECK(rc1 == 0, "[%s] initial spectrum (alpha=0.2) computed: %u freq bins", mName, res1.nfreq);
+        double maxF1 = res1.fmin + (double)(res1.nfreq - 1) * res1.fstep;
+        CHECK(maxF1 >= 24.0 - res1.fstep, "[%s] initial spectrum spans up to fmax (actual max: %f)", mName, maxF1);
+
+        /* Change alpha to 0.05 (smaller alpha -> smaller fstep -> larger nfreq) without changing method */
+        cfg.oversmoothing = 0.05;
+        lc_periodogram_result_t res2;
+        memset(&res2, 0, sizeof(res2));
+        int rc2 = lc_compute_periodogram_ctx(pCtx, &d, &cfg, &res2, nullptr);
+        CHECK(rc2 == 0, "[%s] recomputed spectrum (alpha=0.05) computed: %u freq bins", mName, res2.nfreq);
+        double maxF2 = res2.fmin + (double)(res2.nfreq - 1) * res2.fstep;
+        CHECK(maxF2 >= 24.0 - res2.fstep, "[%s] recomputed spectrum spans full grid up to fmax (actual max: %f)", mName, maxF2);
+        CHECK(res2.nfreq > res1.nfreq, "[%s] frequency count correctly increased (%u > %u)", mName, res2.nfreq, res1.nfreq);
+
+        lc_periodogram_result_free(&res1);
+        lc_periodogram_result_free(&res2);
+    }
+    lc_compute_ctx_destroy(pCtx);
+
     lc_free(&d);
     printf("\n%s (%d failure%s)\n", failures == 0 ? "ALL CHECKS PASSED" : "CHECKS FAILED",
            failures, failures == 1 ? "" : "s");

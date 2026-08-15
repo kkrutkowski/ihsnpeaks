@@ -1248,6 +1248,49 @@ int main(int argc, char *argv[]) {
         progressLabel->setText(QString("Computation in progress: %1% complete | %2").arg(pct, 0, 'f', 1).arg(timeLeft));
     });
 
+    /* After finding a peak, move the pivot there and zoom FOV to 2/DeltaT each side. */
+    auto moveToPeak = [&](double peakFreq) {
+        double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
+        if (dT > 0.0) {
+            double halfFov = 2.0 / dT;
+            zoomPlot->setViewFromSelection(peakFreq - halfFov, peakFreq + halfFov);
+        } else {
+            zoomPlot->selectFrequency(peakFreq, false);
+        }
+    };
+
+    /* Handle MMB / auto-centering: compute model, calculate phase offset aligning extremum to 0.5, then zoom. */
+    auto selectPeakAndAlignExtremum = [&](double peakFreq) {
+        if (activeMethodIdx >= 0 && lcData.n > 0 && peakFreq > 0.0) {
+            lc_periodogram_config_t mcfg;
+            memset(&mcfg, 0, sizeof(mcfg));
+            mcfg.method = (lc_spec_method_t)activeMethodIdx;
+            mcfg.nterms = ps.nterms;
+            mcfg.oversampling = ps.oversampling;
+            mcfg.fmin = ps.fmin;
+            mcfg.fmax = ps.fmax;
+            mcfg.pswf = ps.pswf;
+            mcfg.oversmoothing = ps.oversmoothing;
+            mcfg.nbins = ps.nbins;
+
+            QVector<float> model(lcData.n);
+            lc_model_style_t style = LC_MODEL_LINE;
+            int rc = lc_compute_phased_model(&lcData, &mcfg, peakFreq, model.data(), &style);
+            if (rc == 0) {
+                double offset = lc_compute_phase_offset(&lcData, &mcfg, peakFreq, model.constData());
+                phasedPlot->setPhaseOffset(offset);
+                phasedPlot->setModel(model.constData(), lcData.n, style, peakFreq);
+                float mn = model[0], mx = model[0];
+                for (int i = 1; i < model.size(); ++i) {
+                    if (model[i] < mn) mn = model[i];
+                    if (model[i] > mx) mx = model[i];
+                }
+                ampEdit->setText(QString::number((double)(mx - mn), 'f', 3));
+            }
+        }
+        moveToPeak(peakFreq);
+    };
+
     auto launchSpectrum = [&](lc_spec_method_t method) {
         if (lcData.n == 0) {
             QMessageBox::warning(&window, "No Data", "Load a light curve first.");
@@ -1299,12 +1342,12 @@ int main(int argc, char *argv[]) {
                              zoomPlot->setZoomFactor(ps.zoomFactor);
                              zoomPlot->setFullSpectrum(fmin, fstep, nll);
                          });
-        /* Store detected peaks and auto-center on highest peak. */
+        /* Store detected peaks and auto-center on highest peak with phase offset aligned. */
         QObject::connect(task, &PeriodogramTask::finished, &window,
                          [&](double, double, QVector<float>, QVector<QPair<double, float>> peaks) {
                              detectedPeaks = peaks;
                              if (ps.autoCenter && !peaks.isEmpty()) {
-                                 zoomPlot->selectFrequency(peaks[0].first, true);
+                                 selectPeakAndAlignExtremum(peaks[0].first);
                              }
                          });
         QObject::connect(task, &PeriodogramTask::failed, &window,
@@ -1419,24 +1462,13 @@ int main(int argc, char *argv[]) {
         return bestFreq;
     };
 
-    /* After finding a peak, move the pivot there and zoom FOV to 2/DeltaT each side. */
-    auto moveToPeak = [&](double peakFreq) {
-        double dT = (lcData.n > 1) ? lcData.x[lcData.n - 1] - lcData.x[0] : 0.0;
-        if (dT > 0.0) {
-            double halfFov = 2.0 / dT;
-            zoomPlot->setViewFromSelection(peakFreq - halfFov, peakFreq + halfFov);
-        } else {
-            zoomPlot->selectFrequency(peakFreq, false);
-        }
-    };
-
     /* MMB on full spectrum: search radius = searchRadius * full spectrum span. */
     QObject::connect(searchPlot, &SpectrumPlotWidget::middleClicked, [&](double freq) {
         if (specNll.isEmpty()) return;
         double fullSpan = (specNll.size() > 1) ? (double)(specNll.size() - 1) * specFstep : 1.0;
         double halfWidth = ps.searchRadius * fullSpan;
         double peakFreq = findPeakNear(freq, halfWidth);
-        moveToPeak(peakFreq);
+        selectPeakAndAlignExtremum(peakFreq);
     });
 
     /* MMB on zoomed spectrum: search radius = entire visible FOV / 2. */
@@ -1444,7 +1476,7 @@ int main(int argc, char *argv[]) {
         if (specNll.isEmpty()) return;
         double halfWidth = fov / 2.0;
         double peakFreq = findPeakNear(freq, halfWidth);
-        moveToPeak(peakFreq);
+        selectPeakAndAlignExtremum(peakFreq);
     });
 
     auto openPeriodSearchDialog = [&]() {
