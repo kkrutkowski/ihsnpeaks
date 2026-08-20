@@ -19,3 +19,4 @@ downstream/lc-qt/lc-qt
 downstream/lc-qt/.qwen
 downstream/lc-qt/.qoder
 downstream/lc-qt/*.json
+include/tmp/

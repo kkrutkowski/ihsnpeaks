@@ -750,14 +750,16 @@ static void lc_nll_worker(void *data, long i, int tid) {
     (void)tid;
     lc_nll_dispatch_t *disp = (lc_nll_dispatch_t *)data;
     lc_nll_workset_t *ws = &disp->worksets[i];
-    for (uint32_t j = 0; j < ws->count; ++j) {
-        float magnitude;
-        if (ws->use_aov) {
-            magnitude = aov_likelihood_from_r2(ws->power[j], ws->nterms, ws->aov_n_eff);
-        } else {
-            magnitude = (float)correct_ihs_res((double)ws->power[j], ws->nterms);
+    if (ws->use_aov) {
+        nll_convert_spectrum_batch(ws->power, ws->nll, ws->count, ws->nterms, ws->aov_n_eff);
+        for (uint32_t j = 0; j < ws->count; ++j) {
+            if (!float_is_finite_bits(ws->nll[j]) || ws->nll[j] < 0.0f) ws->nll[j] = 0.0f;
         }
-        ws->nll[j] = float_is_finite_bits(magnitude) ? magnitude : 0.0f;
+    } else {
+        for (uint32_t j = 0; j < ws->count; ++j) {
+            float magnitude = (float)correct_ihs_res((double)ws->power[j], ws->nterms);
+            ws->nll[j] = (float_is_finite_bits(magnitude) && magnitude > 0.0f) ? magnitude : 0.0f;
+        }
     }
     lc_progress_add_done(ws->progress, 1U);
 }
@@ -773,14 +775,21 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
 
     lc_nll_workset_t *worksets = (lc_nll_workset_t *)calloc(nwork, sizeof(lc_nll_workset_t));
     if (!worksets) {
-        for (uint32_t j = 0; j < nfreq; ++j) {
-            float magnitude;
-            if (use_aov) magnitude = aov_likelihood_from_r2(power[j], nterms, aov_n_eff);
-            else magnitude = (float)correct_ihs_res((double)power[j], nterms);
-            nll[j] = float_is_finite_bits(magnitude) ? magnitude : 0.0f;
+        if (use_aov) {
+            nll_convert_spectrum_batch(power, nll, nfreq, nterms, aov_n_eff);
+            for (uint32_t j = 0; j < nfreq; ++j) {
+                if (!float_is_finite_bits(nll[j]) || nll[j] < 0.0f) nll[j] = 0.0f;
+            }
+        } else {
+            for (uint32_t j = 0; j < nfreq; ++j) {
+                float magnitude = (float)correct_ihs_res((double)power[j], nterms);
+                nll[j] = (float_is_finite_bits(magnitude) && magnitude > 0.0f) ? magnitude : 0.0f;
+            }
         }
         return 0;
     }
+
+
 
     for (uint32_t w = 0; w < nwork; ++w) {
         uint32_t start = w * chunk;

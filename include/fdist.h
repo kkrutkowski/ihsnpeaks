@@ -924,7 +924,7 @@ double lnI(double a, double b, double x) {
     return a * log(x) + b * log1p(-x) - log(a) - lnB + log(hyp);
 }
 
-double lnFAP(int dK, int dH, double R2, int N) {
+double lnFAP_legacy(int dK, int dH, double R2, int N) {
     int d = dK - dH;
     int Nk = N - dK;
 
@@ -936,5 +936,9 @@ double lnFAP(int dK, int dH, double R2, int N) {
 
     return result;
 }
+
+#    ifndef lnFAP
+static inline double lnFAP(int dK, int dH, double R2, int N) { return lnFAP_legacy(dK, dH, R2, N); }
+#    endif
 
 #endif

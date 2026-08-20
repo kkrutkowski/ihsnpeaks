@@ -378,7 +378,7 @@ typedef struct {
     uint32_t slice_nfreq;  // frequencies in this slice
     int buffer_idx;        // index into params->buffers (set by worker; may differ from workset index due to work stealing)
     int status;
-    bool power_direct;     // worker wrote its slice directly into primary->power (merge must skip)
+    bool power_direct;  // worker wrote its slice directly into primary->power (merge must skip)
 } freq_slice_workset_t;
 
 typedef struct {
@@ -686,7 +686,8 @@ static inline bool execute_aov_sweep_parallel(buffer_t *buffer, parameters *para
     if (!pool || pool->n_threads < 2 || !params->buffers || params->nbuffers < pool->n_threads) {
         // Fallback to serial
         char stringBuff[64];
-        return execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, write_spectrum, params->spectrum, scan_peaks, precision, stringBuff, NULL) == 0;
+        return execute_aov_sweep(buffer, params, fmin, fstep, nfreq, threshold, df, write_spectrum, params->spectrum, scan_peaks, precision, stringBuff,
+                                 NULL) == 0;
     }
 
     // Handle edge cases identically to serial version
