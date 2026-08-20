@@ -52,7 +52,7 @@ static inline float aov_likelihood_from_r2(float r2, int degree, int n_eff) {
     if (n_eff <= 2 * degree + 1 || !float_is_finite_bits(r2)) return 0.0f;
     r2 = aov_clamp_r2(r2);
     if (!float_is_finite_bits(r2)) return 0.0f;
-    return (float)lnFAP((2 * degree) + 1, 2 * degree, (double)r2, n_eff);
+    return (float)lnFAP((2 * degree) + 1, 1, (double)r2, n_eff);
 }
 
 static inline bool aov_prepare_reference(const buffer_t *buffer, float epsilon, aov_reference_t *ref) {

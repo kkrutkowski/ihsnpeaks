@@ -456,7 +456,7 @@ static inline double correct_aov_threshold(const double threshold, const int deg
     double high = 1.0 - 1.0e-12;
     for (int i = 0; i < 80; ++i) {
         double mid = 0.5 * (low + high);
-        double value = lnFAP((2 * degree) + 1, 2 * degree, mid, n_eff);
+        double value = lnFAP((2 * degree) + 1, 1, mid, n_eff);
         if (!double_is_finite_bits(value) || value >= threshold) {
             high = mid;
         } else {

@@ -181,37 +181,24 @@ static inline VEC nll_exact_pochhammer_vec(int d, const VEC R2, float b) {
         }
         if (r2 > AOV_R2_MAX) r2 = AOV_R2_MAX;
 
-        float term0;
-        if (r2 < 0.15f) {
-            /* Analytical polynomial for -b * ln1p(-r2) avoids precision loss near zero */
-            float log_omr2 = r2 * (1.0f + r2 * (0.5f + r2 * (0.33333334f + r2 * (0.25f + r2 * (0.2f + r2 * 0.16666667f)))));
-            term0 = b * log_omr2;
-        } else {
-            term0 = -b * logf(1.0f - r2);
-        }
-
+        float term0 = -b * log1pf(-r2);
         if (d <= 1) {
             out.values[lane] = (term0 > 0.0f && float_is_finite_bits(term0)) ? term0 : 0.0f;
             continue;
         }
 
-        float c = 1.0f;
-        float s_minus_1 = 0.0f;
+        double c = 1.0;
+        double s_minus_1 = 0.0;
+        double b_d = (double)b;
+        double r2_d = (double)r2;
         for (int k = 1; k < d; ++k) {
-            c *= (b + (float)(k - 1)) / (float)k * r2;
+            c *= (b_d + (double)(k - 1)) / (double)k * r2_d;
             s_minus_1 += c;
         }
 
-        float ln_s;
-        if (s_minus_1 < 0.15f) {
-            float u = s_minus_1;
-            ln_s = u * (1.0f - u * (0.5f - u * (0.33333334f - u * 0.25f)));
-        } else {
-            ln_s = logf(1.0f + s_minus_1);
-        }
-
-        float nll = term0 - ln_s;
-        out.values[lane] = (nll > 0.0f && float_is_finite_bits(nll)) ? nll : 0.0f;
+        double ln_s = log1p(s_minus_1);
+        double nll = (double)term0 - ln_s;
+        out.values[lane] = (nll > 0.0 && double_is_finite_bits(nll)) ? (float)nll : 0.0f;
     }
     return out;
 }
@@ -226,14 +213,7 @@ static inline DVEC nll_exact_pochhammer_dvec(int d, const DVEC R2, double b) {
         }
         if (r2 > (double)AOV_R2_MAX) r2 = (double)AOV_R2_MAX;
 
-        double term0;
-        if (r2 < 0.15) {
-            double log_omr2 = r2 * (1.0 + r2 * (0.5 + r2 * (1.0 / 3.0 + r2 * (0.25 + r2 * (0.2 + r2 / 6.0)))));
-            term0 = b * log_omr2;
-        } else {
-            term0 = -b * log(1.0 - r2);
-        }
-
+        double term0 = -b * log1p(-r2);
         if (d <= 1) {
             out.values[lane] = (term0 > 0.0 && double_is_finite_bits(term0)) ? term0 : 0.0;
             continue;
@@ -246,14 +226,7 @@ static inline DVEC nll_exact_pochhammer_dvec(int d, const DVEC R2, double b) {
             s_minus_1 += c;
         }
 
-        double ln_s;
-        if (s_minus_1 < 0.15) {
-            double u = s_minus_1;
-            ln_s = u * (1.0 - u * (0.5 - u * (1.0 / 3.0 - u * 0.25)));
-        } else {
-            ln_s = log(1.0 + s_minus_1);
-        }
-
+        double ln_s = log1p(s_minus_1);
         double nll = term0 - ln_s;
         out.values[lane] = (nll > 0.0 && double_is_finite_bits(nll)) ? nll : 0.0;
     }
@@ -293,7 +266,7 @@ static inline VEC nll_gbls_vec(const VEC R2, float b) {
             d_cf = 1.0f / d_cf;
             f *= d_cf;
 
-            for (int m = 1; m <= 15; ++m) {
+            for (int m = 1; m <= 25; ++m) {
                 float dm = (float)m;
                 float num_even = dm * (a - dm) * y / ((b + 2.0f * dm - 1.0f) * (b + 2.0f * dm));
                 d_cf = 1.0f + num_even * d_cf;
@@ -323,7 +296,7 @@ static inline VEC nll_gbls_vec(const VEC R2, float b) {
             d_cf = 1.0f / d_cf;
             f *= d_cf;
 
-            for (int m = 1; m <= 15; ++m) {
+            for (int m = 1; m <= 25; ++m) {
                 float dm = (float)m;
                 float num_even = dm * (b - dm) * x / ((a + 2.0f * dm - 1.0f) * (a + 2.0f * dm));
                 d_cf = 1.0f + num_even * d_cf;
@@ -376,7 +349,7 @@ static inline DVEC nll_gbls_dvec(const DVEC R2, double b) {
             d_cf = 1.0 / d_cf;
             f *= d_cf;
 
-            for (int m = 1; m <= 25; ++m) {
+            for (int m = 1; m <= 35; ++m) {
                 double dm = (double)m;
                 double num_even = dm * (a - dm) * y / ((b + 2.0 * dm - 1.0) * (b + 2.0 * dm));
                 d_cf = 1.0 + num_even * d_cf;
@@ -392,7 +365,7 @@ static inline DVEC nll_gbls_dvec(const DVEC R2, double b) {
                 c = 1.0 + num_odd / c;
                 if (fabs(c) < 1.0e-30) c = 1.0e-30;
                 d_cf = 1.0 / d_cf;
-                float delta = c * d_cf;
+                double delta = c * d_cf;
                 f *= delta;
                 if (fabs(delta - 1.0) < 1.0e-15) break;
             }
@@ -406,7 +379,7 @@ static inline DVEC nll_gbls_dvec(const DVEC R2, double b) {
             d_cf = 1.0 / d_cf;
             f *= d_cf;
 
-            for (int m = 1; m <= 25; ++m) {
+            for (int m = 1; m <= 35; ++m) {
                 double dm = (double)m;
                 double num_even = dm * (b - dm) * x / ((a + 2.0 * dm - 1.0) * (a + 2.0 * dm));
                 d_cf = 1.0 + num_even * d_cf;
@@ -493,7 +466,11 @@ static inline float lnFAP_fast_f32(int dK, int dH, float R2, int N) {
 
 /* Fast batch converter for full spectrum arrays (used by AoV and GBLS) */
 static inline void nll_convert_spectrum_batch(const float *r2_in, float *nll_out, size_t count, int degree, int n_eff) {
-    if (count == 0 || n_eff <= 2 * degree + 1) return;
+    if (count == 0) return;
+    if (n_eff <= 2 * degree + 1) {
+        memset(nll_out, 0, count * sizeof(float));
+        return;
+    }
     float b_f = 0.5f * (float)(n_eff - (2 * degree + 1));
     double b_d = 0.5 * (double)(n_eff - (2 * degree + 1));
     size_t i = 0;
