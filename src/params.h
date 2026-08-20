@@ -39,7 +39,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.gridMode = NUFFT1_PSWF43;
     params.mode = 2;
     params.r2_threshold = 0.05;
-    params.periodogramMethod = PERIODOGRAM_IHS;
+    params.periodogramMethod = PERIODOGRAM_AUTO;
     params.statistic = STATISTIC_AUTO;
     params.gbEvalMode = GB_EVAL_GBLS;
     params.bind_mode = BIND_AUTO;
@@ -132,7 +132,7 @@ void print_help(char **argv) {
     printf("  -e, --eval, --evaluate    Peak evaluation: gbls|gbl, gbaw|gba, or bls; gbls/gbaw accept [alpha], bls accepts [a,b,count]\n");
     printf("                            \t(default: gbls[0.025]; bls default: bls[0.01,0.5,10])\n");
     printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
-    printf("  -g, --g, --grid           Periodogram method: ihs (default) or aov/aovmh/aobmhw/chi/chi2/fastchi2\n");
+    printf("  -g, --g, --grid           Periodogram method: ihs (default for -d <= 4) or aov/aovmh/aobmhw/chi/chi2/fastchi2 (default for -d >= 5)\n");
     printf("  -s, --save, --spectrum    Print generated spectra into .tsv files (default: false)\n");
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
@@ -440,6 +440,9 @@ static parameters read_parameters(int argc, char *argv[]) {
                 fprintf(stderr, "Missing argument for -%c\n", opt.opt ? opt.opt : '?');
                 break;
         }
+    }
+    if (params.periodogramMethod == PERIODOGRAM_AUTO) {
+        params.periodogramMethod = (params.nterms >= 5) ? PERIODOGRAM_AOV : PERIODOGRAM_IHS;
     }
     if (params.statistic == STATISTIC_AUTO) {
         params.statistic = (periodogram_uses_aov(params.periodogramMethod) && params.mode <= 2) ? STATISTIC_BAYES : STATISTIC_RAW;

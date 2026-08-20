@@ -14,6 +14,7 @@
 #include "../nufft/nufft1.h"
 
 typedef enum {
+    PERIODOGRAM_AUTO = -1,
     PERIODOGRAM_IHS = 0,
     PERIODOGRAM_AOV,
     PERIODOGRAM_AOVMH,
@@ -69,10 +70,12 @@ static inline bool double_is_finite_bits(double value) {
     return (bits.u & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000);
 }
 
-static inline bool periodogram_uses_aov(periodogram_method method) { return method != PERIODOGRAM_IHS; }
+static inline bool periodogram_uses_aov(periodogram_method method) { return method != PERIODOGRAM_IHS && method != PERIODOGRAM_AUTO; }
 
 static inline const char* periodogram_method_name(periodogram_method method) {
     switch (method) {
+        case PERIODOGRAM_AUTO:
+            return "auto";
         case PERIODOGRAM_AOV:
             return "aov";
         case PERIODOGRAM_AOVMH:
