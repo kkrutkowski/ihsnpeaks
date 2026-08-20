@@ -1014,7 +1014,7 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     float oversampling = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
     double oversmoothing = cfg->oversmoothing;
     int nbins = cfg->nbins > 0 ? cfg->nbins : 10;
-    int statistic = (cfg->method == LC_SPEC_AOV && cfg->statistic == LC_STAT_NLL) ? STATISTIC_NLL : ((cfg->method == LC_SPEC_AOV) ? STATISTIC_BAYES : STATISTIC_NLL);
+    int statistic = (cfg->method == LC_SPEC_AOV && cfg->statistic == LC_STAT_RAW) ? STATISTIC_RAW : ((cfg->method == LC_SPEC_AOV) ? STATISTIC_BAYES : STATISTIC_RAW);
 
     bool need_rebuild = (ctx->cached_maxLen != n || ctx->cached_gridMode != gridMode || ctx->cached_nterms != nterms ||
                          ctx->cached_periodogramMethod != periMethod || ctx->cached_fmax != fmax ||
@@ -1121,7 +1121,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     params->gbAlpha = (float)cfg->oversmoothing;
     params->blsMinRelWidth = cfg->oversmoothing;
     params->blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
-    params->statistic = (cfg->method == LC_SPEC_AOV && cfg->statistic == LC_STAT_NLL) ? STATISTIC_NLL : ((cfg->method == LC_SPEC_AOV) ? STATISTIC_BAYES : STATISTIC_NLL);
+    params->statistic = (cfg->method == LC_SPEC_AOV && cfg->statistic == LC_STAT_RAW) ? STATISTIC_RAW : ((cfg->method == LC_SPEC_AOV) ? STATISTIC_BAYES : STATISTIC_RAW);
     params->mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 0;
     if (cfg->method == LC_SPEC_GB) params->gbEvalMode = GB_EVAL_GBLS;
     if (cfg->method == LC_SPEC_BLS) params->gbEvalMode = GB_EVAL_BLS;

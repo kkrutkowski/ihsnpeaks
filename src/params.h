@@ -143,7 +143,7 @@ void print_help(char **argv) {
     printf("  -p, --prewhiten           Attenuate detected variability modes\n");
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
-    printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio) or nll (default: bayes for m0-m2 AoV, nll otherwise)\n");
+    printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio) or raw (Classical NLL, default: bayes for m0-m2 AoV, raw otherwise)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
@@ -384,12 +384,12 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.spectrum = true;
                 break;
             case OPT_STATISTIC:
-                if (strcmp(opt.arg, "bayes") == 0 || strcmp(opt.arg, "bayesian") == 0 || strcmp(opt.arg, "rer") == 0) {
+                if (strcmp(opt.arg, "bayes") == 0) {
                     params.statistic = STATISTIC_BAYES;
-                } else if (strcmp(opt.arg, "nll") == 0 || strcmp(opt.arg, "standard") == 0) {
-                    params.statistic = STATISTIC_NLL;
+                } else if (strcmp(opt.arg, "raw") == 0) {
+                    params.statistic = STATISTIC_RAW;
                 } else {
-                    fprintf(stderr, "Invalid statistic '%s'. Expected 'bayes' or 'nll'.\n", opt.arg);
+                    fprintf(stderr, "Invalid statistic '%s'. Expected 'bayes' or 'raw'.\n", opt.arg);
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -442,7 +442,7 @@ static parameters read_parameters(int argc, char *argv[]) {
         }
     }
     if (params.statistic == STATISTIC_AUTO) {
-        params.statistic = (periodogram_uses_aov(params.periodogramMethod) && params.mode <= 2) ? STATISTIC_BAYES : STATISTIC_NLL;
+        params.statistic = (periodogram_uses_aov(params.periodogramMethod) && params.mode <= 2) ? STATISTIC_BAYES : STATISTIC_RAW;
     }
     params.isFile = process_path(&params);
     return params;

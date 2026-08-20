@@ -25,16 +25,18 @@ typedef enum {
 
 typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW, GB_EVAL_BLS } gb_eval_mode;
 
-typedef enum { STATISTIC_AUTO = 0, STATISTIC_NLL, STATISTIC_BAYES } statistic_type_t;
+typedef enum { STATISTIC_AUTO = 0, STATISTIC_RAW, STATISTIC_BAYES } statistic_type_t;
 
 static inline const char* statistic_name(statistic_type_t stat) {
     switch (stat) {
+        case STATISTIC_AUTO:
+            return "auto";
+        case STATISTIC_RAW:
+            return "raw";
         case STATISTIC_BAYES:
             return "bayes";
-        case STATISTIC_NLL:
-            return "nll";
         default:
-            return "auto";
+            return "unknown";
     }
 }
 

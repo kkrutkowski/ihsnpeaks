@@ -1308,7 +1308,7 @@ int main(int argc, char *argv[]) {
         lc_periodogram_config_t cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.method = method;
-        cfg.statistic = (ps.statistic == "nll") ? LC_STAT_NLL : LC_STAT_BAYES;
+        cfg.statistic = (ps.statistic == "raw") ? LC_STAT_RAW : LC_STAT_BAYES;
         cfg.nterms = ps.nterms;
         cfg.oversampling = ps.oversampling;
         cfg.fmin = ps.fmin;

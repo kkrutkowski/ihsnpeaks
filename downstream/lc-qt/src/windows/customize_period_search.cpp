@@ -111,9 +111,9 @@ CustomizePeriodSearchDialog::CustomizePeriodSearchDialog(PeriodSearchSettings *s
     grid->addWidget(m_nbins, row++, 1);
 
     m_statistic = new QComboBox();
-    m_statistic->addItem("Bayes (Relative Evidence)", "bayes");
-    m_statistic->addItem("Standard NLL", "nll");
-    m_statistic->setCurrentIndex(m_settings->statistic == "nll" ? 1 : 0);
+    m_statistic->addItem("Relative Evidence", "bayes");
+    m_statistic->addItem("Raw (Classical NLL)", "raw");
+    m_statistic->setCurrentIndex(m_settings->statistic == "raw" ? 1 : 0);
     grid->addWidget(new QLabel("Statistic (AoV)"), row, 0);
     grid->addWidget(m_statistic, row++, 1);
 
