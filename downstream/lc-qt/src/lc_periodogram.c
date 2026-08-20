@@ -496,11 +496,17 @@ static int lc_aov_sweep_progress(buffer_t *buffer, parameters *params, double fm
         lc_aov_trig_sums_progress(buffer, fmin, fstep, block_idx, block_idx + 1U, degree, params->epsilon, ref->ymean, true, Syw, Cyw, count, base,
                                   progress);
 
+        float *cond_arr = buffer->aovCondition;
         if (degree == 1) {
-            aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref->ws, ref->yws, ref->chi2_ref, power_arr);
+            aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref->ws, ref->yws, ref->chi2_ref, power_arr, cond_arr);
         } else {
-            int status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref->chi2_ref, power_arr);
+            int status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref->chi2_ref, power_arr, cond_arr);
             if (status != 0) return status;
+        }
+
+        if (params->statistic == STATISTIC_BAYES) {
+            int n_eff = periodogram_effective_n(buffer);
+            nll_convert_spectrum_bayes_batch(power_arr, cond_arr, power_arr, count, degree, n_eff);
         }
 
         for (uint32_t i = 0; i < count; ++i) buffer->power[base + i] = power_arr[i];
@@ -739,6 +745,7 @@ typedef struct {
     int nterms;
     int aov_n_eff;
     bool use_aov;
+    bool is_bayes;
     lc_progress_t *progress;
 } lc_nll_workset_t;
 
@@ -751,9 +758,16 @@ static void lc_nll_worker(void *data, long i, int tid) {
     lc_nll_dispatch_t *disp = (lc_nll_dispatch_t *)data;
     lc_nll_workset_t *ws = &disp->worksets[i];
     if (ws->use_aov) {
-        nll_convert_spectrum_batch(ws->power, ws->nll, ws->count, ws->nterms, ws->aov_n_eff);
-        for (uint32_t j = 0; j < ws->count; ++j) {
-            if (!float_is_finite_bits(ws->nll[j]) || ws->nll[j] < 0.0f) ws->nll[j] = 0.0f;
+        if (ws->is_bayes) {
+            for (uint32_t j = 0; j < ws->count; ++j) {
+                float val = ws->power[j];
+                ws->nll[j] = (float_is_finite_bits(val) && val > 0.0f) ? val : 0.0f;
+            }
+        } else {
+            nll_convert_spectrum_batch(ws->power, ws->nll, ws->count, ws->nterms, ws->aov_n_eff);
+            for (uint32_t j = 0; j < ws->count; ++j) {
+                if (!float_is_finite_bits(ws->nll[j]) || ws->nll[j] < 0.0f) ws->nll[j] = 0.0f;
+            }
         }
     } else {
         for (uint32_t j = 0; j < ws->count; ++j) {
@@ -764,7 +778,7 @@ static void lc_nll_worker(void *data, long i, int tid) {
     lc_progress_add_done(ws->progress, 1U);
 }
 
-static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t nfreq, int nterms, int aov_n_eff, bool use_aov,
+static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t nfreq, int nterms, int aov_n_eff, bool use_aov, bool is_bayes,
                                         kt_forpool_t *pool, lc_progress_t *progress) {
     if (nfreq == 0) return 0;
     int nthreads = (pool && pool->n_threads > 1) ? pool->n_threads : 1;
@@ -776,9 +790,16 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
     lc_nll_workset_t *worksets = (lc_nll_workset_t *)calloc(nwork, sizeof(lc_nll_workset_t));
     if (!worksets) {
         if (use_aov) {
-            nll_convert_spectrum_batch(power, nll, nfreq, nterms, aov_n_eff);
-            for (uint32_t j = 0; j < nfreq; ++j) {
-                if (!float_is_finite_bits(nll[j]) || nll[j] < 0.0f) nll[j] = 0.0f;
+            if (is_bayes) {
+                for (uint32_t j = 0; j < nfreq; ++j) {
+                    float val = power[j];
+                    nll[j] = (float_is_finite_bits(val) && val > 0.0f) ? val : 0.0f;
+                }
+            } else {
+                nll_convert_spectrum_batch(power, nll, nfreq, nterms, aov_n_eff);
+                for (uint32_t j = 0; j < nfreq; ++j) {
+                    if (!float_is_finite_bits(nll[j]) || nll[j] < 0.0f) nll[j] = 0.0f;
+                }
             }
         } else {
             for (uint32_t j = 0; j < nfreq; ++j) {
@@ -789,8 +810,6 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
         return 0;
     }
 
-
-
     for (uint32_t w = 0; w < nwork; ++w) {
         uint32_t start = w * chunk;
         uint32_t count = (start + chunk <= nfreq) ? chunk : (nfreq - start);
@@ -800,6 +819,7 @@ static uint32_t lc_parallel_nll_convert(const float *power, float *nll, uint32_t
         worksets[w].nterms = nterms;
         worksets[w].aov_n_eff = aov_n_eff;
         worksets[w].use_aov = use_aov;
+        worksets[w].is_bayes = is_bayes;
         worksets[w].progress = progress;
     }
 
@@ -951,6 +971,7 @@ struct lc_compute_ctx {
     double cached_oversmoothing;
     int cached_nbins;
     int cached_method;
+    int cached_statistic;
 };
 
 LC_API lc_compute_ctx_t *lc_compute_ctx_create(int nthreads) {
@@ -993,12 +1014,13 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     float oversampling = cfg->oversampling > 0.0 ? (float)cfg->oversampling : 5.0f;
     double oversmoothing = cfg->oversmoothing;
     int nbins = cfg->nbins > 0 ? cfg->nbins : 10;
+    int statistic = (cfg->method == LC_SPEC_AOV && cfg->statistic == LC_STAT_NLL) ? STATISTIC_NLL : ((cfg->method == LC_SPEC_AOV) ? STATISTIC_BAYES : STATISTIC_NLL);
 
     bool need_rebuild = (ctx->cached_maxLen != n || ctx->cached_gridMode != gridMode || ctx->cached_nterms != nterms ||
                          ctx->cached_periodogramMethod != periMethod || ctx->cached_fmax != fmax ||
                          ctx->cached_fmin != fmin || ctx->cached_oversampling != oversampling ||
                          ctx->cached_oversmoothing != oversmoothing || ctx->cached_nbins != nbins ||
-                         ctx->cached_method != (int)cfg->method || !ctx->primary_allocated);
+                         ctx->cached_method != (int)cfg->method || ctx->cached_statistic != statistic || !ctx->primary_allocated);
 
     if (!need_rebuild) return 0;
 
@@ -1038,6 +1060,7 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->params.blsMaxRelWidth = 0.5;
     ctx->params.blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
     ctx->params.periodogramMethod = periMethod;
+    ctx->params.statistic = (statistic_type_t)statistic;
     ctx->params.mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 0;
     if (cfg->method == LC_SPEC_GB) ctx->params.gbEvalMode = GB_EVAL_GBLS;
     if (cfg->method == LC_SPEC_BLS) ctx->params.gbEvalMode = GB_EVAL_BLS;
@@ -1074,6 +1097,7 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     ctx->cached_oversmoothing = oversmoothing;
     ctx->cached_nbins = nbins;
     ctx->cached_method = (int)cfg->method;
+    ctx->cached_statistic = statistic;
     return 0;
 }
 
@@ -1097,6 +1121,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
     params->gbAlpha = (float)cfg->oversmoothing;
     params->blsMinRelWidth = cfg->oversmoothing;
     params->blsWidthCount = cfg->nbins > 0 ? cfg->nbins : 10;
+    params->statistic = (cfg->method == LC_SPEC_AOV && cfg->statistic == LC_STAT_NLL) ? STATISTIC_NLL : ((cfg->method == LC_SPEC_AOV) ? STATISTIC_BAYES : STATISTIC_NLL);
     params->mode = (cfg->method == LC_SPEC_GB || cfg->method == LC_SPEC_BLS) ? 5 : 0;
     if (cfg->method == LC_SPEC_GB) params->gbEvalMode = GB_EVAL_GBLS;
     if (cfg->method == LC_SPEC_BLS) params->gbEvalMode = GB_EVAL_BLS;
@@ -1152,7 +1177,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
         uint32_t conv_blocks = (uint32_t)conv_threads;
         if (conv_blocks > nfreq) conv_blocks = nfreq;
         lc_progress_add_total(progress, conv_blocks);
-        lc_parallel_nll_convert(buf->power, nll, nfreq, params->nterms, aov_n_eff, use_aov, pool, progress);
+        lc_parallel_nll_convert(buf->power, nll, nfreq, params->nterms, aov_n_eff, use_aov, (params->statistic == STATISTIC_BAYES), pool, progress);
     }
 
     out->nfreq = nfreq;

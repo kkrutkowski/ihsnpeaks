@@ -32,8 +32,14 @@ typedef enum {
     LC_SPEC_BLS
 } lc_spec_method_t;
 
+typedef enum {
+    LC_STAT_BAYES = 0,
+    LC_STAT_NLL = 1
+} lc_statistic_t;
+
 typedef struct {
     lc_spec_method_t method;
+    lc_statistic_t statistic; /* default LC_STAT_BAYES for AoV, LC_STAT_NLL for IHS */
     int nterms;           /* number of harmonics (-d), default 3 */
     double oversampling;  /* oversampling factor (-o), default 5 */
     double fmin;          /* min frequency (-f); 0 = auto (2/time_span) */

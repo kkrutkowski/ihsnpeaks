@@ -21,6 +21,7 @@ struct PeriodSearchSettings {
     bool autoCenter = true;    /* automatically center on highest peak after computation */
     double scrollRate = 1.0;   /* period scroll: pivot rate in 1/DeltaT per second */
     bool displayFrequency = false; /* false = period, true = frequency */
+    QString statistic = "bayes"; /* "bayes" (Relative Evidence Ratio) or "nll" (Standard NLL) */
 };
 
 class CustomizePeriodSearchDialog : public QDialog {
@@ -42,5 +43,6 @@ private:
     QComboBox *m_pswf;
     QDoubleSpinBox *m_oversmoothing;
     QSpinBox *m_nbins;
+    QComboBox *m_statistic;
     QCheckBox *m_autoCenter;
 };

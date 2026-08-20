@@ -153,6 +153,11 @@ static void loadConfig(QString labels[10], bool *numpadNav, QVector<FileEntry> *
                     if (s) ps->displayFrequency = (strcmp(s->string, "true") == 0);
                     continue;
                 }
+                if (pe->value->type == json_type_string && strcmp(pk, "statistic") == 0) {
+                    json_string_s *s = json_value_as_string(pe->value);
+                    if (s) ps->statistic = QString::fromUtf8(s->string, s->string_size);
+                    continue;
+                }
                 if (pe->value->type != json_type_number) continue;
                 json_number_s *num = json_value_as_number(pe->value);
                 if (!num) continue;
@@ -233,7 +238,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                     "\"nbins\":%9,"
                     "\"scroll_rate\":%10,"
                     "\"auto_center\":\"%11\","
-                    "\"display_frequency\":\"%12\"}")
+                    "\"display_frequency\":\"%12\","
+                    "\"statistic\":\"%13\"}")
                 .arg(ps.nterms)
                 .arg(ps.oversampling, 0, 'g', 10)
                 .arg(ps.fmin, 0, 'g', 10)
@@ -245,7 +251,8 @@ static void saveConfig(const QString labels[10], bool numpadNav, const QVector<F
                 .arg(ps.nbins)
                 .arg(ps.scrollRate, 0, 'g', 10)
                 .arg(ps.autoCenter ? "true" : "false")
-                .arg(ps.displayFrequency ? "true" : "false");
+                .arg(ps.displayFrequency ? "true" : "false")
+                .arg(escapeJsonString(ps.statistic));
     json += "}";
 
     QFile f(CONFIG_FILE);
@@ -1301,6 +1308,7 @@ int main(int argc, char *argv[]) {
         lc_periodogram_config_t cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.method = method;
+        cfg.statistic = (ps.statistic == "nll") ? LC_STAT_NLL : LC_STAT_BAYES;
         cfg.nterms = ps.nterms;
         cfg.oversampling = ps.oversampling;
         cfg.fmin = ps.fmin;

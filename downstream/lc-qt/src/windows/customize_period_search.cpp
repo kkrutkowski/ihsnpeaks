@@ -110,6 +110,13 @@ CustomizePeriodSearchDialog::CustomizePeriodSearchDialog(PeriodSearchSettings *s
     grid->addWidget(new QLabel("Number of bins (BLS)"), row, 0);
     grid->addWidget(m_nbins, row++, 1);
 
+    m_statistic = new QComboBox();
+    m_statistic->addItem("Bayes (Relative Evidence)", "bayes");
+    m_statistic->addItem("Standard NLL", "nll");
+    m_statistic->setCurrentIndex(m_settings->statistic == "nll" ? 1 : 0);
+    grid->addWidget(new QLabel("Statistic (AoV)"), row, 0);
+    grid->addWidget(m_statistic, row++, 1);
+
     m_autoCenter = new QCheckBox("Automatically center on highest peak");
     m_autoCenter->setChecked(m_settings->autoCenter);
     grid->addWidget(m_autoCenter, row++, 0, 1, 2);
@@ -140,5 +147,6 @@ void CustomizePeriodSearchDialog::apply() {
     m_settings->pswf = m_pswf->currentData().toInt();
     m_settings->oversmoothing = m_oversmoothing->value();
     m_settings->nbins = m_nbins->value();
+    m_settings->statistic = m_statistic->currentData().toString();
     m_settings->autoCenter = m_autoCenter->isChecked();
 }

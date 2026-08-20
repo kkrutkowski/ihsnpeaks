@@ -40,6 +40,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.mode = 2;
     params.r2_threshold = 0.05;
     params.periodogramMethod = PERIODOGRAM_IHS;
+    params.statistic = STATISTIC_AUTO;
     params.gbEvalMode = GB_EVAL_GBLS;
     params.bind_mode = BIND_AUTO;
 
@@ -55,6 +56,7 @@ void print_parameters(parameters *params) {
     printf("\tDetection threshold: %.2f\n", params->threshold * M_LOG10E);
     printf("\tExpected systemic variation: %.1e\n", params->epsilon);
     printf("\tPeriodogram method: %s\n", periodogram_method_name(params->periodogramMethod));
+    printf("\tStatistic: %s\n", statistic_name(params->statistic));
     const eval_method_t *method = eval_method_for_params(params);
     printf("\tPeak evaluation: %s\n", method->name);
     if (method->uses_duration_grid) {
@@ -141,6 +143,7 @@ void print_help(char **argv) {
     printf("  -p, --prewhiten           Attenuate detected variability modes\n");
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
+    printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio) or nll (default: bayes for m0-m2 AoV, nll otherwise)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
@@ -271,6 +274,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
 
     enum {
+        OPT_STATISTIC = 0xF7,
         OPT_PERIOD = 0xF8,
         OPT_EPSILON = 0xF9,
         OPT_NUFFT = 0xFA,
@@ -289,6 +293,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"fmin", ko_required_argument, 'f'},
                                       {"oversampling", ko_required_argument, 'o'},
                                       {"epsilon", ko_required_argument, OPT_EPSILON},
+                                      {"statistic", ko_required_argument, OPT_STATISTIC},
                                       {"eval", ko_required_argument, 'e'},
                                       {"evaluate", ko_required_argument, 'e'},
                                       {"mode", ko_required_argument, 'm'},
@@ -378,6 +383,16 @@ static parameters read_parameters(int argc, char *argv[]) {
             case 's':
                 params.spectrum = true;
                 break;
+            case OPT_STATISTIC:
+                if (strcmp(opt.arg, "bayes") == 0 || strcmp(opt.arg, "bayesian") == 0 || strcmp(opt.arg, "rer") == 0) {
+                    params.statistic = STATISTIC_BAYES;
+                } else if (strcmp(opt.arg, "nll") == 0 || strcmp(opt.arg, "standard") == 0) {
+                    params.statistic = STATISTIC_NLL;
+                } else {
+                    fprintf(stderr, "Invalid statistic '%s'. Expected 'bayes' or 'nll'.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                break;
             case OPT_EPSILON:
                 params.epsilon = atof(opt.arg);
                 break;
@@ -426,6 +441,9 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
         }
     }
+    if (params.statistic == STATISTIC_AUTO) {
+        params.statistic = (periodogram_uses_aov(params.periodogramMethod) && params.mode <= 2) ? STATISTIC_BAYES : STATISTIC_NLL;
+    }
     params.isFile = process_path(&params);
     return params;
 }
@@ -472,6 +490,7 @@ static inline double correct_threshold(const parameters *params, const buffer_t 
     if (mode_uses_direct_eval_grid(params->mode)) return params->threshold;
     if (eval_method_uses_direct_grid(method, use_aov, params->mode)) return params->threshold;
     if (periodogram_uses_aov(params->periodogramMethod)) {
+        if (params->statistic == STATISTIC_BAYES) return params->threshold;
         return correct_aov_threshold(params->threshold, params->nterms, periodogram_effective_n(buffer));
     }
     if (mode_uses_direct_gb_grid(params->mode)) return params->threshold;

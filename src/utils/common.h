@@ -25,6 +25,19 @@ typedef enum {
 
 typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW, GB_EVAL_BLS } gb_eval_mode;
 
+typedef enum { STATISTIC_AUTO = 0, STATISTIC_NLL, STATISTIC_BAYES } statistic_type_t;
+
+static inline const char* statistic_name(statistic_type_t stat) {
+    switch (stat) {
+        case STATISTIC_BAYES:
+            return "bayes";
+        case STATISTIC_NLL:
+            return "nll";
+        default:
+            return "auto";
+    }
+}
+
 #define BIND_FALSE 0
 #define BIND_STRICT 1
 #define BIND_AUTO 2
@@ -176,8 +189,9 @@ typedef struct {
     float* cobraImag;
     float* aovScratch;
     size_t aovScratchLen;
-    float *aovSw, *aovCw, *aovSyw, *aovCyw, *aovPower;
+    float *aovSw, *aovCw, *aovSyw, *aovCyw, *aovPower, *aovCondition;
     size_t aovArrayCap;
+    int aovTerms;
     nufft1_workspace* nufftWorkspace;
     uint32_t activePlanIndex;
     uint32_t activeGridLen;
@@ -229,6 +243,7 @@ typedef struct {
     int mode;
     int jobs;
     periodogram_method periodogramMethod;
+    statistic_type_t statistic;
     gb_eval_mode gbEvalMode;
     bool isFile;
     bool spectrum;

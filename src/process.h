@@ -817,13 +817,13 @@ static inline void capture_spectrum_column(buffer_t *buffer, const parameters *p
                 magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
             } else if (use_aov) {
                 float r2 = buffer->power ? buffer->power[i] : aov_get_stat(buffer, params, freq);
-                magnitude = aov_likelihood_from_r2(r2, nterms, aov_n_eff);
+                magnitude = (params->statistic == STATISTIC_BAYES) ? r2 : aov_likelihood_from_r2(r2, nterms, aov_n_eff);
             } else {
                 magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
             }
         } else if (use_aov) {
             float r2 = buffer->power[i];
-            magnitude = aov_likelihood_from_r2(r2, nterms, aov_n_eff);
+            magnitude = (params->statistic == STATISTIC_BAYES) ? r2 : aov_likelihood_from_r2(r2, nterms, aov_n_eff);
         } else {
             magnitude = correct_ihs_res(buffer->power[i], nterms);
         }
@@ -1239,7 +1239,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                 if (!quadratic_peak_position(freq, fstep, left, magnitude, right, params->oversamplingFactor, &peak_freq, &peak_magnitude)) continue;
                 if (magnitude > left && magnitude > right && (magnitude > threshold || (threshold_valid && mode_evaluates_all_local_peaks(params->mode)))) {
                     if (use_aov && !direct_eval_grid) {
-                        aov_append_peak(buffer, params, peak_freq, peak_magnitude, df);
+                        aov_append_peak(buffer, params, peak_freq, peak_magnitude, peak_magnitude, df);
                     } else {
                         append_peak(buffer, params, peak_freq, peak_magnitude, df);
                     }

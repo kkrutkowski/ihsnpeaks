@@ -93,7 +93,10 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->aovCyw = NULL;
     free(buffer->aovPower);
     buffer->aovPower = NULL;
+    free(buffer->aovCondition);
+    buffer->aovCondition = NULL;
     buffer->aovArrayCap = 0;
+    buffer->aovTerms = 0;
     if (buffer->peaks) {
         free(buffer->peaks);
         buffer->peaks = NULL;
@@ -118,7 +121,7 @@ static inline void free_buffer(buffer_t* buffer) {
 
 // Lazily allocate (or grow) AoV working arrays to exactly the required capacity.
 static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nterms) {
-    if (buffer->aovSw && buffer->aovArrayCap >= cap) return true;
+    if (buffer->aovSw && buffer->aovArrayCap >= cap && buffer->aovTerms >= nterms) return true;
     // Free old (too-small) arrays
     free(buffer->aovSw);
     buffer->aovSw = NULL;
@@ -130,7 +133,10 @@ static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nt
     buffer->aovCyw = NULL;
     free(buffer->aovPower);
     buffer->aovPower = NULL;
+    free(buffer->aovCondition);
+    buffer->aovCondition = NULL;
     buffer->aovArrayCap = 0;
+    buffer->aovTerms = 0;
     int max_factor = 2 * nterms;
     size_t trig_len = (size_t)(max_factor + 1) * cap;
     size_t ytrig_len = (size_t)(nterms + 1) * cap;
@@ -139,8 +145,10 @@ static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nt
     buffer->aovSyw = aligned_alloc(64, round_buffer(ytrig_len * sizeof(float)));
     buffer->aovCyw = aligned_alloc(64, round_buffer(ytrig_len * sizeof(float)));
     buffer->aovPower = aligned_alloc(64, round_buffer(cap * sizeof(float)));
-    if (!buffer->aovSw || !buffer->aovCw || !buffer->aovSyw || !buffer->aovCyw || !buffer->aovPower) return false;
+    buffer->aovCondition = aligned_alloc(64, round_buffer(cap * sizeof(float)));
+    if (!buffer->aovSw || !buffer->aovCw || !buffer->aovSyw || !buffer->aovCyw || !buffer->aovPower || !buffer->aovCondition) return false;
     buffer->aovArrayCap = cap;
+    buffer->aovTerms = nterms;
     return true;
 }
 

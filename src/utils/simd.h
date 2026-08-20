@@ -60,6 +60,10 @@ typedef union {
 #    define AOV_R2_MAX (1.0f - 1.0e-7f)
 #endif
 
+#ifndef AOV_CONDITION_LIMIT
+#    define AOV_CONDITION_LIMIT 5.0e3f
+#endif
+
 #ifndef float_is_finite_bits
 static inline bool float_is_finite_bits_simd(float v) {
     union {
@@ -504,6 +508,233 @@ static inline void nll_convert_spectrum_batch(const float *r2_in, float *nll_out
             DVEC out = nll_exact_pochhammer_dvec(degree, d_pad, b_d);
             for (size_t k = 0; k < rem; ++k) nll_out[i + k] = (float)out.values[k];
         }
+    }
+}
+
+/* ========================================================================= */
+/* Cybenko Condition Number & Bayes Laplace Distribution Routines           */
+/* ========================================================================= */
+
+typedef struct {
+    double var_S;
+    double mean_S;
+    double k_eff;     /* shape parameter a */
+    double theta_eff; /* scale parameter theta */
+    double lgamma_k;  /* ln(Gamma(k_eff)) cached */
+    double sum_N_eff; /* sum_{j=1}^{2d} (M-j)^2 / M */
+    double inv_2d;    /* 1.0 / (2.0 * d) */
+} cybenko_model_t;
+
+static inline cybenko_model_t cybenko_model_init(int d, int M) {
+    cybenko_model_t m;
+    double d_dbl = (double)d;
+    double M_dbl = (double)M;
+    double inv_M = 1.0 / M_dbl;
+    double inv_M2 = inv_M * inv_M;
+
+    /* Exact 3rd-order Edgeworth expansion for Var(S) */
+    double term1 = 2.0 * d_dbl;
+    double term2 = (8.0 * d_dbl * d_dbl - 14.0 * d_dbl) * inv_M;
+    double term3 = ((184.0 / 3.0) * d_dbl * d_dbl * d_dbl - 98.0 * d_dbl * d_dbl + (158.0 / 3.0) * d_dbl) * inv_M2;
+    m.var_S = term1 + term2 + term3;
+
+    m.mean_S = 2.0 * d_dbl;
+    m.k_eff = (m.mean_S * m.mean_S) / m.var_S;
+    m.theta_eff = m.var_S / m.mean_S;
+    m.lgamma_k = lgamma(m.k_eff);
+    m.inv_2d = 1.0 / (2.0 * d_dbl);
+
+    double n = 2.0 * d_dbl;
+    m.sum_N_eff = n * M_dbl - n * (n + 1.0) + (n * (n + 1.0) * (2.0 * n + 1.0)) / (6.0 * M_dbl);
+
+    return m;
+}
+
+static inline double cybenko_kappa_to_S(double kappa, const cybenko_model_t *m) {
+    if (kappa <= 1.0 || !double_is_finite_bits(kappa)) return 0.0;
+    if (kappa > (double)AOV_CONDITION_LIMIT) kappa = (double)AOV_CONDITION_LIMIT;
+    double pow_k = pow(kappa, m->inv_2d);
+    double k_val = (pow_k - 1.0) / (pow_k + 1.0);
+    double k2 = k_val * k_val;
+    return m->sum_N_eff * k2;
+}
+
+/* Vectorized Cybenko condition NLL: fp32 Erlang for d <= 2, fp32 Hybrid for d >= 3 */
+static inline VEC nll_cybenko_vec(const VEC kappa, const cybenko_model_t *m, int d) {
+    VEC s_vec;
+    for (int lane = 0; lane < VEC_LEN; ++lane) {
+        float k = kappa.values[lane];
+        s_vec.values[lane] = (float)cybenko_kappa_to_S((double)k, m);
+    }
+
+    float k_eff_f = (float)m->k_eff;
+    float th_eff_f = (float)m->theta_eff;
+    float lg_k_f = (float)m->lgamma_k;
+
+    if (d <= 2) {
+        /* Single-precision Erlang polynomial + perturbation */
+        const VEC z = {.data = s_vec.data / SET_VEC(th_eff_f).data};
+        const int order = 2 * d;
+        const float delta = k_eff_f - (float)order;
+
+        VEC c = SET_VEC(1.0f);
+        VEC poly = SET_VEC(1.0f);
+        VEC d_poly = SET_VEC(0.0f);
+
+        for (int k = 1; k < order; ++k) {
+            float factor = 1.0f / (float)k;
+            c.data = c.data * (z.data * SET_VEC(factor).data);
+            poly.data += c.data;
+
+            if (fabsf(delta) > 1.0e-5f) {
+                float H_k = 0.0f;
+                for (int i = 1; i <= k; ++i) H_k += 1.0f / (float)i;
+                d_poly.data += c.data * SET_VEC(-H_k).data;
+            }
+        }
+
+        VEC ln_poly = ln_ps(poly);
+        VEC nll = {.data = z.data - ln_poly.data};
+
+        if (fabsf(delta) > 1.0e-5f) {
+            VEC ln_z = ln_ps(z);
+            VEC corr = {.data = SET_VEC(delta).data * ((ln_z.data - d_poly.data) / poly.data)};
+            nll.data -= corr.data;
+        }
+
+        VEC out;
+        for (int lane = 0; lane < VEC_LEN; ++lane) {
+            float val = nll.values[lane];
+            out.values[lane] = (val > 0.0f && float_is_finite_bits(val) && s_vec.values[lane] > 0.0f) ? val : 0.0f;
+        }
+        return out;
+    } else {
+        /* Single-precision Hybrid Asymptotic engine */
+        VEC z_safe;
+        for (int lane = 0; lane < VEC_LEN; ++lane) {
+            float s = s_vec.values[lane];
+            z_safe.values[lane] = (s > 0.0f && float_is_finite_bits(s)) ? (s / th_eff_f) : 1.0f;
+        }
+        const VEC z = z_safe;
+        const VEC inv_z = {.data = SET_VEC(1.0f).data / z.data};
+        const float a = k_eff_f;
+
+        VEC t1 = {.data = SET_VEC(a - 1.0f).data * inv_z.data};
+        VEC t2 = {.data = t1.data * (SET_VEC(a - 2.0f).data * inv_z.data)};
+        VEC t3 = {.data = t2.data * (SET_VEC(a - 3.0f).data * inv_z.data)};
+        VEC t4 = {.data = t3.data * (SET_VEC(a - 4.0f).data * inv_z.data)};
+        VEC poly = {.data = SET_VEC(1.0f).data + t1.data + t2.data + t3.data + t4.data};
+
+        VEC ln_z = ln_ps(z);
+        VEC ln_poly = ln_ps(poly);
+        VEC nll_asymp = {.data = z.data - (SET_VEC(a - 1.0f).data * ln_z.data) + SET_VEC(lg_k_f).data - ln_poly.data};
+
+        VEC out;
+        for (int lane = 0; lane < VEC_LEN; ++lane) {
+            float s = s_vec.values[lane];
+            if (s <= 0.0f || !float_is_finite_bits(s)) {
+                out.values[lane] = 0.0f;
+                continue;
+            }
+            float z_val = z.values[lane];
+            if (z_val >= a + 3.0f) {
+                float val = nll_asymp.values[lane];
+                out.values[lane] = (val > 0.0f && float_is_finite_bits(val)) ? val : 0.0f;
+            } else {
+                double term = 1.0 / (double)a;
+                double sum_val = term;
+                double z_d = (double)z_val;
+                double a_d = (double)a;
+                for (int n = 1; n < 25; ++n) {
+                    term *= z_d / (a_d + (double)n);
+                    sum_val += term;
+                    if (term < 1.0e-15 * sum_val) break;
+                }
+                double ln_P = a_d * log(z_d) - z_d - (double)lg_k_f + log(sum_val);
+                if (ln_P >= 0.0) {
+                    out.values[lane] = 0.0f;
+                } else {
+                    double P = exp(ln_P);
+                    out.values[lane] = (P < 1.0) ? (float)-log1p(-P) : 0.0f;
+                }
+            }
+        }
+        return out;
+    }
+}
+
+/* Scalar Laplace Bayes combination */
+static inline double compute_bayes_laplace(double nll_r2, double nll_cond) {
+    if (!double_is_finite_bits(nll_r2) || nll_r2 <= 0.0) return 0.0;
+    if (!double_is_finite_bits(nll_cond) || nll_cond < 0.0) nll_cond = 0.0;
+    double delta = nll_r2 - nll_cond;
+    if (delta >= 0.0) {
+        return delta + 0.6931471805599453; /* + ln(2) */
+    } else {
+        double p = 0.5 * exp(delta);
+        return (p < 1.0 && p > 0.0) ? -log1p(-p) : 0.0;
+    }
+}
+
+/* Vectorized Laplace Bayes combination */
+static inline VEC compute_bayes_laplace_vec(const VEC nll_r2, const VEC nll_cond) {
+    const float ln2 = 0.69314718f;
+    VEC out;
+    for (int lane = 0; lane < VEC_LEN; ++lane) {
+        float r2_nll = nll_r2.values[lane];
+        if (!float_is_finite_bits(r2_nll) || r2_nll <= 0.0f) {
+            out.values[lane] = 0.0f;
+            continue;
+        }
+        float cond_nll = nll_cond.values[lane];
+        if (!float_is_finite_bits(cond_nll) || cond_nll < 0.0f) cond_nll = 0.0f;
+        float delta = r2_nll - cond_nll;
+        if (delta >= 0.0f) {
+            out.values[lane] = delta + ln2;
+        } else {
+            float p = 0.5f * expf(delta);
+            out.values[lane] = (p < 1.0f && p > 0.0f) ? -log1pf(-p) : 0.0f;
+        }
+    }
+    return out;
+}
+
+/* Batch converter for Bayes NLL (using R^2 and condition array) */
+static inline void nll_convert_spectrum_bayes_batch(const float *r2_in, const float *cond_in, float *nll_out, size_t count, int degree, int n_eff) {
+    if (count == 0) return;
+    if (n_eff <= 2 * degree + 1) {
+        memset(nll_out, 0, count * sizeof(float));
+        return;
+    }
+    float b_f = 0.5f * (float)(n_eff - (2 * degree + 1));
+    cybenko_model_t m = cybenko_model_init(degree, n_eff);
+    size_t i = 0;
+
+    for (; i + VEC_LEN <= count; i += VEC_LEN) {
+        VEC r2_chunk, cond_chunk;
+        memcpy(r2_chunk.values, r2_in + i, sizeof(float) * VEC_LEN);
+        if (cond_in)
+            memcpy(cond_chunk.values, cond_in + i, sizeof(float) * VEC_LEN);
+        else
+            cond_chunk = SET_VEC(1.0f);
+
+        VEC nll_r2 = nll_exact_pochhammer_vec(degree, r2_chunk, b_f);
+        VEC nll_cond = nll_cybenko_vec(cond_chunk, &m, degree);
+        VEC out = compute_bayes_laplace_vec(nll_r2, nll_cond);
+        memcpy(nll_out + i, out.values, sizeof(float) * VEC_LEN);
+    }
+
+    if (i < count) {
+        size_t rem = count - i;
+        VEC r2_pad = {0}, cond_pad = SET_VEC(1.0f);
+        for (size_t k = 0; k < rem; ++k) {
+            r2_pad.values[k] = r2_in[i + k];
+            if (cond_in) cond_pad.values[k] = cond_in[i + k];
+        }
+        VEC nll_r2 = nll_exact_pochhammer_vec(degree, r2_pad, b_f);
+        VEC nll_cond = nll_cybenko_vec(cond_pad, &m, degree);
+        VEC out = compute_bayes_laplace_vec(nll_r2, nll_cond);
+        for (size_t k = 0; k < rem; ++k) nll_out[i + k] = out.values[k];
     }
 }
 

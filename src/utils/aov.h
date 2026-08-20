@@ -15,7 +15,6 @@
 #    define M_SQRT1_2 0.70710678118654752440
 #endif
 
-#define AOV_CONDITION_LIMIT 5e3f
 #define AOV_R2_MAX (1.0f - 1.0e-7f)
 
 typedef struct {
@@ -228,7 +227,7 @@ static inline float aov_solve_levinson_scalar(size_t n, const float *restrict Rr
 }
 
 static inline void aov_gls_impl(const float *Sw, const float *Cw, const float *Syw, const float *Cyw, int nfreq, float ws, float yws, float chi2_ref,
-                                float *power) {
+                                float *power, float *condition_out) {
     float inv_ws = 1.0f / ws;
     float inv_chi2_ref = 1.0f / chi2_ref;
     float half = 0.5f;
@@ -284,6 +283,10 @@ static inline void aov_gls_impl(const float *Sw, const float *Cw, const float *S
         YS -= (yws * XS) * inv_ws;
 
         power[idx] = aov_clamp_r2((((YC * YC) / CC) + ((YS * YS) / SS)) * inv_chi2_ref);
+        if (condition_out) {
+            float abs2 = ((C * C) + (S * S)) * (inv_ws * inv_ws);
+            condition_out[idx] = aov_reflection_condition_step(abs2);
+        }
     }
 }
 
@@ -291,7 +294,7 @@ static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw,
                                                size_t scratch_len) {
     if (degree == 1) {
         float power = aov_invalid_value();
-        aov_gls_impl(Sw, Cw, Syw, Cyw, 1, Cw[0], Cyw[0], chi2_ref, &power);
+        aov_gls_impl(Sw, Cw, Syw, Cyw, 1, Cw[0], Cyw[0], chi2_ref, &power, NULL);
         return power;
     }
 
@@ -347,7 +350,7 @@ static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw,
 }
 
 static inline int aov_solve_periodogram_vec(const float *Sw, const float *Cw, const float *Syw, const float *Cyw, int nfreq, int degree, float chi2_ref,
-                                            float *power) {
+                                            float *power, float *condition_out) {
     int norder = (2 * degree) + 1;
     VEC *Rr = (VEC *)aov_aligned_alloc((size_t)norder + 1U, sizeof(VEC));
     VEC *Ri = (VEC *)aov_aligned_alloc((size_t)norder + 1U, sizeof(VEC));
@@ -402,7 +405,9 @@ static inline int aov_solve_periodogram_vec(const float *Sw, const float *Cw, co
         for (int lane = 0; lane < VEC_LEN; ++lane) {
             int idx = base + lane;
             if (idx >= nfreq) continue;
-            if (aov_condition_is_singular(condition.values[lane])) {
+            float cond_val = condition.values[lane];
+            if (condition_out) condition_out[idx] = cond_val;
+            if (aov_condition_is_singular(cond_val)) {
                 power[idx] = aov_invalid_value();
                 continue;
             }
@@ -516,16 +521,18 @@ typedef struct {
     double center_freq;
     float left_value;
     float center_value;
+    float left_r2;
+    float center_r2;
 } aov_peak_stream_t;
 
-static inline void aov_append_peak(buffer_t *buffer, const parameters *params, double freq, float r2, double df);
+static inline void aov_append_peak(buffer_t *buffer, const parameters *params, double freq, float stat, float r2, double df);
 
-static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *buffer, const parameters *params, double freq, float value, uint32_t idx,
-                                         uint32_t nfreq, float threshold, double fstep, double df, char *stringBuff, int precision, bool write_spectrum,
-                                         bool scan_peaks) {
+static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *buffer, const parameters *params, double freq, float value, float r2,
+                                         uint32_t idx, uint32_t nfreq, float threshold, double fstep, double df, char *stringBuff, int precision,
+                                         bool write_spectrum, bool scan_peaks) {
     if (write_spectrum) {
-        float magnitude = aov_likelihood_from_r2(value, params->nterms, periodogram_effective_n(buffer));
-        if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
+        float magnitude = (params->statistic == STATISTIC_BAYES) ? value : aov_likelihood_from_r2(value, params->nterms, periodogram_effective_n(buffer));
+        if (!float_is_finite_bits(magnitude) || magnitude < 0.0f) magnitude = 0.0f;
         appendFreq(freq, magnitude, precision, params->outputPeriod, &buffer->spectrum, stringBuff);
     }
 
@@ -536,7 +543,8 @@ static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *bu
                                         &peak_magnitude) &&
             stream->center_value > stream->left_value && stream->center_value > value &&
             (stream->center_value > threshold || mode_evaluates_all_local_peaks(params->mode))) {
-            aov_append_peak(buffer, params, peak_freq, peak_magnitude, df);
+            float peak_r2 = (params->statistic == STATISTIC_BAYES) ? stream->center_r2 : peak_magnitude;
+            aov_append_peak(buffer, params, peak_freq, peak_magnitude, peak_r2, df);
         }
     }
 
@@ -544,10 +552,12 @@ static inline void aov_stream_peak_value(aov_peak_stream_t *stream, buffer_t *bu
     stream->left_idx = stream->center_idx;
     stream->left_freq = stream->center_freq;
     stream->left_value = stream->center_value;
+    stream->left_r2 = stream->center_r2;
     stream->has_center = true;
     stream->center_idx = idx;
     stream->center_freq = freq;
     stream->center_value = value;
+    stream->center_r2 = r2;
 }
 
 static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq, float threshold, double df,
@@ -597,6 +607,7 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     float *Syw = buffer->aovSyw;
     float *Cyw = buffer->aovCyw;
     float *power_arr = buffer->aovPower;
+    float *cond_arr = buffer->aovCondition;
 
     if (nufft1_workspace_get_active_mpoints(buffer->nufftWorkspace) != (int)buffer->n) {
         nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
@@ -608,6 +619,9 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     size_t num_blocks = ((size_t)nfreq + (size_t)block_len - 1U) / (size_t)block_len;
     int status = 0;
     aov_peak_stream_t stream = {0};
+    int n_eff = periodogram_effective_n(buffer);
+    bool is_bayes = (params->statistic == STATISTIC_BAYES);
+
     for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
         uint32_t count = block_len;
@@ -627,18 +641,25 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
 
         // Phase 2: solve this block
         if (degree == 1) {
-            aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref.ws, ref.yws, ref.chi2_ref, power_arr);
+            aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref.ws, ref.yws, ref.chi2_ref, power_arr, cond_arr);
         } else {
-            status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref.chi2_ref, power_arr);
+            status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref.chi2_ref, power_arr, cond_arr);
             if (status != 0) break;
         }
 
         // Phase 3: stream this block with global frequency indices
+        float *bayes_arr = Sw;
+        if (is_bayes) {
+            nll_convert_spectrum_bayes_batch(power_arr, cond_arr, bayes_arr, count, degree, n_eff);
+        }
+
         for (uint32_t i = 0; i < count; ++i) {
             uint32_t idx = base + i;
             double freq = fmin + ((double)idx * fstep);
-            if (store_power) buffer->power[idx] = power_arr[i];
-            aov_stream_peak_value(&stream, buffer, params, freq, power_arr[i], idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum,
+            float r2_val = power_arr[i];
+            float stream_val = is_bayes ? bayes_arr[i] : r2_val;
+            if (store_power) buffer->power[idx] = stream_val;
+            aov_stream_peak_value(&stream, buffer, params, freq, stream_val, r2_val, idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum,
                                   scan_peaks);
         }
     }
@@ -722,16 +743,16 @@ static inline void aov_binsearch_peak(peak_t *peak, buffer_t *buffer, const para
     }
 }
 
-static inline void aov_append_peak(buffer_t *buffer, const parameters *params, double freq, float r2, double df) {
+static inline void aov_append_peak(buffer_t *buffer, const parameters *params, double freq, float stat, float r2, double df) {
     if (params->npeaks <= 0) return;
-    if (!float_is_finite_bits(r2)) return;
+    if (!float_is_finite_bits(stat)) return;
     const eval_method_t *method = eval_method_for_params(params);
     peak_t appended = {0};
     appended.freq = freq;
-    appended.r2 = r2;
-    appended.p = r2;
+    appended.r2 = float_is_finite_bits(r2) ? r2 : 0.0f;
+    appended.p = stat;
 
-    float rank = r2;
+    float rank = stat;
     if (!mode_defers_peak_evaluation(params->mode)) {
         if (mode_eagerly_refines_peaks(params->mode)) {
             binsearch_peak(&appended, buffer, params, method, df);
@@ -760,7 +781,9 @@ static inline void aov_sort_peaks(peak_t *peaks, int length, buffer_t *buffer, c
     const eval_method_t *method = eval_method_for_params(params);
     int n_eff = periodogram_effective_n(buffer);
     if (params->mode == 0) {
-        for (int i = 0; i < length; ++i) peaks[i].p = aov_likelihood_from_r2(peaks[i].r2, params->nterms, n_eff);
+        if (params->statistic != STATISTIC_BAYES) {
+            for (int i = 0; i < length; ++i) peaks[i].p = aov_likelihood_from_r2(peaks[i].r2, params->nterms, n_eff);
+        }
         return;
     }
 
