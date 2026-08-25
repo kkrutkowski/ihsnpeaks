@@ -130,10 +130,13 @@ static int lc_model_aov(const double *x, const float *y, const float *dy, uint32
     float *v = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
     float *rw = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
     float *model_f = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
-    float *phase_nh = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
-    if (!zr || !zi || !pr || !pi || !znr || !zni || !cfr || !cfi || !v || !rw || !model_f || !phase_nh) {
+    float *phase_arr = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
+    float *cos_nh = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
+    float *sin_nh = (float *)aligned_alloc(64, (size_t)npad * sizeof(float));
+    if (!zr || !zi || !pr || !pi || !znr || !zni || !cfr || !cfi || !v || !rw || !model_f || !phase_arr || !cos_nh || !sin_nh) {
         free(zr); free(zi); free(pr); free(pi); free(znr); free(zni);
-        free(cfr); free(cfi); free(v); free(rw); free(model_f); free(phase_nh);
+        free(cfr); free(cfi); free(v); free(rw); free(model_f); free(phase_arr);
+        free(cos_nh); free(sin_nh);
         return -1;
     }
     memset(zr, 0, (size_t)npad * sizeof(float));
@@ -147,7 +150,9 @@ static int lc_model_aov(const double *x, const float *y, const float *dy, uint32
     memset(v, 0, (size_t)npad * sizeof(float));
     memset(rw, 0, (size_t)npad * sizeof(float));
     memset(model_f, 0, (size_t)npad * sizeof(float));
-    memset(phase_nh, 0, (size_t)npad * sizeof(float));
+    memset(phase_arr, 0, (size_t)npad * sizeof(float));
+    memset(cos_nh, 0, (size_t)npad * sizeof(float));
+    memset(sin_nh, 0, (size_t)npad * sizeof(float));
 
     /* Normalize: subtract weighted mean (or unweighted mean if dy is NULL) */
     float sav = 0.0f;
@@ -178,26 +183,43 @@ static int lc_model_aov(const double *x, const float *y, const float *dy, uint32
         }
     }
 
-    /* Compute phases in DOUBLE precision, then initialize Szego arrays.
-     * Phase = fmod((x[k] - t0) * freq, 1.0) with t0 at midpoint. */
+    /* Compute phases in DOUBLE precision, then initialize Szego arrays via vectorized trig. */
     double t0 = (x[0] + x[n - 1]) / 2.0;
     for (uint32_t k = 0; k < n; k++) {
         double dph = (x[k] - t0) * freq;
         dph -= floor(dph);
-        float phase_f = (float)dph; /* single precision for trig fitting */
-        zr[k] = cos2pif_tls(phase_f);
-        zi[k] = sin2pif_tls(phase_f);
+        phase_arr[k] = (float)dph;
         pr[k] = rw[k];
         pi[k] = 0.0f;
         znr[k] = 1.0f;
         zni[k] = 0.0f;
-        float angle_nh = phase_f * (float)nh;
-        phase_nh[k] = angle_nh; /* store for de-rotation during model accumulation */
-        cfr[k] = v[k] * cos2pif_tls(angle_nh);
-        cfi[k] = v[k] * sin2pif_tls(angle_nh);
     }
     for (uint32_t k = n; k < npad; k++) {
+        phase_arr[k] = 0.0f;
+        pr[k] = rw[k];
+        pi[k] = 0.0f;
         znr[k] = 1.0f;
+        zni[k] = 0.0f;
+    }
+
+    /* SIMD vectorized initialization of zr, zi, cos_nh, sin_nh, cfr, cfi */
+    lc_vecf vnh = (lc_vecf){} + (float)nh;
+    for (uint32_t k = 0; k < npad; k += LC_VECF_LEN) {
+        lc_vecf vph = *(lc_vecf *)&phase_arr[k];
+        lc_vecf vzr = lc_vecf_cos2pi(vph);
+        lc_vecf vzi = lc_vecf_sin2pi(vph);
+        *(lc_vecf *)&zr[k] = vzr;
+        *(lc_vecf *)&zi[k] = vzi;
+
+        lc_vecf vangle_nh = vph * vnh;
+        lc_vecf vcnh = lc_vecf_cos2pi(vangle_nh);
+        lc_vecf vsnh = lc_vecf_sin2pi(vangle_nh);
+        *(lc_vecf *)&cos_nh[k] = vcnh;
+        *(lc_vecf *)&sin_nh[k] = vsnh;
+
+        lc_vecf vv = *(lc_vecf *)&v[k];
+        *(lc_vecf *)&cfr[k] = vv * vcnh;
+        *(lc_vecf *)&cfi[k] = vv * vsnh;
     }
 
     /* Szego recursion with SIMD-vectorized inner loop.
@@ -244,19 +266,18 @@ static int lc_model_aov(const double *x, const float *y, const float *dy, uint32
         float coeff_r = scr / sn;
         float coeff_i = sci / sn;
 
-        /* Accumulate model with de-rotation by exp(-i*nh*angle):
+        /* Accumulate model with precomputed de-rotation factors cos_nh / sin_nh:
          * A = coeff_r*pr - coeff_i*pi  (Re of coeff * P_n)
          * B = coeff_r*pi + coeff_i*pr  (Im of coeff * P_n)
-         * model[k] += A*cos(nh*angle[k]) + B*sin(nh*angle[k]) */
+         * model[k] += A*cos_nh[k] + B*sin_nh[k] */
         lc_vecf vcr = (lc_vecf){} + coeff_r;
         lc_vecf vci = (lc_vecf){} + coeff_i;
         for (uint32_t k = 0; k < npad; k += LC_VECF_LEN) {
             lc_vecf vm = *(lc_vecf *)&model_f[k];
             lc_vecf vpr = *(lc_vecf *)&pr[k];
             lc_vecf vpi = *(lc_vecf *)&pi[k];
-            lc_vecf vph = *(lc_vecf *)&phase_nh[k];
-            lc_vecf vc = lc_vecf_cos2pi(vph);
-            lc_vecf vs = lc_vecf_sin2pi(vph);
+            lc_vecf vc = *(lc_vecf *)&cos_nh[k];
+            lc_vecf vs = *(lc_vecf *)&sin_nh[k];
             lc_vecf vA = vcr * vpr - vci * vpi;
             lc_vecf vB = vcr * vpi + vci * vpr;
             *(lc_vecf *)&model_f[k] = vm + vA * vc + vB * vs;
@@ -304,7 +325,8 @@ static int lc_model_aov(const double *x, const float *y, const float *dy, uint32
     }
 
     free(zr); free(zi); free(pr); free(pi); free(znr); free(zni);
-    free(cfr); free(cfi); free(v); free(rw); free(model_f); free(phase_nh);
+    free(cfr); free(cfi); free(v); free(rw); free(model_f); free(phase_arr);
+    free(cos_nh); free(sin_nh);
     return 0;
 }
 

@@ -13,6 +13,7 @@ output.tsv
 .qwen
 __pycache__/
 tmp/*
+downstream/tmp/*
 downstream/cuihsnpeaks/refs/*
 downstream/lc-qt/buildroot
 downstream/lc-qt/lc-qt
