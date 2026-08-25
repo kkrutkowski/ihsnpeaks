@@ -1,5 +1,5 @@
-#ifndef LC_PERIODOGRAM_H
-#define LC_PERIODOGRAM_H
+#ifndef LC_PERIOD_H
+#define LC_PERIOD_H
 
 #include <stdint.h>
 
@@ -125,13 +125,12 @@ LC_API int lc_compute_phased_model(const lc_data_t *data, const lc_periodogram_c
                                    lc_model_style_t *style_out);
 
 /*
- * Compute the phase offset required to place the model's extremum at phase 0.5.
- * - IHS/AoV: finds model min and max, multiplies brightness distance by LC_BRIGHTNESS_BIAS,
- *            picks the farther point.
- * - BLS:     places the middle of the fitted boxcar at phase 0.5 (no bias).
- * - GB:      finds extremum with LC_BRIGHTNESS_BIAS, sets it to 0.5, then fits a parabola
- *            to the 3 nearest phase points using Lagrange polynomial interpolation and
- *            refines the phase shift using the parabola vertex.
+ * Compute the phase offset required to align the model's global extremum:
+ * - If the global extremum is a minimum (max brightness): set minimum to phase 0.5.
+ * - If the global extremum is a maximum (faintness / dip):
+ *     - BLS: set boxcar midpoint to phase 0.5.
+ *     - IHS, AoV, GB: set minimum to phase 0.0 (shifted by 0.5 vs standard).
+ * - GB fits a 3-point Lagrange parabola vertex to refine the placement of the chosen target phase.
  * Returns phase offset in [0, 1) on success, or 0.0 on error.
  */
 LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogram_config_t *cfg, double freq,
@@ -141,4 +140,4 @@ LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogra
 }
 #endif
 
-#endif /* LC_PERIODOGRAM_H */
+#endif /* LC_PERIOD_H */

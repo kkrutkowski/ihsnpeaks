@@ -9,6 +9,7 @@
 - AoV(MH), AoVMH(W), FastChi² periodogram implementations
 - Gaussian blur-based Supersmoother-like periodogram (gbls/gbaw)
 - BLS (Box Least Squares) transit search
+- Bayesian statistic (Relative Evidence Ratio) and Classical Raw NLL evaluation with Pochhammer rising factorial series expansions
 - ANCOVA and F-test for inequality-of-variance reevaluation
 - Batch processing of OGLE-format `.dat` photometric files
 - MAST/TESS FITS light-curve input (PDCSAP_FLUX/SAP_FLUX/FLUX via qfits), mixed `.dat`+`.fits` batches
@@ -18,7 +19,7 @@
 
 **Architecture:**
 - Single-file CLI binary: `src/main.c` is the entry point
-- Core periodogram logic lives in `src/process.h` (large inline header)
+- Core periodogram logic lives in `src/process.h` (inline header)
 - NuFFT backend in `src/nufft/nufft1.c` and `nufft1.h`
 - SIMD vectorization via GCC/Clang vector extensions (`src/utils/simd.h`)
 - Uses klib (kvec, kthread, ketopt, kopen) for data structures and helpers
@@ -37,7 +38,7 @@
 │   ├── main.c           — Entry point, CLI argument parsing, batch orchestration
 │   ├── params.h         — Parameter struct, init, parsing, help text
 │   ├── metadata.h       — File discovery, NuFFT plan sizing, plan cache init
-│   ├── process.h        — Core periodogram evaluation pipeline (780+ lines, main logic)
+│   ├── process.h        — Core periodogram evaluation pipeline (main logic)
 │   ├── profile.h        — Instrumentation/profiling macros (IHSNPEAKS_PROFILE)
 │   ├── hwloc_topo.h     — hwloc topology probing, L3 domain enumeration, per-PU CPU binding, XML export to ~/.ihsnpeaks/hwloc_config
 │   ├── pool.h           — L3-aware thread-pool dispatcher: per-pool buffer sets, chunked atomic file dispatch
@@ -45,9 +46,10 @@
 │   │   ├── nufft1.c     — NuFFT implementation
 │   │   ├── nufft1.h     — NuFFT public API
 │   │   ├── scaling.c    — PSWF scaling coefficients generator
+│   │   └── scaling_generic.h — Fallback PSWF scaling coefficients
 │   ├── utils/           — Shared utilities
 │   │   ├── common.h     — Core types: buffer_t, parameters, peak_t, enums
-│   │   ├── simd.h       — GCC vector extension SIMD wrappers (ln_ps, correctPower)
+│   │   ├── simd.h       — GCC vector extension SIMD wrappers (ln_ps, correctPower, rising factorials)
 │   │   ├── aov.h        — AoV-based periodogram helpers
 │   │   ├── convolution.h — Gaussian blur / BLS direct evaluation
 │   │   ├── readout.h    — Buffer allocation, I/O (read_dat/read_fits), peak output formatting
@@ -62,8 +64,11 @@
 │   ├── klib/            — External klib headers (kvec, kthread, ketopt, kopen)
 │   ├── qfits/           — qfits library header (header-only, reads MAST FITS tables)
 │   ├── fast_convert.h   — Fast float parsing
-│   ├── fdist.h          — F-distribution CDF
+│   ├── fdist.h          — F-distribution CDF & Pochhammer series
+│   ├── json.h           — sheredom JSON parser
 │   └── sds.h            — Redis SDS dynamic strings
+├── downstream/
+│   └── lc-qt/           — Qt6 GUI light curve analysis application
 ├── dispatch/
 │   ├── variants.py      — Runtime dispatch variant definitions
 │   ├── build_release.py — x86-64 musl release builder (builds hwloc per target)
@@ -71,7 +76,7 @@
 │   ├── build_release_macos.py — macOS universal binary builder (per-arch hwloc)
 │   └── zig_musl_cc.sh   — Zig-based cross-compilation wrapper
 ├── Dockerfile.release   — Multi-stage Docker build for release artifacts
-├── makefile             — Primary build system (GNU Make; fetches+builds hwloc 2.12 from source)
+├── makefile             — Primary build system (GNU Make; fetches+builds hwloc from source)
 └── README.md            — User-facing documentation
 ```
 
@@ -109,7 +114,7 @@ The macOS build uses `zig cc` + `llvm-lipo` to create a universal Mach-O binary.
 ### Profile build
 
 ```sh
-make profile         # Builds a profiled binary with -IHSNPEAKS_PROFILE=1
+make profile         # Builds a profiled binary with -DIHSNPEAKS_PROFILE=1
 make profile-run     # Runs profiling across thread counts (1, 2, 4, 8, 16, 32)
 make profile-clean   # Removes profile artifacts
 ```
@@ -140,15 +145,17 @@ ihsnpeaks <target> <fmax> [options]
 |------|-------------|
 | `-d N` | Number of harmonics/terms (default: 3) |
 | `-m N` | Peak evaluation mode 0–6 (default: 2) |
-| `-g METHOD` | Periodogram method: `ihs` (default), `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, `fastchi2` |
+| `-g METHOD` | Periodogram method: `ihs` (default for `-d <= 4`), `aov`/`aovmh`/`chi`/`chi2` (default for `-d >= 5`) |
+| `--statistic TYPE` | Statistic type: `bayes` (Relative Evidence Ratio) or `raw` (Classical NLL; default: `bayes` for m0-m2 AoV, `raw` otherwise) |
 | `-e METHOD` | Peak evaluation: `gbls[alpha]`, `gbaw[alpha]`, or `bls[a,b,count]` |
 | `-t THRESHOLD` | Detection threshold in dB (default: 10.0) |
 | `-n N` | Max number of peaks to report (default: 10) |
 | `-s` | Save full spectrum to `.tsv` files |
 | `-p` | Prewhiten (subtract detected signals before finding next peaks) |
 | `-j N` | Limit worker threads (default: 0 = all available PUs) |
+| `-b MODE` | Thread binding: `0`/`false`, `1`/`strict`, `2`/`auto` (default), `3`/`cache` |
 | `-o N` | Oversampling factor (default: 5.0) |
-| `-f FMIN` | Lower frequency bound (default: 2/delta_t) |
+| `-f FMIN` | Lower frequency bound (default: 0.0) |
 | `--period` | Output periods instead of frequencies |
 | `--nufft MODE` | NuFFT backend: `43`/`pswf43` (default) or `21`/`pswf21` |
 | `--generate` | Probe hardware topology via hwloc, save to `~/.ihsnpeaks/hwloc_config`, and exit |
@@ -168,7 +175,7 @@ ihsnpeaks <target> <fmax> [options]
 - **Alignment:** All buffers use 64-byte aligned allocation (`aligned_alloc(64, ...)`). A C99 fallback keeps aligned allocations even on pre-C11 systems.
 - **SIMD abstraction:** Vector code uses GCC/Clang vector extensions via `src/utils/simd.h` — auto-scales between SSE (128-bit), AVX (256-bit), and AVX-512 (512-bit) through `VEC_BYTES`.
 - **Profiling:** Compile with `-DIHSNPEAKS_PROFILE=1` to enable cycle-accurate phase profiling. Thread-local accumulators get flushed atomically. The `profile_report()` function dumps timing and working-set estimates to stderr.
-- **Memory management:** Uses system allocator by default. Optionally links mimalloc (`MIMALLOC=1`). For simplicitly within the hot path, the code allocates and reuses pre-sized buffers per thread rather than frequent malloc/free.
+- **Memory management:** Uses system allocator by default. Optionally links mimalloc (`MIMALLOC=1`). For simplicity within the hot path, the code allocates and reuses pre-sized buffers per thread rather than frequent malloc/free.
 - **Batch mode:** When a directory is provided as target, the metadata pass discovers all matching `.dat`/`.fits` files, but **inspects only the largest `.dat` file and the largest `.fits` file** (one per format, by `stat` size) to size the NuFFT plan. Buffer sizes are derived from these two files only.
 - **Batch metadata scan performance (IMPORTANT):** The metadata pass must NOT loop over all files calling `inspect_dat_file()` or `inspect_fits_file()`. Doing so introduces severe startup latency on large directories (e.g., 10+ seconds on 15 000+ files where < 1 second is acceptable). The current implementation in `metadata.h::process_path()` tracks `largest_dat_path` / `largest_fits_path` during `readdir()` and opens at most two files after the loop. Any refactor must preserve this property.
 - **Threading / hwloc:** At startup, `load_or_probe_topology()` probes the hardware via hwloc (or loads the cached topology from `~/.ihsnpeaks/hwloc_config`). One worker thread pool is created per active L3 domain; workers are pinned to specific PUs via `hwloc_set_cpubind(HWLOC_CPUBIND_THREAD)` before their per-thread `buffer_t` is allocated, so first-touch NUMA placement puts the per-thread buffers on the local node. Shared NuFFT twiddle arrays (`nufftTwiddleReal/Imag`) are allocated before workers exist, so the OS kernel distributes them across NUMA nodes by default (acceptable for read-mostly data).

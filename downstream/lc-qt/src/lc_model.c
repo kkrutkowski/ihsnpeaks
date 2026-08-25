@@ -1,8 +1,8 @@
 /*
  * lc_model.c — Phased model overlay: single-frequency model evaluation.
  *
- * Split from lc_periodogram.c for maintainability. This file is #include'd at the
- * end of lc_periodogram.c (single-TU compilation) because the upstream header-only
+ * Split from lc_period.c for maintainability. This file is #include'd at the
+ * end of lc_period.c (single-TU compilation) because the upstream header-only
  * libraries (sds.h, convolution.h) contain non-static definitions that must only be
  * compiled once.
  *
@@ -179,8 +179,8 @@ static int lc_model_aov(const double *x, const float *y, const float *dy, uint32
     }
 
     /* Compute phases in DOUBLE precision, then initialize Szego arrays.
-     * Phase = fmod((x[k] - x[0]) * freq, 1.0) — double precision as required. */
-    double t0 = x[0];
+     * Phase = fmod((x[k] - t0) * freq, 1.0) with t0 at midpoint. */
+    double t0 = (x[0] + x[n - 1]) / 2.0;
     for (uint32_t k = 0; k < n; k++) {
         double dph = (x[k] - t0) * freq;
         dph -= floor(dph);
@@ -335,8 +335,8 @@ static int lc_model_ihs(const double *x, const float *y, uint32_t n, double freq
     mean /= (float)n;
     for (uint32_t k = 0; k < n; k++) v[k] = y[k] - mean;
 
-    /* Compute phases in DOUBLE precision */
-    double t0 = x[0];
+    /* Compute phases in DOUBLE precision with t0 at midpoint */
+    double t0 = (x[0] + x[n - 1]) / 2.0;
     for (uint32_t k = 0; k < n; k++) {
         double dph = (x[k] - t0) * freq;
         dph -= floor(dph);
@@ -706,7 +706,12 @@ static int lc_cmp_phase_point(const void *a, const void *b) {
 }
 
 /*
- * Compute the phase offset required to place the model's extremum at phase 0.5.
+ * Compute the phase offset required to align the model's global extremum:
+ * - If the global extremum is a minimum (max brightness): set minimum to phase 0.5.
+ * - If the global extremum is a maximum (faintness / dip):
+ *     - BLS: set boxcar midpoint to phase 0.5.
+ *     - IHS, AoV, GB: set minimum to phase 0.0 (shifted by 0.5 vs standard).
+ * - GB fits a 3-point Lagrange parabola vertex to refine the placement of the chosen target phase.
  */
 LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogram_config_t *cfg, double freq,
                                       const float *model) {
@@ -716,34 +721,6 @@ LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogra
     const double t0 = (data->x[0] + data->x[n - 1]) / 2.0;
 
     switch (cfg->method) {
-    case LC_SPEC_IHS:
-    case LC_SPEC_AOV: {
-        if (!model) return 0.0;
-        double med = lc_compute_median(data->y, n);
-
-        /* Find min magnitude (max brightness) and max magnitude (min brightness) */
-        uint32_t min_idx = 0, max_idx = 0;
-        float min_val = model[0], max_val = model[0];
-        for (uint32_t i = 1; i < n; ++i) {
-            if (model[i] < min_val) {
-                min_val = model[i];
-                min_idx = i;
-            }
-            if (model[i] > max_val) {
-                max_val = model[i];
-                max_idx = i;
-            }
-        }
-
-        /* Distance from median with bias 1.2 on maximum brightness (minimum magnitude) */
-        double d_bright = fabs((double)min_val - med) * LC_BRIGHTNESS_BIAS;
-        double d_faint = fabs((double)max_val - med) * 1.0;
-
-        uint32_t ext_idx = (d_bright > d_faint) ? min_idx : max_idx;
-        double phi_ext = lc_wrap_phase((data->x[ext_idx] - t0) * freq);
-        return lc_wrap_phase(0.5 - phi_ext);
-    }
-
     case LC_SPEC_BLS: {
         /* BLS: boxcar fit midpoint at phase 0.5 (no bias factor) */
         double blsMinRelWidth = cfg->oversmoothing > 0.0 ? cfg->oversmoothing : 0.01;
@@ -765,25 +742,40 @@ LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogra
         return lc_wrap_phase(0.5 - phi_mid);
     }
 
+    case LC_SPEC_IHS:
+    case LC_SPEC_AOV:
     case LC_SPEC_GB: {
         if (!model) return 0.0;
         double med = lc_compute_median(data->y, n);
 
-        /* Iterate over all Gaussian Blur smoothed values, find point farthest away after bias scaling */
-        uint32_t ext_idx = 0;
-        double max_dist = -1.0;
-        for (uint32_t i = 0; i < n; ++i) {
-            double v = (double)model[i];
-            double dist = (v < med) ? (med - v) * LC_BRIGHTNESS_BIAS : (v - med);
-            if (dist > max_dist) {
-                max_dist = dist;
-                ext_idx = i;
+        /* Find min magnitude (max brightness) and max magnitude (min brightness / trough) */
+        uint32_t min_idx = 0, max_idx = 0;
+        float min_val = model[0], max_val = model[0];
+        for (uint32_t i = 1; i < n; ++i) {
+            if (model[i] < min_val) {
+                min_val = model[i];
+                min_idx = i;
+            }
+            if (model[i] > max_val) {
+                max_val = model[i];
+                max_idx = i;
             }
         }
 
-        /* Initial phase offset to set extremum at phase 0.5 */
-        double phi_ext = lc_wrap_phase((data->x[ext_idx] - t0) * freq);
-        double phi_offset0 = lc_wrap_phase(0.5 - phi_ext);
+        double d_bright = fabs((double)min_val - med) * LC_BRIGHTNESS_BIAS;
+        double d_faint = fabs((double)max_val - med) * 1.0;
+
+        /* Aesthetics rule:
+         * - Eclipsing binaries (d_faint > d_bright, minimum brightness as extremum):
+         *     brightness dip (trough / max_idx) is centered at phase 0.5.
+         * - Pulsating stars (d_bright >= d_faint, maximum brightness as extremum):
+         *     brightness dip (trough / max_idx) is centered at phase 0.0 (peak near 0.5). */
+        double target_phase = (d_faint > d_bright) ? 0.5 : 0.0;
+        uint32_t target_idx = max_idx;
+
+        /* Initial phase offset to set minimum at target_phase */
+        double phi_target = lc_wrap_phase((data->x[target_idx] - t0) * freq);
+        double phi_offset0 = lc_wrap_phase(target_phase - phi_target);
 
         if (n < 3) return phi_offset0;
 
@@ -799,10 +791,10 @@ LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogra
 
         qsort(pts, (size_t)n, sizeof(lc_phase_point_t), lc_cmp_phase_point);
 
-        /* Find index k of the chosen extremum point (which is near/at phase 0.5) */
+        /* Find index k of target_idx in sorted points */
         int k = -1;
         for (uint32_t i = 0; i < n; ++i) {
-            if (pts[i].orig_idx == ext_idx) {
+            if (pts[i].orig_idx == target_idx) {
                 k = (int)i;
                 break;
             }
@@ -837,13 +829,25 @@ LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogra
             return phi_offset0;
         }
 
-        double x0 = (k_left < k) ? pts[k_left].phase : (pts[k_left].phase - 1.0);
+        /* Coordinate unwrapping around target_phase */
+        double x1 = pts[k].phase;
+        double x0 = pts[k_left].phase;
+        double x2 = pts[k_right].phase;
+
+        if (target_phase == 0.5) {
+            if (x0 > x1) x0 -= 1.0;
+            if (x2 < x1) x2 += 1.0;
+        } else {
+            /* target_phase == 0.0: unwrap around 0 */
+            if (x1 > 0.5) x1 -= 1.0;
+            if (x0 > 0.5) x0 -= 1.0;
+            if (x2 > 0.5) x2 -= 1.0;
+            if (x0 > x1) x0 -= 1.0;
+            if (x2 < x1) x2 += 1.0;
+        }
+
         double y0 = (double)pts[k_left].val;
-
-        double x1 = 0.5;
         double y1 = (double)pts[k].val;
-
-        double x2 = (k_right > k) ? pts[k_right].phase : (pts[k_right].phase + 1.0);
         double y2 = (double)pts[k_right].val;
 
         free(pts);
@@ -865,7 +869,7 @@ LC_API double lc_compute_phase_offset(const lc_data_t *data, const lc_periodogra
         }
 
         /* Refine phase offset using the parabola vertex */
-        return lc_wrap_phase(phi_offset0 + (0.5 - vx));
+        return lc_wrap_phase(phi_offset0 + (target_phase - vx));
     }
 
     default:

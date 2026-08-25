@@ -54,13 +54,13 @@ add_custom_command(
 add_custom_target(scaling_header DEPENDS "${SCALING_HEADER}")
 
 # ---------------------------------------------------------------------------------------
-# Backend OBJECT library: a single bridge object (lc_periodogram.o) plus a separate NuFFT
+# Backend OBJECT library: a single bridge object (lc_period.o) plus a separate NuFFT
 # object (nufft1.o). The LC_API markers in the headers document the intended public entry
 # points for a future multi-microarchitecture dispatch (mirrors the ihsnpeaks release model);
 # no -fvisibility=hidden is used, so all symbols are exported and link normally.
 # ---------------------------------------------------------------------------------------
 add_library(lc_backend OBJECT
-    src/lc_periodogram.c
+    src/lc_period.c
     ${UPSTREAM_SRC_DIR}/nufft/nufft1.c
 )
 add_dependencies(lc_backend scaling_header)
@@ -83,6 +83,8 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 add_executable(lc-qt
     src/main.cpp
+    src/period_worker.cpp
+    src/windows/main_window.cpp
     src/windows/customize_labels.cpp
     src/windows/classification_stats.cpp
     src/windows/lightcurve_plot.cpp

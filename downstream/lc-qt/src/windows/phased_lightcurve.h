@@ -8,7 +8,7 @@
 
 extern "C" {
 #include "lc_readout.h"
-#include "lc_periodogram.h"
+#include "lc_period.h"
 }
 
 /*

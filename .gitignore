@@ -10,13 +10,14 @@ output.tsv
 .agents
 .codex
 .qoder
+.qwen
 __pycache__/
 tmp/*
-.qwen/*
 downstream/cuihsnpeaks/refs/*
 downstream/lc-qt/buildroot
 downstream/lc-qt/lc-qt
-downstream/lc-qt/.qwen
+downstream/lc-qt/.codex
 downstream/lc-qt/.qoder
+downstream/lc-qt/.qwen
 downstream/lc-qt/*.json
 include/tmp/

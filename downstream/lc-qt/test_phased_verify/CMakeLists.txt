@@ -40,7 +40,7 @@ add_custom_command(
 add_custom_target(scaling_header DEPENDS "${SCALING_HEADER}")
 
 add_library(lc_backend OBJECT
-    ${LCQT_DIR}/src/lc_periodogram.c
+    ${LCQT_DIR}/src/lc_period.c
     ${UPSTREAM_SRC_DIR}/nufft/nufft1.c
 )
 add_dependencies(lc_backend scaling_header)
@@ -73,3 +73,18 @@ target_link_libraries(phased_verify PRIVATE
     lc_backend
 )
 target_link_options(phased_verify PRIVATE -static -pthread)
+
+add_executable(test_render_png
+    test_render_png.cpp
+    ${LCQT_DIR}/src/windows/phased_lightcurve.cpp
+)
+target_include_directories(test_render_png PRIVATE
+    ${LCQT_DIR}/src
+    ${EXTERNAL_INCLUDE_DIR}
+)
+target_link_libraries(test_render_png PRIVATE
+    Qt6::Widgets
+    m
+    lc_backend
+)
+target_link_options(test_render_png PRIVATE -static -pthread)

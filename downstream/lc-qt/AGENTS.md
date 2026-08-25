@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-`lc-qt` is a clean-room rewrite of Prof. Grzegorz Pojmański's **lc** light-curve analysis tool (1997–2018), reimplemented with a Qt6 GUI frontend and **ihsnpeaks** as the backend periodogram engine. The project is a work in progress — currently closer to a functional mock-up than a full lc replacement.
+`lc-qt` is a clean-room rewrite of Prof. Grzegorz Pojmański's **lc** light-curve analysis tool (1997–2018), reimplemented with a Qt6 GUI frontend and **ihsnpeaks** as the backend periodogram engine.
 
-The application renders a dark-themed UI replicating the original `lc` tool's layout: raw/phased light-curve plots, object list management, classification system with customizable labels, period search (AoV, IHS, GB, BLS), and period modify controls. The **Raw Light Curve** plot is functional — it loads and displays `.dat`/`.fits` files using upstream ihsnpeaks C readout functions, with detrending and proper time-axis preservation. The **Period Search** (Negative Log-Likelihood spectrum) plot is functional — it computes and displays IHS, AoV, GB, and BLS periodograms using the upstream ihsnpeaks computation pipeline via a multithreaded C bridge. All other plot widgets remain mock placeholders.
+The application renders a dark-themed UI replicating the original `lc` tool's layout: raw/phased light-curve plots, object list management, classification system with customizable labels, period search (AoV, IHS, GB, BLS), zoomed spectrum inspection with MMB peak finding, period scrolling / keyboard modification, and phased model overlays. The **Raw Light Curve** plot loads and displays `.dat`/`.fits` files using upstream ihsnpeaks C readout functions, with detrending and proper time-axis preservation. The **Period Search** (Negative Log-Likelihood spectrum) plot computes and displays IHS, AoV, GB, and BLS periodograms using the upstream ihsnpeaks computation pipeline via a multithreaded C bridge.
 
 **Parent project:** This is a downstream subproject of `ihsnpeaks` — located at `ihsnpeaks/downstream/lc-qt/`. It uses `json.h` from the parent project (`ihsnpeaks/include/json.h`) for configuration persistence, and the upstream `src/` headers (readout, process, convolution, aov, nufft1, kthread) for the computation backend.
 
@@ -12,11 +12,18 @@ The application renders a dark-themed UI replicating the original `lc` tool's la
 
 - **Qt6 Widgets:** Uses `QMainWindow`, `QFrame`, `QGroupBox`, `QLineEdit`, `QPushButton`, `QCheckBox` — classic widget-based desktop UI, no QML.
 - **Dark theme:** Inline `setStyleSheet()` calls define a graphite-dark palette (background `#242429`, accent `#3b82f6`).
+- **Main Window** (`src/windows/main_window.h/.cpp`): Main window implementation managing UI layout, toolbar, menus, light curve loading, classification persistence, and UI-worker signal routing.
 - **LightCurvePlotWidget** (`src/windows/lightcurve_plot.h/.cpp`): A `QFrame` subclass that renders actual scatter data with auto-scaling, grid, and smart axis tick formatting.
+- **PhasedLightCurveWidget** (`src/windows/phased_lightcurve.h/.cpp`): Renders phase-folded light curves duplicated over phase `[0, 2]` with analytical or smoothed model curves overlaid (`lc_model.c`).
 - **SpectrumPlotWidget** (`src/windows/spectrum_plot.h/.cpp`): A `QFrame` subclass that renders the NLL periodogram as a line plot with peak-preserving downsampling (≤8 pts/pixel), not-a-knot cubic spline interpolation when sparse, 5% y-margin (starting at 0), and a progress percentage overlay in the upper-right corner during computation.
-- **C bridge** (`src/lc_periodogram.h` / `src/lc_periodogram.c`): A single C translation unit (compiled with `-std=gnu23`) that wraps the entire upstream ihsnpeaks computation pipeline (`kthread.h`, `process.h`, `readout.h`, `convolution.h`, `aov.h`, `nufft1.h`, etc.) and exposes a clean C API to the C++ frontend: file I/O (`lc_load_dat`, `lc_load_fits`, `lc_detrend`, `lc_free`), periodogram computation (`lc_compute_periodogram_ctx`), and progress monitoring (`lc_progress_*`).
+- **ZoomedSpectrumWidget** (`src/windows/zoomed_spectrum.h/.cpp`): High-resolution zoom window around the selected peak / pivot frequency with interactive FOV scaling and MMB local peak picking.
+- **Computation Workers** (`src/period_worker.h/.cpp`):
+  - `PeriodogramTask` (`QObject` on a `QThread`): Runs full multithreaded periodogram computation in the background via `lc_compute_periodogram_ctx`.
+  - `PhasedModelWorker` (`QObject` on a dedicated `QThread`): Recomputes analytical/smoothed phased models asynchronously as the user scrolls the pivot frequency.
+- **C bridge** (`src/lc_period.h` / `src/lc_period.c`): A single C translation unit (compiled with `-std=gnu23`) that wraps the upstream ihsnpeaks computation pipeline (`kthread.h`, `process.h`, `readout.h`, `convolution.h`, `aov.h`, `nufft1.h`, etc.) and exposes a clean C API to the C++ frontend: file I/O (`lc_load_dat`, `lc_load_fits`, `lc_detrend`, `lc_free`), periodogram computation (`lc_compute_periodogram_ctx`), phased model evaluation (`lc_compute_phased_model`, `lc_compute_phase_offset`), and progress monitoring (`lc_progress_*`).
+- **Phased Model Evaluation** (`src/lc_model.c`): Single-frequency model generator for IHS, AoV (Szego orthogonal polynomials), GBLS (convolution smoothing), and BLS (boxcar fit), included into `lc_period.c`.
 - **Persistent computation context** (`lc_compute_ctx_t`): Caches the thread pool, NuFFT plans, and worker buffers between runs. Rebuilds only when data size, method, fmax, grid mode, or nterms change.
-- **CustomizePeriodSearchDialog** (`src/windows/customize_period_search.h/.cpp`): QDialog with period search parameters: harmonics, oversampling, min/max frequency, zoom factor, search radius, upsampling factor (4/3 or 2/1), oversmoothing factor (GBLS/BLS), and number of bins (BLS).
+- **CustomizePeriodSearchDialog** (`src/windows/customize_period_search.h/.cpp`): QDialog with period search parameters: harmonics, oversampling, min/max frequency, statistic (`raw` vs `bayes`), zoom factor, search radius, upsampling factor (4/3 or 2/1), oversmoothing factor (GBLS/BLS), and number of bins (BLS).
 - **ClassificationDisplay:** A read-only `QLineEdit` with `Qt::NoFocus` that displays the current classification as "N — label". Installed as an `eventFilter` on `QApplication` to intercept 0-9 key presses globally when no text field or spin box has focus.
 - **Static linking:** Build produces a fully static musl binary, optionally UPX-compressed.
 - **AUTOMOC:** CMake `CMAKE_AUTOMOC ON` is enabled for Qt Meta-Object Compiler support (required for `Q_OBJECT` in dialog and widget classes).
@@ -41,14 +48,14 @@ The application renders a dark-themed UI replicating the original `lc` tool's la
 ## Classification System
 
 The main window has a split "Log Files" row with two `QGroupBox`es:
-- **Statistics** (left): "Class stats" button → opens `ClassificationStatsDialog`
-- **Classification** (right): "Customize labels" button, "Current:" label, and read-only `ClassificationDisplay` box. Approving by clicking Enter (standard or NumPad) copies the classification to the "Type" input box.
+- **Object List** (left): Input box, Open button, and Entry No. field
+- **Classification** (right): "Customize labels" button, "Class stats" button, "Cur:" label, and read-only `ClassificationDisplay` box. Approving by clicking Enter (standard or NumPad) copies the classification to the "Type" input box.
 
 ## Period Search (Spectrum Generation)
 
 ### Overview
 
-The "Period Search" section computes and displays Negative Log-Likelihood (NLL) frequency spectra using the upstream ihsnpeaks computation pipeline. Four methods are available: **AoV**, **IHS**, **GB** (GBLS), and **BLS**. Computation is fully multithreaded using a shared `kt_forpool_t` thread pool.
+The "Period Search" section computes and displays Negative Log-Likelihood (NLL) / Bayesian Relative Evidence frequency spectra using the upstream ihsnpeaks computation pipeline. Four methods are available: **AoV**, **IHS**, **GB** (GBLS), and **BLS**. Computation is fully multithreaded using a shared `kt_forpool_t` thread pool.
 
 ### Button mapping
 
@@ -64,7 +71,7 @@ The "Period Search" section computes and displays Negative Log-Likelihood (NLL) 
 - **Thread pool**: Created with all logical CPUs (SMT enabled) via `sysconf(_SC_NPROCESSORS_ONLN)`.
 - **GB/BLS**: Use all logical threads (embarrassingly parallel per-frequency evaluation with independent scratch spaces).
 - **IHS/AoV**: Workset count capped at physical core count (`max_slices` parameter) to avoid SMT contention on NuFFT-heavy workloads.
-- **Progress**: NuFFT-block-level atomic progress updates for IHS/AoV; per-frequency atomic updates for GB/BLS. Progress percentage is drawn in the upper-right corner of the spectrum plot (font 12 bold). Time estimation is shown in the status bar.
+- **Progress**: NuFFT-block-level atomic progress updates for IHS/AoV; per-frequency atomic updates for GB/BLS. Progress percentage is drawn in the upper-right corner of the spectrum plot. Time estimation is shown in the status bar.
 - **Cancellation**: Stop button sets an atomic cancel flag. GB/BLS workers stop at chunk boundaries; IHS/AoV run to completion (fast) and discard the result.
 
 ### Computation flow
@@ -75,8 +82,8 @@ The "Period Search" section computes and displays Negative Log-Likelihood (NLL) 
    - Copies data into the primary buffer, runs `preprocess_buffer`.
    - Computes frequency grid using the **actual time span** (`x[n-1] - x[0]`), not absolute `x[n-1]`.
    - Runs the parallel sweep (IHS/AoV via NuFFT blocks, GB/BLS via direct grid).
-   - Converts power→NLL in parallel (`aov_likelihood_from_r2` for AoV, `correct_ihs_res` for IHS, direct for GB/BLS).
-3. Result (`fmin`, `fstep`, `nll[]`) is emitted to the GUI thread and rendered by `SpectrumPlotWidget`.
+   - Converts power→NLL in parallel (Pochhammer rising factorial expansions for AoV/GB, `correct_ihs_res` for IHS, or Bayesian evidence).
+3. Result (`fmin`, `fstep`, `nll[]`, detected peaks) is emitted to the GUI thread, rendered by `SpectrumPlotWidget`, and passed to `ZoomedSpectrumWidget`.
 
 ### Customize Period Search dialog
 
@@ -85,40 +92,18 @@ Accessible via the "…" button or the "Customize Period Search..." menu action.
 - **Oversampling** (default 5)
 - **Min frequency** (QLineEdit with "auto" placeholder; empty = auto `2/span`)
 - **Max frequency** (default 24)
-- **Zooming factor** (default 4, stored but unused)
-- **Search radius** (default 0.1, stored but unused)
+- **Statistic** (`raw` for classical NLL, `bayes` for Bayesian evidence ratio)
+- **Zooming factor** (default 4)
+- **Search radius** (default 0.1)
 - **Upsampling factor** (combo: "4/3" → pswf43, "2/1" → pswf21)
 - **Oversmoothing factor** (default 0.2 → `gbAlpha` for GBLS, `blsMinRelWidth` for BLS; BLS max width hardcoded 0.5)
 - **Number of bins** (default 10 → `blsWidthCount`, BLS only)
 
 All settings persist to `.lc-config.json`. Decimal delimiter is forced to "." (`QLocale::c()`).
 
-### Spectrum rendering
-
-- **Y-axis**: Starts at 0, 5% headroom above max, not inverted (higher NLL = higher on screen).
-- **Dense data** (≥1 pt/px): Peak-preserving downsample to ≤8 pts/pixel (keeps local maxima).
-- **Sparse data** (<0.75 pt/px): Not-a-knot cubic spline interpolation at ~6 samples/px.
-- **Empty state**: Shows "No data" centered.
-
-### ClassificationDisplay (`src/main.cpp`)
-- Read-only `QLineEdit` with `Qt::NoFocus` policy (never steals focus)
-- Installed as `eventFilter` on `QApplication` — intercepts 0-9 key presses globally to change classification, and Enter/Return key presses to approve the classification (copying text to "Type" box)
-- Only catches keys when the focused widget is NOT a `QLineEdit` (so typing in text fields works normally)
-- Displays current classification as "N — label"
-
-### CustomizeLabelsDialog (`src/windows/customize_labels.h` / `.cpp`)
-- QDialog with 10 editable label rows (0-9), all editable
-- Defaults: 0="nonvar", 1="var", 2-9="unknown"
-- **NumPad navigation checkbox** at top (default off): when enabled, hides slots 2, 4, 6, 8 (numpad arrow keys), leaving only 0, 1, 3, 5, 7, 9. Visible rows are compacted to the top of the grid (no gaps).
-- Checking (but not unchecking) this option dynamically closes and automatically reopens the dialog (preserving user label edits) to clean up layout presentation.
-- Emits `labelsChanged()` signal on OK (or when automatically accepted for NumPad navigation change), which triggers `saveConfig()` and display refresh
-
-### ClassificationStatsDialog (`src/windows/classification_stats.h` / `.cpp`)
-- QDialog showing a table: number (0-9) | label text | count (all 0 for now)
-
 ## Configuration Persistence
 
-On startup, `loadConfig()` reads `.lc-config.json` from the working directory using `json.h` (sheredom's header-only JSON parser from `../../include/json.h`). The config uses a JSON array format:
+On startup, `loadConfig()` reads `.lc-config.json` from the working directory using `json.h` (sheredom's header-only JSON parser from `../../include/json.h`).
 
 ```json
 {
@@ -126,6 +111,9 @@ On startup, `loadConfig()` reads `.lc-config.json` from the working directory us
   "numpad_nav": "false",
   "files": [
     {"path": "/path/to/OGLE-BLAP-035.dat", "n": 2240}
+  ],
+  "targets": [
+    {"path": "/path/to/OGLE-BLAP-035.dat", "class": 1}
   ],
   "period_search": {
     "nterms": 3,
@@ -136,12 +124,16 @@ On startup, `loadConfig()` reads `.lc-config.json` from the working directory us
     "search_radius": 0.1,
     "pswf": 43,
     "oversmoothing": 0.2,
-    "nbins": 10
+    "nbins": 10,
+    "scroll_rate": 1.0,
+    "auto_center": "true",
+    "display_frequency": "false",
+    "statistic": "bayes"
   }
 }
 ```
 
-Legacy `"label0"`...`"label9"` key-value format is still read for backward compatibility. `saveConfig()` always writes the new array format.
+`saveConfig()` writes the array format back whenever settings or classifications change.
 
 ## Building
 
@@ -192,33 +184,34 @@ docker run --rm -v "$(pwd)":/app -v "$(pwd)/../../include":/external_include -v 
 ./lc-qt path/to/file.dat # Launch and auto-load a light curve
 ```
 
-Displays the Qt6 GUI window. Press 0-9 keys (when no text field is focused) to set classification. Edit labels via Customize Labels dialog (persists to `.lc-config.json`). Load light curves via File menu or command-line argument.
-
 ## File Structure
 
 ```
 lc-qt/
 ├── src/
-│   ├── main.cpp                    — Qt6 application entry point: UI layout, light curve loading,
-│   │                                  ClassificationDisplay, PeriodogramTask worker, period search
-│   │                                  wiring, loadConfig/saveConfig, main()
+│   ├── main.cpp                    — Application entry point: QApplication setup, main window launch
+│   ├── period_worker.h/.cpp        — Multithreaded PeriodogramTask & PhasedModelWorker QObject workers
 │   ├── lc_readout.h                — C bridge public API: lc_data_t, lc_load_dat/fits/detrend/free
-│   ├── lc_periodogram.h            — C bridge public API: lc_periodogram_config_t, lc_compute_ctx_t,
-│   │                                  lc_compute_periodogram_ctx, lc_progress_*
-│   ├── lc_periodogram.c            — C bridge implementation (gnu23): wraps upstream kthread.h +
+│   ├── lc_period.h                 — C bridge public API: lc_periodogram_config_t, lc_compute_ctx_t,
+│   │                                  lc_compute_periodogram_ctx, lc_compute_phased_model, lc_progress_*
+│   ├── lc_period.c                 — C bridge implementation (gnu23): wraps upstream kthread.h +
 │   │                                  process.h + readout.h; multithreaded IHS/AoV/GB/BLS sweeps,
-│   │                                  parallel NLL conversion, persistent context, physical core count
+│   │                                  Pochhammer rising factorials / Bayesian conversions, persistent context
+│   ├── lc_model.c                  — Phased model curve generation (Szego polynomials, convolution, boxcar),
+│   │                                  included into lc_period.c
 │   └── windows/
-│       ├── lightcurve_plot.h       — LightCurvePlotWidget declaration (Q_OBJECT)
-│       ├── lightcurve_plot.cpp     — Scatter plot renderer with auto-scaling and smart ticks
-│       ├── spectrum_plot.h         — SpectrumPlotWidget declaration (line plot + progress overlay)
-│       ├── spectrum_plot.cpp       — NLL spectrum renderer: peak-preserving downsample, cubic spline
-│       ├── customize_period_search.h  — CustomizePeriodSearchDialog + PeriodSearchSettings struct
-│       ├── customize_period_search.cpp — Dialog: harmonics, oversampling, fmin/fmax, pswf, GBLS/BLS params
-│       ├── customize_labels.h      — CustomizeLabelsDialog declaration
-│       ├── customize_labels.cpp    — CustomizeLabelsDialog: 10 editable labels, NumPad nav toggle
-│       ├── classification_stats.h  — ClassificationStatsDialog declaration
-│       └── classification_stats.cpp — ClassificationStatsDialog: count-per-label table
+│       ├── main_window.h/.cpp      — MainWindow class: layout, menus, wiring, key filters, config I/O
+│       ├── lightcurve_plot.h/.cpp  — Scatter plot renderer with auto-scaling and smart ticks
+│       ├── phased_lightcurve.h/.cpp— Phased scatter plot with model fit overlay
+│       ├── spectrum_plot.h/.cpp    — NLL spectrum renderer: peak-preserving downsample, cubic spline
+│       ├── zoomed_spectrum.h/.cpp  — Interactive high-res FOV zoom around selected pivot frequency
+│       ├── customize_period_search.h/.cpp — Dialog: harmonics, oversampling, fmin/fmax, pswf, GBLS/BLS, stats
+│       ├── customize_labels.h/.cpp — CustomizeLabelsDialog: 10 editable labels, NumPad nav toggle
+│       ├── classification_stats.h/.cpp — ClassificationStatsDialog: count-per-label table
+│       └── period_scroll.h/.cpp    — PeriodScrollDialog: scroll rate & fine tuning
+├── test_phased_verify/             — Standalone verification test harness for phased light curve rendering
+│   ├── CMakeLists.txt              — Test harness build config
+│   └── main_verify.cpp             — Automated verification test suite
 ├── CMakeLists.txt                  — CMake config (C23 + C++17, AUTOMOC, static linking, Qt6 Widgets,
 │                                       lc_backend OBJECT library, build-time scaling.h generation)
 ├── Makefile                        — Orchestrates Docker-based static build + UPX compression
@@ -226,15 +219,10 @@ lc-qt/
 │                                       /src symlink for kthread.h cross-mount include
 ├── Dockerfile                      — Debian slim with build-essential, cmake, upx-ucl
 ├── README.md                       — Project description (work in progress)
-├── QWEN.md                         — This file
+├── AGENTS.md                       — This file
 ├── lc-qt                           — Pre-built output binary (git-tracked)
 ├── .lc-config.json                 — Runtime config (labels, files, period_search settings)
 └── buildroot/                      — Prebuilt Buildroot musl SDK (downloaded, not committed)
-    ├── relocate-sdk.sh             — Toolchain relocation script
-    ├── bin/                        — Cross-compiler binaries
-    ├── share/                      — CMake toolchain file
-    └── x86_64-buildroot-linux-musl/
-        └── sysroot/                — Static Qt6 libraries + musl libc
 ```
 
 ## Development Conventions
@@ -243,14 +231,11 @@ lc-qt/
 - **Build system:** CMake (invoked via Docker with Buildroot toolchain). Makefile is a thin wrapper for the Docker workflow.
 - **Static linking:** The final binary must be fully static (`-static`, `--gc-sections`, `.so` files stripped from sysroot). No dynamic linking.
 - **Qt6 only:** Uses `Qt6::Widgets`. No Qt Quick/QML.
-- **AUTOMOC:** Required for any class using `Q_OBJECT` — already enabled in CMakeLists.txt. `main.cpp` includes `main.moc` at the end for the in-file `PeriodogramTask` Q_OBJECT class.
-- **Backend OBJECT library:** `lc_backend` holds `lc_periodogram.c` + `${UPSTREAM_SRC_DIR}/nufft/nufft1.c`. Both compiled with `-std=gnu23 -D_GNU_SOURCE -DMAX_TWIDDLE_REUSE=8`. Dispatch-ready: parameterized `LC_BACKEND_MARCH` for future multi-microarchitecture support.
+- **AUTOMOC:** Required for any class using `Q_OBJECT` — enabled in CMakeLists.txt.
+- **Backend OBJECT library:** `lc_backend` holds `lc_period.c` + `${UPSTREAM_SRC_DIR}/nufft/nufft1.c`. Both compiled with `-std=gnu23 -D_GNU_SOURCE -DMAX_TWIDDLE_REUSE=8`. Dispatch-ready: parameterized `LC_BACKEND_MARCH` for future multi-microarchitecture support.
 - **Build-time scaling.h:** Generated by compiling+running upstream `scaling.c` + `nufft1.c` as `scaling_gen` (static musl binary runs inside the build container). Emits tuned PSWF constants into `${CMAKE_BINARY_DIR}/scaling.h`.
-- **Single C translation unit:** All upstream headers (`kthread.h`, `process.h`, `readout.h`, `convolution.h`, `aov.h`, `nufft1.h`, header-only libs) are included ONLY in `lc_periodogram.c`. Non-static definitions in these headers would cause duplicate-symbol link errors if included elsewhere.
+- **Single C translation unit:** All upstream headers (`kthread.h`, `process.h`, `readout.h`, `convolution.h`, `aov.h`, `nufft1.h`, header-only libs) are included ONLY in `lc_period.c` (and its `#include "lc_model.c"`). Non-static definitions in these headers would cause duplicate-symbol link errors if included elsewhere.
 - **Upstream include isolation:** The upstream `src/` include paths are applied ONLY to the backend sources via `set_source_files_properties` / OBJECT library compile options — never via global `target_include_directories`.
 - **Style:** Dark-themed UI via inline stylesheets — no external CSS/QSS files.
-- **Headers as implementation units:** Dialog windows and widgets use separate `.h`/`.cpp` pairs in `src/windows/`.
-- **No test framework:** No tests exist yet.
 - **The `buildroot/` directory** is downloaded by the build process and should not be committed to git (it is a large prebuilt SDK). Do not use `make deep-clean` to remove it — it is already gitignored.
 - **json.h dependency:** The sheredom `json.h` header-only parser lives in the parent project at `ihsnpeaks/include/json.h`. It is mounted into Docker builds at `/external_include/` via `build.sh`. The CMake `EXTERNAL_INCLUDE_DIR` variable controls the path.
-- **build.sh symlink:** Creates `/src -> /upstream_src` inside the container so `kthread.h`'s relative include (`../../src/params.h`) resolves across the separate Docker mounts.

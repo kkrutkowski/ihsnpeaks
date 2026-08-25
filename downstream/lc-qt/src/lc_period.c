@@ -1,5 +1,5 @@
 /*
- * lc_periodogram.c — Single C translation unit bridging upstream ihsnpeaks into lc-qt.
+ * lc_period.c — Single C translation unit bridging upstream ihsnpeaks into lc-qt.
  *
  * This is the "backend": it hosts BOTH the light-curve readout loaders (moved from
  * lc_readout.c) AND the multithreaded periodogram/spectrum generator. All upstream
@@ -8,7 +8,7 @@
  * duplicate-symbol link errors.
  *
  * Dispatch-ready: kept as a single bridge object with LC_API marking the intended public
- * entry points (see lc_periodogram.h); no -fvisibility=hidden is used. nufft1.c is a separate
+ * entry points (see lc_period.h); no -fvisibility=hidden is used. nufft1.c is a separate
  * object (not #included here), mirroring the ihsnpeaks release dispatch model for future
  * multi-microarchitecture builds.
  *
@@ -32,7 +32,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "lc_periodogram.h"
+#include "lc_period.h"
 
 /* kthread.h defines kt_forpool_t and pulls in params.h -> metadata.h -> scaling.h.
  * It must be included before process.h. */

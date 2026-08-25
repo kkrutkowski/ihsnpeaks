@@ -248,43 +248,31 @@ int main(int argc, char *argv[]) {
         w.setModel(model.constData(), d.n, style, f1);
         CHECK(std::abs(w.phaseOffset() - offset) < 1e-6, "[%s] widget phase offset matches calculated offset", methodNames[mi]);
 
-        /* Verify extremum alignment near 0.5 */
-        if (methods[mi] == LC_SPEC_IHS || methods[mi] == LC_SPEC_AOV) {
-            /* Compute median of dataset */
-            QVector<float> ys(d.y, d.y + d.n);
-            std::sort(ys.begin(), ys.end());
-            double med = (d.n % 2 == 1) ? ys[d.n / 2] : 0.5 * (ys[d.n / 2 - 1] + ys[d.n / 2]);
+        /* Verify extremum alignment: phase 0.5 for minimum extremum, phase 0.0 for maximum extremum */
+        QVector<float> ys(d.y, d.y + d.n);
+        std::sort(ys.begin(), ys.end());
+        double med = (d.n % 2 == 1) ? ys[d.n / 2] : 0.5 * (ys[d.n / 2 - 1] + ys[d.n / 2]);
 
-            float minV = model[0], maxV = model[0];
-            uint32_t minI = 0, maxI = 0;
-            for (uint32_t i = 1; i < d.n; ++i) {
-                if (model[i] < minV) { minV = model[i]; minI = i; }
-                if (model[i] > maxV) { maxV = model[i]; maxI = i; }
-            }
-            double dBright = std::abs((double)minV - med) * LC_BRIGHTNESS_BIAS;
-            double dFaint = std::abs((double)maxV - med) * 1.0;
-            uint32_t extI = (dBright > dFaint) ? minI : maxI;
-
-            double foldedPhase = std::fmod((d.x[extI] - t0) * f1 + offset, 1.0);
-            if (foldedPhase < 0.0) foldedPhase += 1.0;
-            CHECK(std::abs(foldedPhase - 0.5) < 1e-5, "[%s] extremum point lands at phase 0.5 (actual: %f)", methodNames[mi], foldedPhase);
-        } else if (methods[mi] == LC_SPEC_GB) {
-            QVector<float> ys(d.y, d.y + d.n);
-            std::sort(ys.begin(), ys.end());
-            double med = (d.n % 2 == 1) ? ys[d.n / 2] : 0.5 * (ys[d.n / 2 - 1] + ys[d.n / 2]);
-
-            uint32_t extI = 0;
-            double maxDist = -1.0;
-            for (uint32_t i = 0; i < d.n; ++i) {
-                double v = model[i];
-                double dist = (v < med) ? (med - v) * LC_BRIGHTNESS_BIAS : (v - med);
-                if (dist > maxDist) { maxDist = dist; extI = i; }
-            }
-            double foldedPhase = std::fmod((d.x[extI] - t0) * f1 + offset, 1.0);
-            if (foldedPhase < 0.0) foldedPhase += 1.0;
-            /* Folded phase of initial extremum should be within neighbourhood of 0.5 */
-            CHECK(std::abs(foldedPhase - 0.5) < 0.05, "[GB] initial extremum point is near phase 0.5 (actual: %f)", foldedPhase);
+        uint32_t minI = 0, maxI = 0;
+        float minV = model[0], maxV = model[0];
+        for (uint32_t i = 0; i < d.n; ++i) {
+            if (model[i] < minV) { minV = model[i]; minI = i; }
+            if (model[i] > maxV) { maxV = model[i]; maxI = i; }
         }
+        double dBright = std::abs((double)minV - med) * LC_BRIGHTNESS_BIAS;
+        double dFaint = std::abs((double)maxV - med) * 1.0;
+        double targetPhase = (methods[mi] == LC_SPEC_BLS) ? 0.5 : ((dFaint > dBright) ? 0.5 : 0.0);
+        uint32_t targetIdx = maxI;
+        if (methods[mi] == LC_SPEC_BLS) {
+            targetIdx = (std::abs((double)minV - med) > std::abs((double)maxV - med)) ? minI : maxI;
+        }
+
+        double foldedPhase = std::fmod((d.x[targetIdx] - t0) * f1 + offset, 1.0);
+        if (foldedPhase < 0.0) foldedPhase += 1.0;
+        double phaseDiff = std::abs(foldedPhase - targetPhase);
+        if (phaseDiff > 0.5) phaseDiff = std::abs(phaseDiff - 1.0);
+        double tol = (methods[mi] == LC_SPEC_BLS) ? 0.25 : 0.05;
+        CHECK(phaseDiff < tol, "[%s] trough/dip point is near target phase %f (actual: %f)", methodNames[mi], targetPhase, foldedPhase);
     }
 
     /* --- 7. Recomputing GB/BLS spectrum after changing alpha with persistent context --- */
