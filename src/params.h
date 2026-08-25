@@ -33,7 +33,9 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.blsMaxRelWidth = 0.5;
     params.blsWidthCount = 10;
     params.npeaks = 10;
+    params.columns = 5;
     params.nterms = 3;
+    params.detrend_degree = 3;
     params.defaultGridRatio = 128;
     params.gridRatio = 128;
     params.gridMode = NUFFT1_PSWF43;
@@ -42,6 +44,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.periodogramMethod = PERIODOGRAM_AUTO;
     params.statistic = STATISTIC_AUTO;
     params.gbEvalMode = GB_EVAL_GBLS;
+    params.norm = NORM_L2;
     params.bind_mode = BIND_AUTO;
 
     return params;
@@ -57,6 +60,7 @@ void print_parameters(parameters *params) {
     printf("\tExpected systemic variation: %.1e\n", params->epsilon);
     printf("\tPeriodogram method: %s\n", periodogram_method_name(params->periodogramMethod));
     printf("\tStatistic: %s\n", statistic_name(params->statistic));
+    printf("\tNorm: %s\n", norm_name(params->norm));
     const eval_method_t *method = eval_method_for_params(params);
     printf("\tPeak evaluation: %s\n", method->name);
     if (method->uses_duration_grid) {
@@ -65,7 +69,9 @@ void print_parameters(parameters *params) {
         printf("\tGaussian blur alpha: %.6g\n", params->gbAlpha);
     }
     printf("\tNpeaks: %d\n", params->npeaks);
+    printf("\tColumns: %d\n", params->columns);
     printf("\tNterms: %d\n", params->nterms);
+    printf("\tDetrending degree: %d\n", params->detrend_degree);
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
     printf("\tPrewhiten: %s\n", params->prewhiten ? "true" : "false");
     printf("\tOutput period: %s\n", params->outputPeriod ? "true" : "false");
@@ -137,6 +143,7 @@ void print_help(char **argv) {
     printf("  -i, --idle                Use idle-type compute threads (default: false)\n");
     printf("  -o, --oversampling        Set expected number of frequencies per main lobe (default: 5.0)\n");
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
+    printf("  -c, --columns             Number of top peaks to display in terminal and write to output (default: 5, 0 = all)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
     printf("  -b, --bind                Thread binding: 0|false (OS scheduling), 1|strict (hwloc PU pinning), 2|auto (default), 3|cache (L3 die affinity);\n");
     printf("                            shortcuts: -bs=strict, -bc=cache; auto: strict if multi-NUMA, false otherwise\n");
@@ -144,6 +151,9 @@ void print_help(char **argv) {
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
     printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio) or raw (Classical NLL, default: bayes for m0-m2 AoV, raw otherwise)\n");
+    printf("      --norm                Fitting norm: l2 (standard least-squares, default) or l1 (IRLS L1 fitting for gbls)\n");
+    printf("      --ddet, --detrending-degree\n");
+    printf("                            Trigonometric polynomial detrending degree (default: 3, 0 = constant only)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
@@ -274,6 +284,8 @@ static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
 
     enum {
+        OPT_DDET = 0xF5,
+        OPT_NORM = 0xF6,
         OPT_STATISTIC = 0xF7,
         OPT_PERIOD = 0xF8,
         OPT_EPSILON = 0xF9,
@@ -289,11 +301,14 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"peaks", ko_required_argument, 'n'},
                                       {"degree", ko_required_argument, 'd'},
                                       {"terms", ko_required_argument, 'd'},
+                                      {"ddet", ko_required_argument, OPT_DDET},
+                                      {"detrending-degree", ko_required_argument, OPT_DDET},
                                       {"threshold", ko_required_argument, 't'},
                                       {"fmin", ko_required_argument, 'f'},
                                       {"oversampling", ko_required_argument, 'o'},
                                       {"epsilon", ko_required_argument, OPT_EPSILON},
                                       {"statistic", ko_required_argument, OPT_STATISTIC},
+                                      {"norm", ko_required_argument, OPT_NORM},
                                       {"eval", ko_required_argument, 'e'},
                                       {"evaluate", ko_required_argument, 'e'},
                                       {"mode", ko_required_argument, 'm'},
@@ -306,7 +321,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"bind", ko_required_argument, 'b'},
                                       {"save", ko_no_argument, 's'},
                                       {"spectrum", ko_no_argument, 's'},
-                                      {"corrected", ko_no_argument, 'c'},  // apply the logarithmic correction, not fully implemented
+                                      {"columns", ko_required_argument, 'c'},
                                       {"idle", ko_no_argument, 'i'},
                                       {"prewhiten", ko_no_argument, 'p'},
                                       {"help", ko_no_argument, 'h'},
@@ -323,7 +338,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     opt.ind = 2;  // Start parsing options from argv[2]
 
     int c;
-    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:t:f:e:j:m:g:b:sich", longopts)) != -1) {
+    while ((c = ketopt(&opt, argc, argv, 1, "o:d:n:c:t:f:e:j:m:g:b:siph", longopts)) != -1) {
         // printf("argument: %c", c);
         switch (c) {
             case 'o':
@@ -331,6 +346,10 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'n':
                 params.npeaks = atoi(opt.arg);
+                break;
+            case 'c':
+                params.columns = atoi(opt.arg);
+                if (params.columns < 0) params.columns = 0;
                 break;
             case 'd':
                 params.nterms = atoi(opt.arg);
@@ -393,6 +412,27 @@ static parameters read_parameters(int argc, char *argv[]) {
                     exit(EXIT_FAILURE);
                 }
                 break;
+            case OPT_DDET: {
+                errno = 0;
+                char *det_end = NULL;
+                long parsed_ddet = strtol(opt.arg, &det_end, 10);
+                if (errno != 0 || det_end == opt.arg || *det_end != '\0' || parsed_ddet < 0) {
+                    fprintf(stderr, "Invalid detrending degree '%s'. Expected non-negative integer.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                params.detrend_degree = (int)parsed_ddet;
+                break;
+            }
+            case OPT_NORM:
+                if (strcasecmp(opt.arg, "l1") == 0) {
+                    params.norm = NORM_L1;
+                } else if (strcasecmp(opt.arg, "l2") == 0) {
+                    params.norm = NORM_L2;
+                } else {
+                    fprintf(stderr, "Invalid norm '%s'. Expected 'l1' or 'l2'.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                break;
             case OPT_EPSILON:
                 params.epsilon = atof(opt.arg);
                 break;
@@ -414,9 +454,6 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case 'i':
                 params.idle = true;
-                break;
-            case 'c':
-                params.corrected = true;
                 break;
             case 'h':
                 print_help(argv);
@@ -440,6 +477,16 @@ static parameters read_parameters(int argc, char *argv[]) {
                 fprintf(stderr, "Missing argument for -%c\n", opt.opt ? opt.opt : '?');
                 break;
         }
+    }
+    if (params.mode == 0 && params.columns > 0 && params.npeaks > params.columns) {
+        params.npeaks = params.columns;
+    }
+    if (params.norm == NORM_L1 && params.gbEvalMode != GB_EVAL_GBLS) {
+        fprintf(
+            stderr,
+            "Warning: --norm=l1 is currently supported only with GBLS evaluation (-e gbls). Ignoring --norm=l1 and using default L2 norm for %s evaluation.\n",
+            eval_method_for_mode(params.gbEvalMode)->name);
+        params.norm = NORM_L2;
     }
     if (params.periodogramMethod == PERIODOGRAM_AUTO) {
         params.periodogramMethod = (params.nterms >= 5) ? PERIODOGRAM_AOV : PERIODOGRAM_IHS;

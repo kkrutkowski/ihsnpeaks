@@ -195,8 +195,8 @@ void lc_detrend(lc_data_t *data) {
     }
     mean /= (double)data->n;
 
-    /* Weighted linear regression detrend (stores intercept in buf->magnitude) */
-    linregw_buffer(buf);
+    /* Szego + Schur detrending (stores weighted mean in buf->magnitude) */
+    detrend_buffer_szego(buf, 0.001, 3);
 
     /* Restore original timescale */
     for (unsigned int i = 0; i < data->n; i++) {
@@ -205,7 +205,7 @@ void lc_detrend(lc_data_t *data) {
 
     /* Add mean value back so the plot shows physically meaningful levels */
     for (unsigned int i = 0; i < data->n; i++) {
-        data->y[i] += (float)mean;
+        data->y[i] += buf->magnitude;
     }
 
     data->magnitude = buf->magnitude;
@@ -1135,7 +1135,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
         buf->dy[i] = data->dy[i];
     }
     buf->n = n;
-    preprocess_buffer(buf, params->epsilon, params->mode);
+    preprocess_buffer(buf, params->epsilon, params->detrend_degree);
 
     double grid_span = buf->x[buf->n - 1] - buf->x[0];
     if (grid_span <= 0.0) grid_span = buf->x[buf->n - 1];

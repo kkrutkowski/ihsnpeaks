@@ -418,19 +418,21 @@ static int lc_model_gb(const double *x, const float *y, const float *dy, uint32_
     void *buf0 = calloc(1, kv_bytes > idx_bytes ? kv_bytes : idx_bytes);
     void *buf1 = calloc(1, kv_bytes);
     void *buf2 = calloc(1, (size_t)n * sizeof(double));
+    void *buf3 = calloc(1, (size_t)n * sizeof(double));
+    void *buf4 = calloc(1, (size_t)n * sizeof(double));
     size_t *pidx = (size_t *)calloc(1024, sizeof(size_t));
-    if (!buf0 || !buf1 || !buf2 || !pidx) {
-        free(buf0); free(buf1); free(buf2); free(pidx);
+    if (!buf0 || !buf1 || !buf2 || !buf3 || !buf4 || !pidx) {
+        free(buf0); free(buf1); free(buf2); free(buf3); free(buf4); free(pidx);
         return -1;
     }
 
-    void *bufs[3] = {buf0, buf1, buf2};
+    void *bufs[5] = {buf0, buf1, buf2, buf3, buf4};
     buf.buf = bufs;
     buf.pidx = pidx;
 
     gb_projection_t projection = {0};
-    if (!gb_prepare_projection(&buf, freq, true, gbAlpha, 1.0, &projection)) {
-        free(buf0); free(buf1); free(buf2); free(pidx);
+    if (!gb_prepare_projection(&buf, freq, true, gbAlpha, 1.0, NORM_L2, &projection)) {
+        free(buf0); free(buf1); free(buf2); free(buf3); free(buf4); free(pidx);
         return -1;
     }
 
@@ -445,7 +447,7 @@ static int lc_model_gb(const double *x, const float *y, const float *dy, uint32_
         }
     }
 
-    free(buf0); free(buf1); free(buf2); free(pidx);
+    free(buf0); free(buf1); free(buf2); free(buf3); free(buf4); free(pidx);
     return 0;
 }
 

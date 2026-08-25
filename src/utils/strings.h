@@ -186,7 +186,8 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     int i;
 
     for (i = 0; i < HdrCols; i++) colWidth[i] = (int)strlen(hdr[i]);
-    for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
+    int max_print = (params->columns > 0 && params->columns < (int)buffer->nPeaks) ? params->columns : (int)buffer->nPeaks;
+    for (i = 0; i < max_print && buffer->peaks[i].p > 0; i++) {
         custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
         int len = (int)strlen(stringBuff);
         if (len > colWidth[0]) colWidth[0] = len;
@@ -244,7 +245,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
     }
     // Second pass: print each peak row with proper padding.
     {
-        for (i = 0; i < buffer->nPeaks && buffer->peaks[i].p > 0; i++) {
+        for (i = 0; i < max_print && buffer->peaks[i].p > 0; i++) {
             buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
 
             custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
@@ -282,6 +283,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
 }
 
 void fprint_buffer(buffer_t *buffer, parameters *params) {
+    if (!buffer || !buffer->outBuf || sdslen(buffer->outBuf) == 0 || !params || !params->outFile) return;
     pthread_mutex_lock(&params->mutex);
     FILE *file = fopen(params->outFile, "a");  // Open the file in append mode
     if (file == NULL) {
@@ -302,6 +304,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
     bool print_amp = mode > 0;
     int i = 0;
+    int max_cols = (params->columns > 0 && params->columns < (int)buffer->nPeaks) ? params->columns : (int)buffer->nPeaks;
     if (buffer->nPeaks > 0) {
         // Append file information to the output buffer
         buffer->outBuf = sdscat(buffer->outBuf, in_file);
@@ -316,7 +319,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
 
         // Append each peak's information to the output buffer
         if (use_aov && !print_amp) {
-            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
+            while (i < max_cols && buffer->peaks[i].p > 0) {
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
                 custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n + (mode > 1 ? 1 : 0), stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
@@ -330,7 +333,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 i++;
             }
         } else if (use_aov) {
-            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
+            while (i < max_cols && buffer->peaks[i].p > 0) {
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
                 custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n + 1, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
@@ -349,7 +352,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 i++;
             }
         } else if (mode == 0) {
-            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
+            while (i < max_cols && buffer->peaks[i].p > 0) {
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
                 custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
@@ -361,7 +364,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
                 i++;
             }
         } else {
-            while (i < buffer->nPeaks && buffer->peaks[i].p > 0) {
+            while (i < max_cols && buffer->peaks[i].p > 0) {
                 buffer->outBuf = sdscatlen(buffer->outBuf, "\t[", 2);
                 custom_coordinate_dtoa(buffer->peaks[i].freq, params->outputPeriod, n + 1, stringBuff);
                 buffer->outBuf = sdscat(buffer->outBuf, stringBuff);

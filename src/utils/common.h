@@ -41,6 +41,18 @@ static inline const char* statistic_name(statistic_type_t stat) {
     }
 }
 
+typedef enum { NORM_L2 = 0, NORM_L1 } norm_type;
+
+static inline const char* norm_name(norm_type norm) {
+    switch (norm) {
+        case NORM_L1:
+            return "l1";
+        case NORM_L2:
+        default:
+            return "l2";
+    }
+}
+
 #define BIND_FALSE 0
 #define BIND_STRICT 1
 #define BIND_AUTO 2
@@ -215,8 +227,32 @@ static inline int periodogram_effective_n(const buffer_t* buffer) {
     return (int)n_eff;
 }
 
+enum { GB_SCRATCH_BUF_COUNT = 5 };
+
+static inline uint16_t float_to_bf16(float f) {
+    union {
+        float f;
+        uint32_t u;
+    } pun = {.f = f};
+    uint32_t rounding_bias = 0x7FFFU + ((pun.u >> 16U) & 1U);
+    return (uint16_t)((pun.u + rounding_bias) >> 16U);
+}
+
+static inline float bf16_to_float(uint16_t bf) {
+    union {
+        uint32_t u;
+        float f;
+    } pun = {.u = ((uint32_t)bf) << 16U};
+    return pun.f;
+}
+
 typedef union {
     uint64_t data;  // The raw 64-bit representation
+    struct {
+        uint16_t key;     // 16-bit phase key (10-bit phase: 0..1023)
+        uint16_t weight;  // 16-bit bfloat16 weight
+        float val;        // 32-bit floating-point value (y)
+    } packed;
     struct {
         uint16_t key;  // 16-bit key
         uint16_t idx;  // 16-bit index
@@ -244,12 +280,15 @@ typedef struct {
     double blsMaxRelWidth;
     int blsWidthCount;
     int npeaks;
+    int columns;
     int nterms;
+    int detrend_degree;
     int mode;
     int jobs;
     periodogram_method periodogramMethod;
     statistic_type_t statistic;
     gb_eval_mode gbEvalMode;
+    norm_type norm;
     bool isFile;
     bool spectrum;
     bool debug;

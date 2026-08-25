@@ -106,16 +106,14 @@ static inline void free_buffer(buffer_t* buffer) {
     sdsfree(buffer->spectrum);
 
     if (buffer->buf) {
-        for (int i = 0; i < 3; i++) {
-            if (buffer->buf && buffer->buf[i]) {
+        for (int i = 0; i < GB_SCRATCH_BUF_COUNT; i++) {
+            if (buffer->buf[i]) {
                 free(buffer->buf[i]);
                 buffer->buf[i] = NULL;
             }
         }
-        if (buffer->buf) {
-            free(buffer->buf);
-            buffer->buf = NULL;
-        }
+        free(buffer->buf);
+        buffer->buf = NULL;
     }
 }
 
@@ -294,8 +292,8 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
     buffer->nPeaks = 0;
     if (!buffer->peaks) goto error;
     if ((params->mode > 0 || params->prewhiten) && !buffer->buf) {
-        buffer->buf = calloc(3, sizeof(void*));
-        for (int i = 0; i < 3; i++) {
+        buffer->buf = calloc(GB_SCRATCH_BUF_COUNT, sizeof(void*));
+        for (int i = 0; i < GB_SCRATCH_BUF_COUNT; i++) {
             buffer->buf[i] = aligned_alloc(64, round_buffer(params->maxLen * sizeof(uint64_t)));
         }
     }
@@ -313,77 +311,330 @@ static inline void print_buffer(buffer_t* buffer) {
     }
 }
 
-static inline void linreg_buffer(buffer_t* buffer) {
+static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int detrend_degree) {
+    if (!buffer || buffer->n == 0) return;
+    uint32_t n = buffer->n;
+
     // Center the measurement times - increases precision of future computation
-    for (unsigned int i = 1; i < buffer->n; i++) {
-        buffer->x[i] -= buffer->x[0];
+    double x0 = buffer->x[0];
+    for (uint32_t i = 1; i < n; i++) {
+        buffer->x[i] -= x0;
     }
-    buffer->x[0] = 0;
+    buffer->x[0] = 0.0;
 
-    // Initialize sums for regression
-    double sumx = 0, sumxsq = 0, sumy = 0, sumxy = 0;
-    double lin = 0, c = 0;
+    double span = buffer->x[n - 1] - buffer->x[0];
 
-    for (unsigned int i = 0; i < buffer->n; i++) {
-        sumx += buffer->x[i];                   // sum of x
-        sumxsq += buffer->x[i] * buffer->x[i];  // sum of x^2
-        sumy += buffer->y[i];                   // sum of y
-        sumxy += buffer->x[i] * buffer->y[i];   // sum of x*y
-    }
-
-    // Calculate the denominator for the slope and intercept
-    double denum = ((double)(buffer->n) * sumxsq) - (sumx * sumx);
-
-    // Compute the slope (lin) and intercept (c)
-    lin = ((buffer->n * sumxy) - (sumx * sumy)) / denum;
-    c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
-
-    // Adjust the y values based on the regression line
-    for (unsigned int i = 0; i < buffer->n; i++) {
-        buffer->y[i] -= (lin * buffer->x[i]) + c;
-    }
-    // sumy = 0;
-    // for (unsigned int i = 0; i < buffer->n; i++) {sumy += buffer->y[i]};
-    // sumy /= buffer->n;
-    // for (unsigned int i = 0; i < buffer->n; i++) {buffer->y[i] -= (lin * buffer->x[i]) + c;}
-}
-
-static inline void linregw_buffer(buffer_t* buffer) {
-    // Center the measurement times - increases precision of future computation
-    for (unsigned int i = 1; i < buffer->n; i++) {
-        buffer->x[i] -= buffer->x[0];
-    }
-    buffer->x[0] = 0;
-
-    // Initialize sums for weighted regression
-    double sumx = 0, sumxsq = 0, sumy = 0, sumxy = 0, sumw = 0;  // Add sum of weights
-    double lin = 0, c = 0, w;
-
-    for (unsigned int i = 0; i < buffer->n; i++) {
-        w = 1 / (buffer->dy[i] * buffer->dy[i]);  // weight as the inverse of variance
-        if (w > 0) {
-            sumw += w;                                   // accumulate total weights
-            sumx += buffer->x[i] * w;                    // weighted sum of x
-            sumxsq += buffer->x[i] * buffer->x[i] * w;   // weighted sum of x^2
-            sumy += buffer->y[i] * w;                    // weighted sum of y
-            sumxy += (buffer->x[i] * buffer->y[i]) * w;  // weighted sum of x*y
-        } else {
-            buffer->dy[i] = 999.9;
+    // Compute weights and weighted mean
+    double ws = 0.0;
+    double wysum = 0.0;
+    for (uint32_t i = 0; i < n; i++) {
+        double w = 1.0;
+        if (buffer->dy) {
+            double dy_val = (double)buffer->dy[i];
+            if (dy_val > 0.0 && isfinite(dy_val)) {
+                w = 1.0 / (dy_val * dy_val + epsilon);
+            } else {
+                buffer->dy[i] = 999.9f;
+                w = 1.0 / (999.9 * 999.9 + epsilon);
+            }
         }
+        ws += w;
+        wysum += w * (double)buffer->y[i];
     }
 
-    // Calculate the denominator for the slope and intercept
-    double denum = (sumw * sumxsq) - (sumx * sumx);
+    double y_mean = (ws > 0.0 && isfinite(ws)) ? (wysum / ws) : 0.0;
+    buffer->magnitude = (float)y_mean;
 
-    // Compute the slope (lin) and intercept (c)
-    lin = ((sumw * sumxy) - (sumx * sumy)) / denum;
-    c = ((sumy * sumxsq) - (sumx * sumxy)) / denum;
-    buffer->magnitude = c;
+    // Degrees of freedom clamping: 4d + 2 <= n -> d <= (n - 2) / 4
+    int req_degree = detrend_degree < 0 ? 0 : detrend_degree;
+    int max_supported_degree = ((int)n - 2) / 4;
+    if (max_supported_degree < 0) max_supported_degree = 0;
+    int eff_degree = req_degree < max_supported_degree ? req_degree : max_supported_degree;
 
-    // Adjust the y values based on the regression line
-    for (unsigned int i = 0; i < buffer->n; i++) {
-        buffer->y[i] -= (lin * buffer->x[i]) + c;
+    if (!(span > 0.0) || !isfinite(span) || n < 6 || eff_degree == 0) {
+        // Degree 0: Subtract weighted mean only
+        for (uint32_t i = 0; i < n; i++) {
+            buffer->y[i] -= (float)y_mean;
+        }
+        return;
     }
+
+    int nh = eff_degree - 1;  // number of integer harmonics
+    int nn2 = 2 * nh;
+
+    double* rw = (double*)malloc(n * sizeof(double));
+    double* vy = (double*)malloc(n * sizeof(double));
+    double* u1 = (double*)malloc(n * sizeof(double));
+    double* u2 = (double*)malloc(n * sizeof(double));
+    double* ry = (double*)malloc(n * sizeof(double));
+    double* r1 = (double*)malloc(n * sizeof(double));
+    double* r2 = (double*)malloc(n * sizeof(double));
+
+    if (!rw || !vy || !u1 || !u2 || !ry || !r1 || !r2) {
+        free(rw);
+        free(vy);
+        free(u1);
+        free(u2);
+        free(ry);
+        free(r1);
+        free(r2);
+        for (uint32_t i = 0; i < n; i++) buffer->y[i] -= (float)y_mean;
+        return;
+    }
+
+    double f0 = 1.0 / span;
+    double t_mid = span / 2.0;
+
+    // Subspace B: half-harmonic functions
+    // phase = (x - t_mid) / span in [-0.5, 0.5]
+    // u1 = sin(pi * phase) = sin(2 * pi * 0.5 * f0 * (x - t_mid))
+    // u2 = cos(pi * phase) = cos(2 * pi * 0.5 * f0 * (x - t_mid))
+    double u1_ws = 0.0, u2_ws = 0.0;
+    for (uint32_t i = 0; i < n; i++) {
+        double w = 1.0;
+        if (buffer->dy) {
+            double dy_val = (double)buffer->dy[i];
+            if (dy_val > 0.0 && isfinite(dy_val)) {
+                w = 1.0 / (dy_val * dy_val + epsilon);
+            } else {
+                w = 1.0 / (999.9 * 999.9 + epsilon);
+            }
+        }
+        rw[i] = sqrt(w);
+        vy[i] = ((double)buffer->y[i] - y_mean) * rw[i];
+
+        double phase = (buffer->x[i] - t_mid) * f0;
+        u1[i] = sin(M_PI * phase);
+        u2[i] = cos(M_PI * phase);
+        u1_ws += w * u1[i];
+        u2_ws += w * u2[i];
+    }
+
+    double u1_mean = u1_ws / ws;
+    double u2_mean = u2_ws / ws;
+
+    if (nh == 0) {
+        // Degree 1: Subspace A is just the constant (weighted mean).
+        for (uint32_t i = 0; i < n; i++) {
+            ry[i] = (double)buffer->y[i] - y_mean;
+            r1[i] = u1[i] - u1_mean;
+            r2[i] = u2[i] - u2_mean;
+        }
+    } else {
+        // Degree >= 2: Subspace A contains constant + integer harmonics 1..nh.
+        double* zr = (double*)malloc(n * sizeof(double));
+        double* zi = (double*)malloc(n * sizeof(double));
+        double* pr = (double*)malloc(n * sizeof(double));
+        double* pi = (double*)malloc(n * sizeof(double));
+        double* znr = (double*)malloc(n * sizeof(double));
+        double* zni = (double*)malloc(n * sizeof(double));
+        double* phase_nh = (double*)malloc(n * sizeof(double));
+
+        double* cfr_y = (double*)malloc(n * sizeof(double));
+        double* cfi_y = (double*)malloc(n * sizeof(double));
+        double* cfr_1 = (double*)malloc(n * sizeof(double));
+        double* cfi_1 = (double*)malloc(n * sizeof(double));
+        double* cfr_2 = (double*)malloc(n * sizeof(double));
+        double* cfi_2 = (double*)malloc(n * sizeof(double));
+
+        double* my = (double*)calloc(n, sizeof(double));
+        double* m1 = (double*)calloc(n, sizeof(double));
+        double* m2 = (double*)calloc(n, sizeof(double));
+
+        if (!zr || !zi || !pr || !pi || !znr || !zni || !phase_nh || !cfr_y || !cfi_y || !cfr_1 || !cfi_1 || !cfr_2 || !cfi_2 || !my || !m1 || !m2) {
+            free(zr);
+            free(zi);
+            free(pr);
+            free(pi);
+            free(znr);
+            free(zni);
+            free(phase_nh);
+            free(cfr_y);
+            free(cfi_y);
+            free(cfr_1);
+            free(cfi_1);
+            free(cfr_2);
+            free(cfi_2);
+            free(my);
+            free(m1);
+            free(m2);
+            free(rw);
+            free(vy);
+            free(u1);
+            free(u2);
+            free(ry);
+            free(r1);
+            free(r2);
+            for (uint32_t i = 0; i < n; i++) buffer->y[i] -= (float)y_mean;
+            return;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            double phase = (buffer->x[i] - t_mid) * f0;
+            zr[i] = cos(2.0 * M_PI * phase);
+            zi[i] = sin(2.0 * M_PI * phase);
+            pr[i] = rw[i];
+            pi[i] = 0.0;
+            znr[i] = 1.0;
+            zni[i] = 0.0;
+
+            double angle_nh = 2.0 * M_PI * (double)nh * phase;
+            phase_nh[i] = angle_nh;
+            double c_nh = cos(angle_nh);
+            double s_nh = sin(angle_nh);
+
+            double v1_i = (u1[i] - u1_mean) * rw[i];
+            double v2_i = (u2[i] - u2_mean) * rw[i];
+
+            cfr_y[i] = vy[i] * c_nh;
+            cfi_y[i] = vy[i] * s_nh;
+            cfr_1[i] = v1_i * c_nh;
+            cfi_1[i] = v1_i * s_nh;
+            cfr_2[i] = v2_i * c_nh;
+            cfi_2[i] = v2_i * s_nh;
+        }
+
+        for (int step = 0; step <= nn2; step++) {
+            double sn = 0.0;
+            double alr = 0.0, ali = 0.0;
+            double sc_r_y = 0.0, sc_i_y = 0.0;
+            double sc_r_1 = 0.0, sc_i_1 = 0.0;
+            double sc_r_2 = 0.0, sc_i_2 = 0.0;
+
+            for (uint32_t i = 0; i < n; i++) {
+                double pr_i = pr[i];
+                double pi_i = pi[i];
+                sn += pr_i * pr_i + pi_i * pi_i;
+                alr += (zr[i] * pr_i - zi[i] * pi_i) * rw[i];
+                ali += (zr[i] * pi_i + zi[i] * pr_i) * rw[i];
+
+                sc_r_y += pr_i * cfr_y[i] + pi_i * cfi_y[i];
+                sc_i_y += pr_i * cfi_y[i] - pi_i * cfr_y[i];
+
+                sc_r_1 += pr_i * cfr_1[i] + pi_i * cfi_1[i];
+                sc_i_1 += pr_i * cfi_1[i] - pi_i * cfr_1[i];
+
+                sc_r_2 += pr_i * cfr_2[i] + pi_i * cfi_2[i];
+                sc_i_2 += pr_i * cfi_2[i] - pi_i * cfr_2[i];
+            }
+
+            if (sn < 1e-30) sn = 1e-30;
+            alr /= sn;
+            ali /= sn;
+
+            double cr_y = sc_r_y / sn, ci_y = sc_i_y / sn;
+            double cr_1 = sc_r_1 / sn, ci_1 = sc_i_1 / sn;
+            double cr_2 = sc_r_2 / sn, ci_2 = sc_i_2 / sn;
+
+            for (uint32_t i = 0; i < n; i++) {
+                double pr_i = pr[i];
+                double pi_i = pi[i];
+                double c_nh = cos(phase_nh[i]);
+                double s_nh = sin(phase_nh[i]);
+
+                double Ay = cr_y * pr_i - ci_y * pi_i;
+                double By = cr_y * pi_i + ci_y * pr_i;
+                my[i] += Ay * c_nh + By * s_nh;
+
+                double A1 = cr_1 * pr_i - ci_1 * pi_i;
+                double B1 = cr_1 * pi_i + ci_1 * pr_i;
+                m1[i] += A1 * c_nh + B1 * s_nh;
+
+                double A2 = cr_2 * pr_i - ci_2 * pi_i;
+                double B2 = cr_2 * pi_i + ci_2 * pr_i;
+                m2[i] += A2 * c_nh + B2 * s_nh;
+            }
+
+            for (uint32_t i = 0; i < n; i++) {
+                double pr_i = pr[i];
+                double pi_i = pi[i];
+                double zr_i = zr[i];
+                double zi_i = zi[i];
+                double znr_i = znr[i];
+                double zni_i = zni[i];
+
+                double sr = alr * znr_i - ali * zni_i;
+                double si = alr * zni_i + ali * znr_i;
+
+                double new_pr = pr_i * zr_i - pi_i * zi_i - sr * pr_i - si * pi_i;
+                double new_pi = pr_i * zi_i + pi_i * zr_i + sr * pi_i - si * pr_i;
+                pr[i] = new_pr;
+                pi[i] = new_pi;
+
+                double new_znr = znr_i * zr_i - zni_i * zi_i;
+                double new_zni = zni_i * zr_i + znr_i * zi_i;
+                znr[i] = new_znr;
+                zni[i] = new_zni;
+            }
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            double P_A_y = y_mean + (rw[i] > 0.0 ? my[i] / rw[i] : 0.0);
+            double P_A_1 = u1_mean + (rw[i] > 0.0 ? m1[i] / rw[i] : 0.0);
+            double P_A_2 = u2_mean + (rw[i] > 0.0 ? m2[i] / rw[i] : 0.0);
+
+            ry[i] = (double)buffer->y[i] - P_A_y;
+            r1[i] = u1[i] - P_A_1;
+            r2[i] = u2[i] - P_A_2;
+        }
+
+        free(zr);
+        free(zi);
+        free(pr);
+        free(pi);
+        free(znr);
+        free(zni);
+        free(phase_nh);
+        free(cfr_y);
+        free(cfi_y);
+        free(cfr_1);
+        free(cfi_1);
+        free(cfr_2);
+        free(cfi_2);
+        free(my);
+        free(m1);
+        free(m2);
+    }
+
+    // Solve 2x2 Schur complement for Subspace B (1/2 harmonic)
+    double M11 = 0.0, M12 = 0.0, M22 = 0.0;
+    double b1 = 0.0, b2 = 0.0;
+
+    for (uint32_t i = 0; i < n; i++) {
+        double w = rw[i] * rw[i];
+        M11 += w * r1[i] * r1[i];
+        M12 += w * r1[i] * r2[i];
+        M22 += w * r2[i] * r2[i];
+        b1 += w * r1[i] * ry[i];
+        b2 += w * r2[i] * ry[i];
+    }
+
+    double det = M11 * M22 - M12 * M12;
+    double beta1 = 0.0, beta2 = 0.0;
+    double scale = M11 * M22 + 1e-15;
+
+    if (det > 1e-12 * scale) {
+        beta1 = (M22 * b1 - M12 * b2) / det;
+        beta2 = (M11 * b2 - M12 * b1) / det;
+    } else if (M11 > 1e-15) {
+        beta1 = b1 / M11;
+        beta2 = 0.0;
+    } else if (M22 > 1e-15) {
+        beta1 = 0.0;
+        beta2 = b2 / M22;
+    }
+
+    for (uint32_t i = 0; i < n; i++) {
+        buffer->y[i] = (float)(ry[i] - beta1 * r1[i] - beta2 * r2[i]);
+    }
+
+    free(rw);
+    free(vy);
+    free(u1);
+    free(u2);
+    free(ry);
+    free(r1);
+    free(r2);
 }
 
 static inline void refresh_weighted_signal_buffer(buffer_t* buffer, double epsilon) {
@@ -404,11 +655,8 @@ static inline void refresh_weighted_signal_buffer(buffer_t* buffer, double epsil
     }
 }
 
-static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int mode) {
-    linregw_buffer(buffer);
-    if (mode > 0) {
-        linreg_buffer(buffer);
-    }
+static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int detrend_degree) {
+    detrend_buffer_szego(buffer, epsilon, detrend_degree);
 
     double wsum = 0;
     double wsqsum = 0;

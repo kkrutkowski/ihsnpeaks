@@ -809,17 +809,19 @@ static inline void capture_spectrum_column(buffer_t *buffer, const parameters *p
                                            int aov_n_eff, double fmin, double fstep, uint32_t nfreq, int nterms, float *spectrum_matrix, uint32_t column) {
     if (!spectrum_matrix) return;
     float *dst = spectrum_matrix + ((size_t)column * (size_t)nfreq);
+    parameters grid_params = *params;
+    grid_params.norm = NORM_L2;
     for (uint32_t i = 0; i < nfreq; ++i) {
         double freq = fmin + ((double)i * fstep);
         float magnitude;
         if (mode_uses_direct_eval_grid(params->mode)) {
             if (direct_eval_grid) {
-                magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+                magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, &grid_params, eval_method, freq, NULL, NULL);
             } else if (use_aov) {
                 float r2 = buffer->power ? buffer->power[i] : aov_get_stat(buffer, params, freq);
                 magnitude = (params->statistic == STATISTIC_BAYES) ? r2 : aov_likelihood_from_r2(r2, nterms, aov_n_eff);
             } else {
-                magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
+                magnitude = buffer->power ? buffer->power[i] : get_eval_likelihood(buffer, &grid_params, eval_method, freq, NULL, NULL);
             }
         } else if (use_aov) {
             float r2 = buffer->power[i];
@@ -872,6 +874,11 @@ static inline uint32_t direct_grid_chunk_size(uint32_t n) {
 }
 
 static inline float direct_grid_scan_value(buffer_t *buffer, const parameters *params, const eval_method_t *eval_method, double freq) {
+    if (params->norm == NORM_L1) {
+        parameters grid_params = *params;
+        grid_params.norm = NORM_L2;
+        return get_eval_likelihood(buffer, &grid_params, eval_method, freq, NULL, NULL);
+    }
     return get_eval_likelihood(buffer, params, eval_method, freq, NULL, NULL);
 }
 
@@ -894,9 +901,9 @@ static inline int alloc_direct_scratch(buffer_t *scratch, const buffer_t *source
     scratch->pidx = (size_t *)malloc(1024U * sizeof(size_t));
     if (!scratch->pidx) return -1;
 
-    scratch->buf = calloc(3U, sizeof(void *));
+    scratch->buf = calloc(GB_SCRATCH_BUF_COUNT, sizeof(void *));
     if (!scratch->buf) return -1;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < GB_SCRATCH_BUF_COUNT; ++i) {
         scratch->buf[i] = aligned_alloc(64, round_buffer((size_t)params->maxLen * sizeof(uint64_t)));
         if (!scratch->buf[i]) return -1;
     }
@@ -915,7 +922,7 @@ static inline void free_direct_scratch(buffer_t *scratch) {
     free(scratch->pidx);
     scratch->pidx = NULL;
     if (scratch->buf) {
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < GB_SCRATCH_BUF_COUNT; ++i) {
             free(scratch->buf[i]);
             scratch->buf[i] = NULL;
         }
@@ -1081,7 +1088,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     }
     PROFILE_END(read, PROFILE_PHASE_READ);
     PROFILE_START(preprocess);
-    preprocess_buffer(buffer, params->epsilon, params->mode);
+    preprocess_buffer(buffer, params->epsilon, params->detrend_degree);
     PROFILE_END(preprocess, PROFILE_PHASE_PREPROCESS);
 
     peak_t *peak_base = buffer->peaks;

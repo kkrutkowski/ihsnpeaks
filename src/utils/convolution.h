@@ -72,9 +72,11 @@ static inline void csort64_10(uint64_t** array, size_t n, uint64_t** aux_buffer,
     }
 }
 
-void convolve(kvpair* in, double* temp, double* out, int r, int n) {
-    for (int j = 0; j < n; j++) {
-        out[j] = in[j].parts.val;
+static inline void convolve_array(const double* in, double* temp, double* out, int r, int n) {
+    if (out != in) {
+        for (int j = 0; j < n; j++) {
+            out[j] = in[j];
+        }
     }
     double width = (2.0 * (double)r) + 1.0;
     double inv_width = 1.0 / width;
@@ -126,6 +128,13 @@ void convolve(kvpair* in, double* temp, double* out, int r, int n) {
     }  // Normalize
 }
 
+void convolve(kvpair* in, double* temp, double* out, int r, int n) {
+    for (int j = 0; j < n; j++) {
+        out[j] = (double)in[j].parts.val;
+    }
+    convolve_array(out, temp, out, r, n);
+}
+
 typedef struct {
     kvpair* sorted;
     double* model;
@@ -135,41 +144,220 @@ typedef struct {
     double Sxx;
     double Syy;
     double Sxy;
+    double stat;
+    double likelihood;
     int n;
 } gb_projection_t;
 
-static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool keep_indices, float gbAlpha, double model_multiplier,
+static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool keep_indices, float gbAlpha, double model_multiplier, norm_type norm,
                                          gb_projection_t* projection) {
     if (!buffer || !projection || !buffer->buf || !buffer->buf[0] || !buffer->buf[1] || !buffer->buf[2] || !buffer->pidx || buffer->n == 0) return false;
+
+    kvpair* input = (kvpair*)(buffer->buf[0]);
+    kvpair* sorted = (kvpair*)(buffer->buf[1]);
+    uint64_t** sort_in = (uint64_t**)(&buffer->buf[0]);
+    uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
+
+    if (norm == NORM_L1 && !keep_indices) {
+        uint16_t w_one = float_to_bf16(1.0f);
+        for (int i = 0; i < buffer->n; i++) {
+            input[i].packed.key = phase_key_10(buffer->x[i] * freq);
+            input[i].packed.weight = w_one;
+            input[i].packed.val = buffer->y[i];
+        }
+    } else {
+        for (int i = 0; i < buffer->n; i++) {
+            input[i].parts.key = phase_key_10(buffer->x[i] * freq);
+            input[i].parts.val = buffer->y[i];
+            if (keep_indices) {
+                input[i].parts.idx = i;
+            }
+        }
+    }
+
+    csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);  // sort the pairs by phase
+    int r = gb_convolution_radius(buffer->n, gbAlpha);
+    int n = (int)buffer->n;
+
+    if (norm == NORM_L1 && buffer->buf[3] && buffer->buf[4]) {
+        double* conv_w = (double*)(buffer->buf[0]);
+        double* model = (double*)(buffer->buf[2]);
+        double* w = (double*)(buffer->buf[3]);
+        double* tmp = (double*)(buffer->buf[4]);
+
+        double correction = corr(r);
+        double min_model = 0.0;
+        double max_model = 0.0;
+        double Sxx = 0.0, Syy = 0.0, Sxy = 0.0;
+
+        // Iteration 0: uniform weights (Cw == 1), convolve y once
+        convolve(sorted, tmp, model, r, n);
+
+        for (int i = 0; i < n; i++) {
+            double y_val = (double)(sorted[i].parts.val);
+            double smooth_val = (model[i] - (correction * y_val)) * model_multiplier;
+            model[i] = smooth_val;
+            if (i == 0 || smooth_val < min_model) min_model = smooth_val;
+            if (i == 0 || smooth_val > max_model) max_model = smooth_val;
+
+            Sxx += smooth_val * smooth_val;
+            Syy += y_val * y_val;
+            Sxy += y_val * smooth_val;
+        }
+
+        double scale = 0.0;
+        if (Sxx > 0.0 && Syy > 0.0) {
+            scale = clamp_gbls_scale(Sxy / Sxx);
+        }
+
+        double sum_abs_y = 0.0;
+        for (int i = 0; i < n; i++) {
+            sum_abs_y += fabs((double)sorted[i].parts.val);
+        }
+        double mean_abs_y = n > 0 ? (sum_abs_y / (double)n) : 0.0;
+        double delta = 1e-4 * mean_abs_y;
+        if (delta < 1e-6) delta = 1e-6;
+
+        if (!keep_indices) {
+            for (int i = 0; i < n; i++) {
+                double y_val = (double)(sorted[i].packed.val);
+                double res = fabs(y_val - scale * model[i]);
+                float wi = (float)(1.0 / (res > delta ? res : delta));
+                sorted[i].packed.weight = float_to_bf16(wi);
+            }
+        } else {
+            for (int i = 0; i < n; i++) {
+                double y_val = (double)(sorted[i].parts.val);
+                double res = fabs(y_val - scale * model[i]);
+                w[i] = 1.0 / (res > delta ? res : delta);
+            }
+        }
+
+        double prev_scale = scale;
+        const int max_iter = 6;
+        for (int iter = 1; iter < max_iter; iter++) {
+            if (!keep_indices) {
+                for (int i = 0; i < n; i++) {
+                    w[i] = (double)bf16_to_float(sorted[i].packed.weight);
+                }
+            }
+
+            // 1. Convolve weights w into conv_w (buf[0])
+            convolve_array(w, tmp, conv_w, r, n);
+
+            // 2. Prepare weighted flux w * y in model (buf[2]), then convolve in-place
+            for (int i = 0; i < n; i++) {
+                model[i] = w[i] * (double)sorted[i].parts.val;
+            }
+            convolve_array(model, tmp, model, r, n);
+
+            // 3. Compute smoothed model and sums
+            min_model = 0.0;
+            max_model = 0.0;
+            double Swxx = 0.0, Swyy = 0.0, Swxy = 0.0;
+            Sxx = 0.0;
+            Syy = 0.0;
+            Sxy = 0.0;
+
+            for (int i = 0; i < n; i++) {
+                double y_val = (double)(sorted[i].parts.val);
+                double denom = conv_w[i] - (correction * w[i]);
+                if (fabs(denom) < 1e-12) {
+                    denom = (denom >= 0.0) ? 1e-12 : -1e-12;
+                }
+                double num = model[i] - (correction * w[i] * y_val);
+                double smooth_val = (num / denom) * model_multiplier;
+                model[i] = smooth_val;
+
+                if (i == 0 || smooth_val < min_model) min_model = smooth_val;
+                if (i == 0 || smooth_val > max_model) max_model = smooth_val;
+
+                double wi = w[i];
+                Swxx += wi * smooth_val * smooth_val;
+                Swyy += wi * y_val * y_val;
+                Swxy += wi * y_val * smooth_val;
+
+                Sxx += smooth_val * smooth_val;
+                Syy += y_val * y_val;
+                Sxy += y_val * smooth_val;
+            }
+
+            scale = 0.0;
+            if (Swxx > 0.0 && Swyy > 0.0) {
+                scale = clamp_gbls_scale(Swxy / Swxx);
+            }
+
+            if (fabs(scale - prev_scale) < 1e-4) {
+                break;
+            }
+            prev_scale = scale;
+
+            if (iter + 1 < max_iter) {
+                if (!keep_indices) {
+                    for (int i = 0; i < n; i++) {
+                        double y_val = (double)(sorted[i].packed.val);
+                        double res = fabs(y_val - scale * model[i]);
+                        float wi = (float)(1.0 / (res > delta ? res : delta));
+                        sorted[i].packed.weight = float_to_bf16(wi);
+                    }
+                } else {
+                    for (int i = 0; i < n; i++) {
+                        double y_val = (double)(sorted[i].parts.val);
+                        double res = fabs(y_val - scale * model[i]);
+                        w[i] = 1.0 / (res > delta ? res : delta);
+                    }
+                }
+            }
+        }
+
+        double sae1 = 0.0;
+        double sae0 = 0.0;
+        for (int i = 0; i < n; i++) {
+            double y_val = (double)(sorted[i].parts.val);
+            sae1 += fabs(y_val - scale * model[i]);
+            sae0 += fabs(y_val);
+        }
+
+        double R1 = 0.0;
+        if (sae0 > 0.0) {
+            R1 = 1.0 - (sae1 / sae0);
+            if (R1 < 0.0) R1 = 0.0;
+            if (R1 > (1.0 - 1e-15)) R1 = 1.0 - 1e-15;
+        }
+
+        double likelihood = 0.0;
+        if (R1 > 0.0 && R1 < 1.0) {
+            likelihood = -((double)n) * log1p(-R1);
+        } else if (R1 >= 1.0 - 1e-15) {
+            likelihood = -((double)n) * log(1e-15);
+        }
+
+        projection->sorted = sorted;
+        projection->model = model;
+        projection->scale = scale;
+        projection->min_model = min_model;
+        projection->max_model = max_model;
+        projection->Sxx = Sxx;
+        projection->Syy = Syy;
+        projection->Sxy = Sxy;
+        projection->stat = R1;
+        projection->likelihood = likelihood;
+        projection->n = n;
+        return true;
+    }
+
+    // NORM_L2 unweighted fast path
+    double* tmp = (double*)(buffer->buf[0]);
+    double* output = (double*)(buffer->buf[2]);
+    convolve(sorted, tmp, output, r, n);
 
     double min_model = 0.0;
     double max_model = 0.0;
     double Sxx = 0.0;
     double Syy = 0.0;
     double Sxy = 0.0;
-
-    kvpair* input = (kvpair*)(buffer->buf[0]);
-    kvpair* sorted = (kvpair*)(buffer->buf[1]);
-    double* tmp = (double*)(buffer->buf[0]);
-    double* output = (double*)(buffer->buf[2]);
-    uint64_t** sort_in = (uint64_t**)(&buffer->buf[0]);
-    uint64_t** sort_out = (uint64_t**)(&buffer->buf[1]);
-
-    for (int i = 0; i < buffer->n; i++) {
-        input[i].parts.key = phase_key_10(buffer->x[i] * freq);
-        input[i].parts.val = buffer->y[i];
-        if (keep_indices) {
-            input[i].parts.idx = i;
-        }
-    }
-
-    csort64_10(sort_in, buffer->n, sort_out, buffer->pidx);  // sort the pairs by phase
-    int r = gb_convolution_radius(buffer->n, gbAlpha);
-
-    convolve(sorted, tmp, output, r, buffer->n);
-
     double correction = corr(r);
-    for (int i = 0; i < buffer->n; i++) {
+    for (int i = 0; i < n; i++) {
         double y_val = (double)(sorted[i].parts.val);
         double smooth_val = (output[i] - (correction * y_val)) * model_multiplier;
         output[i] = smooth_val;
@@ -186,6 +374,15 @@ static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool kee
         scale = clamp_gbls_scale(Sxy / Sxx);
     }
 
+    double R2 = 0.0;
+    if (Sxx > 0.0 && Syy > 0.0) {
+        double explained = ((2.0 * scale * Sxy) - (scale * scale * Sxx)) / Syy;
+        R2 = explained;
+        if (R2 < 0.0) R2 = 0.0;
+        if (R2 > (1.0 - 1e-15)) R2 = 1.0 - 1e-15;
+    }
+    double likelihood = lnFAP(2, 1, R2, n);
+
     projection->sorted = sorted;
     projection->model = output;
     projection->scale = scale;
@@ -194,24 +391,19 @@ static inline bool gb_prepare_projection(buffer_t* buffer, double freq, bool kee
     projection->Sxx = Sxx;
     projection->Syy = Syy;
     projection->Sxy = Sxy;
-    projection->n = (int)buffer->n;
+    projection->stat = R2;
+    projection->likelihood = likelihood;
+    projection->n = n;
     return true;
 }
 
-static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewhiten, float gbAlpha) {
+static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewhiten, float gbAlpha, norm_type norm, float* likelihood_out) {
     gb_projection_t projection = {0};
-    if (!gb_prepare_projection(buffer, freq, prewhiten, gbAlpha, 1.0, &projection)) return 0.0f;
+    if (!gb_prepare_projection(buffer, freq, prewhiten, gbAlpha, 1.0, norm, &projection)) return 0.0f;
 
-    float R2 = 0.0f;
-    if (projection.Sxx > 0.0 && projection.Syy > 0.0) {
-        double scale = projection.scale;
-        double Sxy = projection.Sxy;
-        double Sxx = projection.Sxx;
-        double Syy = projection.Syy;
-        double explained = ((2.0 * scale * Sxy) - (scale * scale * Sxx)) / Syy;
-        R2 = (float)explained;
-        if (R2 < 0.0f) R2 = 0.0f;
-        if (R2 > (1.0f - 1e-15f)) R2 = 1.0f - 1e-15f;
+    float stat = (float)projection.stat;
+    if (likelihood_out) {
+        *likelihood_out = (float)projection.likelihood;
     }
     if (amp) {
         *amp = (float)(fabs(projection.scale) * (projection.max_model - projection.min_model));
@@ -222,7 +414,7 @@ static inline float get_r2(buffer_t* buffer, double freq, float* amp, bool prewh
         }
     }
 
-    return R2;
+    return stat;
 }
 
 static inline float get_gbaw_t(buffer_t* buffer, double freq, float* amp, float gbAlpha) {
@@ -234,7 +426,7 @@ static inline float get_gbaw_t(buffer_t* buffer, double freq, float* amp, float 
     double correction = corr(r);
     double multiplier = 1.0 / (1.0 - correction);
     gb_projection_t projection = {0};
-    if (!gb_prepare_projection(buffer, freq, false, gbAlpha, multiplier, &projection)) return 0.0f;
+    if (!gb_prepare_projection(buffer, freq, false, gbAlpha, multiplier, NORM_L2, &projection)) return 0.0f;
 
     for (int i = 0; i < projection.n; i++) {
         double y_val = (double)(projection.sorted[i].parts.val);
@@ -436,17 +628,20 @@ static inline double eval_bls_direct_frequency_step(uint32_t n, double time_span
 
 static inline eval_result_t eval_score_gbls(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
     eval_result_t result = {0};
-    float stat = get_r2(buffer, freq, &result.amp, prewhiten, params->gbAlpha);
+    float likelihood = 0.0f;
+    float stat = get_r2(buffer, freq, &result.amp, prewhiten, params->gbAlpha, params->norm, &likelihood);
     if (!float_is_finite_bits(stat)) return result;
     result.stat = stat;
-    result.likelihood = (float)lnFAP(2, 1, stat, buffer->n);
+    result.likelihood = likelihood;
     result.valid = float_is_finite_bits(result.likelihood);
     return result;
 }
 
 static inline eval_result_t eval_score_gbaw(buffer_t* buffer, const parameters* params, double freq, bool prewhiten) {
     eval_result_t result = {0};
-    float stat = prewhiten ? get_r2(buffer, freq, &result.amp, true, params->gbAlpha) : get_gbaw_t(buffer, freq, &result.amp, params->gbAlpha);
+    float likelihood = 0.0f;
+    float stat =
+        prewhiten ? get_r2(buffer, freq, &result.amp, true, params->gbAlpha, NORM_L2, &likelihood) : get_gbaw_t(buffer, freq, &result.amp, params->gbAlpha);
     if (!float_is_finite_bits(stat)) return result;
     result.stat = stat;
     result.likelihood = prewhiten ? stat : (float)get_z(stat, buffer->n);
