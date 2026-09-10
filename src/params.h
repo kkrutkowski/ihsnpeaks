@@ -36,6 +36,7 @@ static parameters init_parameters(int argc, char *argv[]) {
     params.columns = 5;
     params.nterms = 3;
     params.detrend_degree = 3;
+    params.detrend_norm = NORM_L2;
     params.defaultGridRatio = 128;
     params.gridRatio = 128;
     params.gridMode = NUFFT1_PSWF43;
@@ -72,6 +73,7 @@ void print_parameters(parameters *params) {
     printf("\tColumns: %d\n", params->columns);
     printf("\tNterms: %d\n", params->nterms);
     printf("\tDetrending degree: %d\n", params->detrend_degree);
+    printf("\tDetrending norm: %s\n", norm_name(params->detrend_norm));
     printf("\tSpectrum: %s\n", params->spectrum ? "true" : "false");
     printf("\tPrewhiten: %s\n", params->prewhiten ? "true" : "false");
     printf("\tOutput period: %s\n", params->outputPeriod ? "true" : "false");
@@ -154,6 +156,8 @@ void print_help(char **argv) {
     printf("      --norm                Fitting norm: l2 (standard least-squares, default) or l1 (IRLS L1 fitting for gbls)\n");
     printf("      --ddet, --detrending-degree\n");
     printf("                            Trigonometric polynomial detrending degree (default: 3, 0 = constant only)\n");
+    printf("      --detrend-norm, --dnorm\n");
+    printf("                            Detrending norm: l2 (least-squares, default) or l1 (IRLS L1 fitting)\n");
     printf("      --nfft, --nufft, --nufft1\n");
     printf("                            NuFFT backend: 43|pswf43 or 21|pswf21 (default: pswf43)\n");
     printf("\n");
@@ -284,6 +288,7 @@ static parameters read_parameters(int argc, char *argv[]) {
     parameters params = init_parameters(argc, &argv[0]);
 
     enum {
+        OPT_DETREND_NORM = 0xF4,
         OPT_DDET = 0xF5,
         OPT_NORM = 0xF6,
         OPT_STATISTIC = 0xF7,
@@ -303,6 +308,8 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"terms", ko_required_argument, 'd'},
                                       {"ddet", ko_required_argument, OPT_DDET},
                                       {"detrending-degree", ko_required_argument, OPT_DDET},
+                                      {"detrend-norm", ko_required_argument, OPT_DETREND_NORM},
+                                      {"dnorm", ko_required_argument, OPT_DETREND_NORM},
                                       {"threshold", ko_required_argument, 't'},
                                       {"fmin", ko_required_argument, 'f'},
                                       {"oversampling", ko_required_argument, 'o'},
@@ -423,6 +430,16 @@ static parameters read_parameters(int argc, char *argv[]) {
                 params.detrend_degree = (int)parsed_ddet;
                 break;
             }
+            case OPT_DETREND_NORM:
+                if (strcasecmp(opt.arg, "l1") == 0) {
+                    params.detrend_norm = NORM_L1;
+                } else if (strcasecmp(opt.arg, "l2") == 0) {
+                    params.detrend_norm = NORM_L2;
+                } else {
+                    fprintf(stderr, "Invalid detrending norm '%s'. Expected 'l1' or 'l2'.\n", opt.arg);
+                    exit(EXIT_FAILURE);
+                }
+                break;
             case OPT_NORM:
                 if (strcasecmp(opt.arg, "l1") == 0) {
                     params.norm = NORM_L1;

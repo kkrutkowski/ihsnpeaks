@@ -311,7 +311,73 @@ static inline void print_buffer(buffer_t* buffer) {
     }
 }
 
-static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int detrend_degree) {
+typedef struct {
+    double y;
+    double w;
+} val_weight_pair_t;
+
+static int compare_val_weight(const void* a, const void* b) {
+    double ya = ((const val_weight_pair_t*)a)->y;
+    double yb = ((const val_weight_pair_t*)b)->y;
+    if (ya < yb) return -1;
+    if (ya > yb) return 1;
+    return 0;
+}
+
+static int compare_doubles(const void* a, const void* b) {
+    double da = *(const double*)a;
+    double db = *(const double*)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+static inline double compute_weighted_median(const float* y, const double* w, uint32_t n) {
+    if (n == 0) return 0.0;
+    if (n == 1) return (double)y[0];
+    val_weight_pair_t* pairs = (val_weight_pair_t*)malloc(n * sizeof(val_weight_pair_t));
+    if (!pairs) {
+        double sum = 0.0;
+        for (uint32_t i = 0; i < n; i++) sum += (double)y[i];
+        return sum / (double)n;
+    }
+    double total_w = 0.0;
+    for (uint32_t i = 0; i < n; i++) {
+        pairs[i].y = (double)y[i];
+        pairs[i].w = w[i];
+        total_w += w[i];
+    }
+    qsort(pairs, n, sizeof(val_weight_pair_t), compare_val_weight);
+
+    double half_w = 0.5 * total_w;
+    double cum_w = 0.0;
+    double median_val = pairs[0].y;
+    for (uint32_t i = 0; i < n; i++) {
+        cum_w += pairs[i].w;
+        if (cum_w >= half_w) {
+            median_val = pairs[i].y;
+            break;
+        }
+    }
+    free(pairs);
+    return median_val;
+}
+
+static inline double compute_mad(const float* y, uint32_t n) {
+    if (n < 2) return 1.0;
+    double* temp = (double*)malloc(n * sizeof(double));
+    if (!temp) return 1.0;
+    for (uint32_t i = 0; i < n; i++) temp[i] = (double)y[i];
+    qsort(temp, n, sizeof(double), compare_doubles);
+    double med = temp[n / 2];
+    for (uint32_t i = 0; i < n; i++) temp[i] = fabs((double)y[i] - med);
+    qsort(temp, n, sizeof(double), compare_doubles);
+    double mad = temp[n / 2];
+    free(temp);
+    return mad;
+}
+
+static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int detrend_degree, norm_type norm) {
     if (!buffer || buffer->n == 0) return;
     uint32_t n = buffer->n;
 
@@ -324,9 +390,11 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
 
     double span = buffer->x[n - 1] - buffer->x[0];
 
-    // Compute weights and weighted mean
-    double ws = 0.0;
-    double wysum = 0.0;
+    // Compute measurement weights and weighted mean
+    double* w_meas = (double*)malloc(n * sizeof(double));
+    if (!w_meas) return;
+    double ws_meas = 0.0;
+    double wysum_meas = 0.0;
     for (uint32_t i = 0; i < n; i++) {
         double w = 1.0;
         if (buffer->dy) {
@@ -338,12 +406,12 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
                 w = 1.0 / (999.9 * 999.9 + epsilon);
             }
         }
-        ws += w;
-        wysum += w * (double)buffer->y[i];
+        w_meas[i] = w;
+        ws_meas += w;
+        wysum_meas += w * (double)buffer->y[i];
     }
 
-    double y_mean = (ws > 0.0 && isfinite(ws)) ? (wysum / ws) : 0.0;
-    buffer->magnitude = (float)y_mean;
+    double y_mean_init = (ws_meas > 0.0 && isfinite(ws_meas)) ? (wysum_meas / ws_meas) : 0.0;
 
     // Degrees of freedom clamping: 4d + 2 <= n -> d <= (n - 2) / 4
     int req_degree = detrend_degree < 0 ? 0 : detrend_degree;
@@ -352,16 +420,26 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
     int eff_degree = req_degree < max_supported_degree ? req_degree : max_supported_degree;
 
     if (!(span > 0.0) || !isfinite(span) || n < 6 || eff_degree == 0) {
-        // Degree 0: Subtract weighted mean only
-        for (uint32_t i = 0; i < n; i++) {
-            buffer->y[i] -= (float)y_mean;
+        if (norm == NORM_L1) {
+            double y_med = compute_weighted_median(buffer->y, w_meas, n);
+            buffer->magnitude = (float)y_med;
+            for (uint32_t i = 0; i < n; i++) {
+                buffer->y[i] -= (float)y_med;
+            }
+        } else {
+            buffer->magnitude = (float)y_mean_init;
+            for (uint32_t i = 0; i < n; i++) {
+                buffer->y[i] -= (float)y_mean_init;
+            }
         }
+        free(w_meas);
         return;
     }
 
     int nh = eff_degree;  // number of half-integer harmonics at f_base = 1 / (2 * span)
     int nn2 = 2 * nh;
 
+    double* w = (double*)malloc(n * sizeof(double));
     double* rw = (double*)malloc(n * sizeof(double));
     double* zr = (double*)malloc(n * sizeof(double));
     double* zi = (double*)malloc(n * sizeof(double));
@@ -373,9 +451,13 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
     double* s_nh = (double*)malloc(n * sizeof(double));
     double* cfr = (double*)malloc(n * sizeof(double));
     double* cfi = (double*)malloc(n * sizeof(double));
-    double* my = (double*)calloc(n, sizeof(double));
+    double* my = (double*)malloc(n * sizeof(double));
+    double* y_hat = (double*)malloc(n * sizeof(double));
+    double* y_hat_prev = (double*)malloc(n * sizeof(double));
 
-    if (!rw || !zr || !zi || !pr || !pi || !znr || !zni || !c_nh || !s_nh || !cfr || !cfi || !my) {
+    if (!w || !rw || !zr || !zi || !pr || !pi || !znr || !zni || !c_nh || !s_nh || !cfr || !cfi || !my || !y_hat || !y_hat_prev) {
+        free(w_meas);
+        free(w);
         free(rw);
         free(zr);
         free(zi);
@@ -388,7 +470,10 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
         free(cfr);
         free(cfi);
         free(my);
-        for (uint32_t i = 0; i < n; i++) buffer->y[i] -= (float)y_mean;
+        free(y_hat);
+        free(y_hat_prev);
+        buffer->magnitude = (float)y_mean_init;
+        for (uint32_t i = 0; i < n; i++) buffer->y[i] -= (float)y_mean_init;
         return;
     }
 
@@ -396,95 +481,135 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
     double t_mid = span / 2.0;
 
     for (uint32_t i = 0; i < n; i++) {
-        double w = 1.0;
-        if (buffer->dy) {
-            double dy_val = (double)buffer->dy[i];
-            if (dy_val > 0.0 && isfinite(dy_val)) {
-                w = 1.0 / (dy_val * dy_val + epsilon);
-            } else {
-                w = 1.0 / (999.9 * 999.9 + epsilon);
-            }
-        }
-        rw[i] = sqrt(w);
-
         double phase = (buffer->x[i] - t_mid) * f_base;
         zr[i] = cos(2.0 * M_PI * phase);
         zi[i] = sin(2.0 * M_PI * phase);
-        pr[i] = rw[i];
-        pi[i] = 0.0;
-        znr[i] = 1.0;
-        zni[i] = 0.0;
-
         double angle_nh = 2.0 * M_PI * (double)nh * phase;
-        double cnh = cos(angle_nh);
-        double snh = sin(angle_nh);
-        c_nh[i] = cnh;
-        s_nh[i] = snh;
-
-        double vy = ((double)buffer->y[i] - y_mean) * rw[i];
-        cfr[i] = vy * cnh;
-        cfi[i] = vy * snh;
+        c_nh[i] = cos(angle_nh);
+        s_nh[i] = sin(angle_nh);
+        w[i] = w_meas[i];
     }
 
-    for (int step = 0; step <= nn2; step++) {
-        double sn = 0.0;
-        double alr = 0.0, ali = 0.0;
-        double scr = 0.0, sci = 0.0;
+    double mad = compute_mad(buffer->y, n);
+    double delta = 1e-4 * mad;
+    if (delta < 1e-5) delta = 1e-5;
 
+    int max_iter = (norm == NORM_L1) ? 10 : 1;
+    double tol = 1e-5;
+    double final_y_mean = y_mean_init;
+
+    for (int iter = 0; iter < max_iter; iter++) {
+        double ws = 0.0;
+        double wysum = 0.0;
         for (uint32_t i = 0; i < n; i++) {
-            double pr_i = pr[i];
-            double pi_i = pi[i];
-            sn += pr_i * pr_i + pi_i * pi_i;
-            alr += (zr[i] * pr_i - zi[i] * pi_i) * rw[i];
-            ali += (zr[i] * pi_i + zi[i] * pr_i) * rw[i];
-
-            scr += pr_i * cfr[i] + pi_i * cfi[i];
-            sci += pr_i * cfi[i] - pi_i * cfr[i];
+            ws += w[i];
+            wysum += w[i] * (double)buffer->y[i];
+            rw[i] = sqrt(w[i]);
+            pr[i] = rw[i];
+            pi[i] = 0.0;
+            znr[i] = 1.0;
+            zni[i] = 0.0;
+            my[i] = 0.0;
         }
 
-        if (sn < 1e-30) sn = 1e-30;
-        alr /= sn;
-        ali /= sn;
-
-        double cr = scr / sn;
-        double ci = sci / sn;
+        double y_mean = (ws > 0.0 && isfinite(ws)) ? (wysum / ws) : 0.0;
+        final_y_mean = y_mean;
 
         for (uint32_t i = 0; i < n; i++) {
-            double pr_i = pr[i];
-            double pi_i = pi[i];
-            double Ay = cr * pr_i - ci * pi_i;
-            double By = cr * pi_i + ci * pr_i;
-            my[i] += Ay * c_nh[i] + By * s_nh[i];
+            double vy = ((double)buffer->y[i] - y_mean) * rw[i];
+            cfr[i] = vy * c_nh[i];
+            cfi[i] = vy * s_nh[i];
+        }
+
+        for (int step = 0; step <= nn2; step++) {
+            double sn = 0.0;
+            double alr = 0.0, ali = 0.0;
+            double scr = 0.0, sci = 0.0;
+
+            for (uint32_t i = 0; i < n; i++) {
+                double pr_i = pr[i];
+                double pi_i = pi[i];
+                sn += pr_i * pr_i + pi_i * pi_i;
+                alr += (zr[i] * pr_i - zi[i] * pi_i) * rw[i];
+                ali += (zr[i] * pi_i + zi[i] * pr_i) * rw[i];
+
+                scr += pr_i * cfr[i] + pi_i * cfi[i];
+                sci += pr_i * cfi[i] - pi_i * cfr[i];
+            }
+
+            if (sn < 1e-30) sn = 1e-30;
+            alr /= sn;
+            ali /= sn;
+
+            double cr = scr / sn;
+            double ci = sci / sn;
+
+            for (uint32_t i = 0; i < n; i++) {
+                double pr_i = pr[i];
+                double pi_i = pi[i];
+                double Ay = cr * pr_i - ci * pi_i;
+                double By = cr * pi_i + ci * pr_i;
+                my[i] += Ay * c_nh[i] + By * s_nh[i];
+            }
+
+            for (uint32_t i = 0; i < n; i++) {
+                double pr_i = pr[i];
+                double pi_i = pi[i];
+                double zr_i = zr[i];
+                double zi_i = zi[i];
+                double znr_i = znr[i];
+                double zni_i = zni[i];
+
+                double sr = alr * znr_i - ali * zni_i;
+                double si = alr * zni_i + ali * znr_i;
+
+                double new_pr = pr_i * zr_i - pi_i * zi_i - sr * pr_i - si * pi_i;
+                double new_pi = pr_i * zi_i + pi_i * zr_i + sr * pi_i - si * pr_i;
+                pr[i] = new_pr;
+                pi[i] = new_pi;
+
+                double new_znr = znr_i * zr_i - zni_i * zi_i;
+                double new_zni = zni_i * zr_i + znr_i * zi_i;
+                znr[i] = new_znr;
+                zni[i] = new_zni;
+            }
         }
 
         for (uint32_t i = 0; i < n; i++) {
-            double pr_i = pr[i];
-            double pi_i = pi[i];
-            double zr_i = zr[i];
-            double zi_i = zi[i];
-            double znr_i = znr[i];
-            double zni_i = zni[i];
+            y_hat[i] = y_mean + (rw[i] > 0.0 ? my[i] / rw[i] : 0.0);
+        }
 
-            double sr = alr * znr_i - ali * zni_i;
-            double si = alr * zni_i + ali * znr_i;
+        if (iter > 0) {
+            double diff_sq = 0.0;
+            double norm_sq = 0.0;
+            for (uint32_t i = 0; i < n; i++) {
+                double diff = y_hat[i] - y_hat_prev[i];
+                diff_sq += diff * diff;
+                norm_sq += y_hat[i] * y_hat[i];
+            }
+            double rel_change = sqrt(diff_sq) / (sqrt(norm_sq) + 1e-12);
+            if (rel_change < tol) {
+                break;
+            }
+        }
 
-            double new_pr = pr_i * zr_i - pi_i * zi_i - sr * pr_i - si * pi_i;
-            double new_pi = pr_i * zi_i + pi_i * zr_i + sr * pi_i - si * pr_i;
-            pr[i] = new_pr;
-            pi[i] = new_pi;
-
-            double new_znr = znr_i * zr_i - zni_i * zi_i;
-            double new_zni = zni_i * zr_i + znr_i * zi_i;
-            znr[i] = new_znr;
-            zni[i] = new_zni;
+        if (iter + 1 < max_iter) {
+            for (uint32_t i = 0; i < n; i++) {
+                y_hat_prev[i] = y_hat[i];
+                double res = fabs((double)buffer->y[i] - y_hat[i]);
+                double denom = res > delta ? res : delta;
+                w[i] = w_meas[i] / denom;
+            }
         }
     }
 
+    buffer->magnitude = (float)final_y_mean;
     for (uint32_t i = 0; i < n; i++) {
-        double P_y = y_mean + (rw[i] > 0.0 ? my[i] / rw[i] : 0.0);
-        buffer->y[i] = (float)((double)buffer->y[i] - P_y);
+        buffer->y[i] = (float)((double)buffer->y[i] - y_hat[i]);
     }
 
+    free(w_meas);
+    free(w);
     free(rw);
     free(zr);
     free(zi);
@@ -497,6 +622,8 @@ static inline void detrend_buffer_szego(buffer_t* buffer, double epsilon, int de
     free(cfr);
     free(cfi);
     free(my);
+    free(y_hat);
+    free(y_hat_prev);
 }
 
 static inline void refresh_weighted_signal_buffer(buffer_t* buffer, double epsilon) {
@@ -517,8 +644,15 @@ static inline void refresh_weighted_signal_buffer(buffer_t* buffer, double epsil
     }
 }
 
-static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int detrend_degree) {
-    detrend_buffer_szego(buffer, epsilon, detrend_degree);
+static inline void preprocess_buffer(buffer_t* buffer, double epsilon, int detrend_degree, norm_type detrend_norm) {
+    if (buffer->dy) {
+        for (uint32_t i = 0; i < buffer->n; i++) {
+            if (isnan(buffer->dy[i]) || !isfinite(buffer->dy[i]) || buffer->dy[i] < 0.0f) {
+                buffer->dy[i] = 999.9f;
+            }
+        }
+    }
+    detrend_buffer_szego(buffer, epsilon, detrend_degree, detrend_norm);
 
     double wsum = 0;
     double wsqsum = 0;

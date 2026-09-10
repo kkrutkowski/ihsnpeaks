@@ -195,8 +195,8 @@ void lc_detrend(lc_data_t *data) {
     }
     mean /= (double)data->n;
 
-    /* Szego + Schur detrending (stores weighted mean in buf->magnitude) */
-    detrend_buffer_szego(buf, 0.001, 3);
+    /* Szego detrending (stores baseline in buf->magnitude) */
+    detrend_buffer_szego(buf, 0.001, 3, NORM_L2);
 
     /* Restore original timescale */
     for (unsigned int i = 0; i < data->n; i++) {
@@ -1135,7 +1135,7 @@ LC_API int lc_compute_periodogram_ctx(lc_compute_ctx_t *ctx, const lc_data_t *da
         buf->dy[i] = data->dy[i];
     }
     buf->n = n;
-    preprocess_buffer(buf, params->epsilon, params->detrend_degree);
+    preprocess_buffer(buf, params->epsilon, params->detrend_degree, params->detrend_norm);
 
     double grid_span = buf->x[buf->n - 1] - buf->x[0];
     if (grid_span <= 0.0) grid_span = buf->x[buf->n - 1];

@@ -1088,7 +1088,7 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     }
     PROFILE_END(read, PROFILE_PHASE_READ);
     PROFILE_START(preprocess);
-    preprocess_buffer(buffer, params->epsilon, params->detrend_degree);
+    preprocess_buffer(buffer, params->epsilon, params->detrend_degree, params->detrend_norm);
     PROFILE_END(preprocess, PROFILE_PHASE_PREPROCESS);
 
     peak_t *peak_base = buffer->peaks;

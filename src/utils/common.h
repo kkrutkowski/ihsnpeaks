@@ -289,6 +289,7 @@ typedef struct {
     statistic_type_t statistic;
     gb_eval_mode gbEvalMode;
     norm_type norm;
+    norm_type detrend_norm;
     bool isFile;
     bool spectrum;
     bool debug;
