@@ -989,14 +989,17 @@ LC_API void lc_compute_ctx_destroy(lc_compute_ctx_t *ctx) {
     if (!ctx) return;
     if (ctx->pool) kt_forpool_destroy(ctx->pool);
     if (ctx->workers_allocated) {
-        for (int i = 0; i < ctx->params.nbuffers; ++i) {
-            if (ctx->params.buffers[i]) {
-                free_buffer(ctx->params.buffers[i]);
-                free(ctx->params.buffers[i]);
+        if (ctx->params.buffers) {
+            for (int i = 0; i < ctx->params.nbuffers; ++i) {
+                if (ctx->params.buffers[i]) {
+                    free_buffer(ctx->params.buffers[i]);
+                    free(ctx->params.buffers[i]);
+                }
             }
+            free(ctx->params.buffers);
+            ctx->params.buffers = NULL;
         }
-        free(ctx->params.buffers);
-        ctx->params.buffers = NULL;
+        ctx->params.nbuffers = 0;
     }
     if (ctx->primary_allocated) free_buffer(&ctx->primary);
     free_nufft_plan_cache(&ctx->params);
@@ -1025,14 +1028,17 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
     if (!need_rebuild) return 0;
 
     if (ctx->workers_allocated) {
-        for (int i = 0; i < ctx->params.nbuffers; ++i) {
-            if (ctx->params.buffers[i]) {
-                free_buffer(ctx->params.buffers[i]);
-                free(ctx->params.buffers[i]);
+        if (ctx->params.buffers) {
+            for (int i = 0; i < ctx->params.nbuffers; ++i) {
+                if (ctx->params.buffers[i]) {
+                    free_buffer(ctx->params.buffers[i]);
+                    free(ctx->params.buffers[i]);
+                }
             }
+            free(ctx->params.buffers);
+            ctx->params.buffers = NULL;
         }
-        free(ctx->params.buffers);
-        ctx->params.buffers = NULL;
+        ctx->params.nbuffers = 0;
         ctx->workers_allocated = 0;
     }
     if (ctx->primary_allocated) {
@@ -1078,8 +1084,8 @@ static int ctx_ensure_resources(lc_compute_ctx_t *ctx, uint32_t n, double time_s
 
     int nthreads = ctx->nthreads;
     ctx->params.nbuffers = nthreads;
-    alloc_buffers(&ctx->params);
-    ctx->workers_allocated = 1;
+    ctx->workers_allocated = 1;  // track partial allocation for cleanup on failure
+    if (alloc_buffers(&ctx->params) != 0) return -1;
     ctx->params.spectrum = 0;  // workers only need FFT-grid baseline; per-slice power grown lazily
     for (int i = 0; i < ctx->params.nbuffers; ++i) {
         if (alloc_buffer(ctx->params.buffers[i], &ctx->params) != 0) return -1;

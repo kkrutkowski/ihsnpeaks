@@ -96,11 +96,15 @@ void print_parameters(parameters *params) {
     }
 }
 
-void alloc_buffers(parameters *params) {
-    params->buffers = calloc(params->nbuffers, sizeof(buffer_t *));
+static inline int alloc_buffers(parameters *params) {
+    if (params->nbuffers <= 0) return 0;
+    params->buffers = calloc((size_t)params->nbuffers, sizeof(buffer_t *));
+    if (!params->buffers) return -1;
     for (int i = 0; i < params->nbuffers; i++) {
         params->buffers[i] = calloc(1, sizeof(buffer_t));
+        if (!params->buffers[i]) return -1;
     }
+    return 0;
 }
 
 // Free allocated memory for parameters
@@ -108,11 +112,17 @@ void free_parameters(parameters *params) {
     free_nufft_plan_cache(params);
     free(params->target);  // Free the allocated string
     free_targets(&params->targets);
-    for (int i = 0; i < params->nbuffers; i++) {
-        free_buffer(params->buffers[i]);
-        free(params->buffers[i]);
+    if (params->buffers) {
+        for (int i = 0; i < params->nbuffers; i++) {
+            if (params->buffers[i]) {
+                free_buffer(params->buffers[i]);
+                free(params->buffers[i]);
+            }
+        }
+        free(params->buffers);
+        params->buffers = NULL;
     }
-    free(params->buffers);
+    params->nbuffers = 0;
     if (params->outFile) {
         free(params->outFile);
     }
@@ -138,7 +148,7 @@ void print_help(char **argv) {
     printf("                            \t6 like 4, but dense direct evaluation replaces the NuFFT grid\n");
     printf("  -t, --threshold           Set the peak detection threshold (default: 10.0)\n");
     printf("  -e, --eval, --evaluate    Peak evaluation: gbls|gbl, gbaw|gba, or bls; gbls/gbaw accept [alpha], bls accepts [a,b,count]\n");
-    printf("                            \t(default: gbls[0.025]; bls default: bls[0.01,0.5,10])\n");
+    printf("                            \t(default: gbls[0.125]; bls default: bls[0.01,0.5,10])\n");
     printf("  -f, --fmin                Lower bound of the frequency grid (default: 0.0)\n");
     printf("  -g, --g, --grid           Periodogram method: ihs (default for -d <= 4) or aov/aovmh/aobmhw/chi/chi2/fastchi2 (default for -d >= 5)\n");
     printf("  -s, --save, --spectrum    Print generated spectra into .tsv files (default: false)\n");
@@ -147,8 +157,10 @@ void print_help(char **argv) {
     printf("  -n, --peaks               Set the maximum number of peaks (default: 10)\n");
     printf("  -c, --columns             Number of top peaks to display in terminal and write to output (default: 5, 0 = all)\n");
     printf("  -j, --jobs                Limit of the number of worker threads used for computation (default: 0)\n");
-    printf("  -b, --bind                Thread binding: 0|false (OS scheduling), 1|strict (hwloc PU pinning), 2|auto (default), 3|cache (L3 die affinity);\n");
-    printf("                            shortcuts: -bs=strict, -bc=cache; auto: strict if multi-NUMA, false otherwise\n");
+    printf("  -b, --bind                Thread binding: 0|false|no, 1|true|strict|s, 2|auto (default), 3|cache|c;\n");
+    printf(
+        "                            shortcuts: -b=s/-bs (strict), -b=c/-bc (cache); long form: --bind=s/--bind=c; auto: strict if multi-NUMA, false "
+        "otherwise\n");
     printf("  -p, --prewhiten           Attenuate detected variability modes\n");
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
@@ -167,7 +179,7 @@ void print_help(char **argv) {
     printf("      --generate            Probe hardware topology via hwloc, save to ~/.ihsnpeaks/hwloc_config, and exit\n\n");
     printf("  -h, --help                Display this help message and exit\n\n");
     printf("Example:\n");
-    printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug --s \n", argv[0]);
+    printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug -s \n", argv[0]);
 }
 
 static bool parse_nufft_mode(const char *arg, nufft1_mode *mode) {
@@ -376,20 +388,23 @@ static parameters read_parameters(int argc, char *argv[]) {
             case 'j':
                 params.jobs = atoi(opt.arg);
                 break;
-            case 'b':
-                if (strcmp(opt.arg, "0") == 0 || strcmp(opt.arg, "false") == 0 || strcmp(opt.arg, "no") == 0) {
+            case 'b': {
+                const char *bind_arg = opt.arg;
+                if (bind_arg[0] == '=') bind_arg++;
+                if (strcmp(bind_arg, "0") == 0 || strcmp(bind_arg, "false") == 0 || strcmp(bind_arg, "no") == 0) {
                     params.bind_mode = BIND_FALSE;
-                } else if (strcmp(opt.arg, "1") == 0 || strcmp(opt.arg, "true") == 0 || strcmp(opt.arg, "strict") == 0 || strcmp(opt.arg, "s") == 0) {
+                } else if (strcmp(bind_arg, "1") == 0 || strcmp(bind_arg, "true") == 0 || strcmp(bind_arg, "strict") == 0 || strcmp(bind_arg, "s") == 0) {
                     params.bind_mode = BIND_STRICT;
-                } else if (strcmp(opt.arg, "2") == 0 || strcmp(opt.arg, "auto") == 0) {
+                } else if (strcmp(bind_arg, "2") == 0 || strcmp(bind_arg, "auto") == 0) {
                     params.bind_mode = BIND_AUTO;
-                } else if (strcmp(opt.arg, "3") == 0 || strcmp(opt.arg, "cache") == 0 || strcmp(opt.arg, "c") == 0) {
+                } else if (strcmp(bind_arg, "3") == 0 || strcmp(bind_arg, "cache") == 0 || strcmp(bind_arg, "c") == 0) {
                     params.bind_mode = BIND_CACHE;
                 } else {
-                    fprintf(stderr, "Invalid bind mode '%s'. Expected 0|false, 1|strict, 2|auto, or 3|cache.\n", opt.arg);
+                    fprintf(stderr, "Invalid bind mode '%s'. Expected 0|false|no, 1|true|strict|s, 2|auto, or 3|cache|c.\n", bind_arg);
                     exit(EXIT_FAILURE);
                 }
                 break;
+            }
             case 'm':
                 errno = 0;
                 char *mode_end = NULL;
@@ -487,12 +502,34 @@ static parameters read_parameters(int argc, char *argv[]) {
             case OPT_GENERATE:
                 params.generate = true;
                 break;
-            case '?':
-                fprintf(stderr, "Unknown option: -%c\n", opt.opt ? opt.opt : '?');
-                break;
-            case ':':
-                fprintf(stderr, "Missing argument for -%c\n", opt.opt ? opt.opt : '?');
-                break;
+            case '?': {
+                const char *bad = NULL;
+                if (opt.i > 0 && opt.i < argc && argv[opt.i][0] == '-') {
+                    bad = argv[opt.i];
+                } else if (opt.i > 0 && opt.i - 1 < argc && argv[opt.i - 1][0] == '-') {
+                    bad = argv[opt.i - 1];
+                }
+                if (bad) {
+                    fprintf(stderr, "Unknown or ambiguous option '%s'\n", bad);
+                } else {
+                    fprintf(stderr, "Unknown or ambiguous option\n");
+                }
+                exit(EXIT_FAILURE);
+            }
+            case ':': {
+                const char *missing = NULL;
+                if (opt.i > 0 && opt.i < argc && argv[opt.i][0] == '-') {
+                    missing = argv[opt.i];
+                } else if (opt.i > 0 && opt.i - 1 < argc && argv[opt.i - 1][0] == '-') {
+                    missing = argv[opt.i - 1];
+                }
+                if (missing) {
+                    fprintf(stderr, "Missing argument for option '%s'\n", missing);
+                } else {
+                    fprintf(stderr, "Missing argument for option\n");
+                }
+                exit(EXIT_FAILURE);
+            }
         }
     }
     if (params.mode == 0 && params.columns > 0 && params.npeaks > params.columns) {

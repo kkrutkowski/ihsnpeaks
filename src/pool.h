@@ -37,6 +37,8 @@ struct l3_dispatcher {
     topo_config_t* topo;
 };
 
+static void l3_dispatcher_destroy(l3_dispatcher_t* d);
+
 // Pool worker callback: lazy-bind to PU, allocate buffer, process file.
 static void pool_process_targets(void* data, long i, int thread_id) {
     pool_context_t* ctx = (pool_context_t*)data;
@@ -48,7 +50,9 @@ static void pool_process_targets(void* data, long i, int thread_id) {
             bind_thread_l3_domain(ctx->topo, ctx->pool_idx);
         }
         if (!ctx->buffers[thread_id]->allocated) {
-            alloc_buffer(ctx->buffers[thread_id], ctx->params);
+            if (alloc_buffer(ctx->buffers[thread_id], ctx->params) != 0) {
+                exit(EXIT_FAILURE);
+            }
         }
         ctx->worker_bound[thread_id] = true;
     }
@@ -105,11 +109,20 @@ static l3_dispatcher_t* l3_dispatcher_create(parameters* params, topo_config_t* 
     // params->buffers is populated so the existing fprint_buffer loop works unchanged.
     params->nbuffers = topo->total_workers;
     params->buffers = (buffer_t**)calloc((size_t)topo->total_workers, sizeof(buffer_t*));
+    if (!params->buffers) {
+        free(d);
+        return NULL;
+    }
     for (int i = 0; i < topo->total_workers; i++) {
         params->buffers[i] = (buffer_t*)calloc(1, sizeof(buffer_t));
+        if (!params->buffers[i]) {
+            free(d);
+            return NULL;
+        }
     }
 
     int running_offset = 0;
+    pool_context_t* failed_ctx = NULL;
     d->num_pools = 0;
     for (int p = 0; p < topo->num_pools; p++) {
         if (topo->threads_per_pool[p] == 0) continue;
@@ -123,14 +136,28 @@ static l3_dispatcher_t* l3_dispatcher_create(parameters* params, topo_config_t* 
         ctx->buffers = &params->buffers[running_offset];
         ctx->worker_bound = (bool*)calloc((size_t)ctx->n_workers, sizeof(bool));
         ctx->chunk_offset = 0;
+        ctx->pool = NULL;
 
+        if (!ctx->worker_bound) {
+            failed_ctx = ctx;
+            break;
+        }
         if (ctx->n_workers > 1) {
             ctx->pool = (kt_forpool_t*)kt_forpool_init(ctx->n_workers, params->idle);
-        } else {
-            ctx->pool = NULL;
+            if (!ctx->pool) {
+                failed_ctx = ctx;
+                break;
+            }
         }
         running_offset += ctx->n_workers;
         d->num_pools++;
+    }
+
+    if (failed_ctx) {
+        if (failed_ctx->pool) kt_forpool_destroy(failed_ctx->pool);
+        free(failed_ctx->worker_bound);
+        l3_dispatcher_destroy(d);
+        return NULL;
     }
     return d;
 }

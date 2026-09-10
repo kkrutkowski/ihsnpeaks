@@ -153,7 +153,7 @@ ihsnpeaks <target> <fmax> [options]
 | `-s` | Save full spectrum to `.tsv` files |
 | `-p` | Prewhiten (subtract detected signals before finding next peaks) |
 | `-j N` | Limit worker threads (default: 0 = all available PUs) |
-| `-b MODE` | Thread binding: `0`/`false`, `1`/`strict`, `2`/`auto` (default), `3`/`cache` |
+| `-b MODE` | Thread binding: `0`/`false`/`no`, `1`/`true`/`strict`/`s`, `2`/`auto` (default), `3`/`cache`/`c`; shortcuts `-b=s`/`-bs`, `-b=c`/`-bc`, `--bind=s`, `--bind=c` |
 | `-o N` | Oversampling factor (default: 5.0) |
 | `-f FMIN` | Lower frequency bound (default: 0.0) |
 | `--period` | Output periods instead of frequencies |
@@ -179,6 +179,6 @@ ihsnpeaks <target> <fmax> [options]
 - **Batch mode:** When a directory is provided as target, the metadata pass discovers all matching `.dat`/`.fits` files, but **inspects only the largest `.dat` file and the largest `.fits` file** (one per format, by `stat` size) to size the NuFFT plan. Buffer sizes are derived from these two files only.
 - **Batch metadata scan performance (IMPORTANT):** The metadata pass must NOT loop over all files calling `inspect_dat_file()` or `inspect_fits_file()`. Doing so introduces severe startup latency on large directories (e.g., 10+ seconds on 15 000+ files where < 1 second is acceptable). The current implementation in `metadata.h::process_path()` tracks `largest_dat_path` / `largest_fits_path` during `readdir()` and opens at most two files after the loop. Any refactor must preserve this property.
 - **Threading / hwloc:** At startup, `load_or_probe_topology()` probes the hardware via hwloc (or loads the cached topology from `~/.ihsnpeaks/hwloc_config`). One worker thread pool is created per active L3 domain; workers are pinned to specific PUs via `hwloc_set_cpubind(HWLOC_CPUBIND_THREAD)` before their per-thread `buffer_t` is allocated, so first-touch NUMA placement puts the per-thread buffers on the local node. Shared NuFFT twiddle arrays (`nufftTwiddleReal/Imag`) are allocated before workers exist, so the OS kernel distributes them across NUMA nodes by default (acceptable for read-mostly data).
-- **Testing:** No test framework is currently set up in the repository. The `src/debug/` directory contains Python debugging/viewer scripts.
+- **Testing:** Shell-based reference/determinism scripts live in `tests/` (`benchmark.sh`, `verify_determinism.sh`); they do not require a test framework. The `src/debug/` directory contains Python debugging/viewer scripts.
 - **No warnings policy:** Compilation with `-Wall -Wextra` is expected to be clean. The makefile adds specific `-Wno-*` flags for certain compiler quirks.
 - **Version:** Defined as `IHSNPEAKS_VERSION "v1.1.0-preview"` (work in progress) in `src/main.c`.

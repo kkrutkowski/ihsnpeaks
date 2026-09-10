@@ -155,8 +155,12 @@ int main(int argc, char *argv[]) {
 
     if (kv_size(params.targets) == 1) {
         // printf("Single file mode\n");
-        buffer_t buffer = {0};           // initalize the pointers to NULL to avoid segfaults
-        alloc_buffer(&buffer, &params);  //, params.avgLen
+        buffer_t buffer = {0};  // initalize the pointers to NULL to avoid segfaults
+        if (alloc_buffer(&buffer, &params) != 0) {
+            if (topo) free_topology(topo);
+            free_parameters(&params);
+            return 1;
+        }
         kt_forpool_t *directPool = NULL;
         if (nThreads > 1) {
             if (mode_uses_direct_eval_grid(params.mode)) {
@@ -167,11 +171,22 @@ int main(int argc, char *argv[]) {
                 // grown lazily at sweep time, so allocate them without the spectrum-sized
                 // power array (aggressive memory reduction).
                 params.nbuffers = nThreads;
-                alloc_buffers(&params);
+                if (alloc_buffers(&params) != 0) {
+                    free_buffer(&buffer);
+                    if (topo) free_topology(topo);
+                    free_parameters(&params);
+                    return 1;
+                }
                 bool saved_spectrum = params.spectrum;
                 params.spectrum = false;
                 for (int i = 0; i < params.nbuffers; i++) {
-                    alloc_buffer(params.buffers[i], &params);
+                    if (alloc_buffer(params.buffers[i], &params) != 0) {
+                        params.spectrum = saved_spectrum;
+                        free_buffer(&buffer);
+                        if (topo) free_topology(topo);
+                        free_parameters(&params);
+                        return 1;
+                    }
                 }
                 params.spectrum = saved_spectrum;
                 directPool = kt_forpool_init(nThreads, params.idle);
@@ -197,6 +212,8 @@ int main(int argc, char *argv[]) {
         FILE *outputFile = fopen(outputFilePath, "w");
         if (outputFile == NULL) {
             perror("Failed to create the output file");
+            if (topo) free_topology(topo);
+            free_parameters(&params);
             return 1;
         }
         const char *coordinateLabel = params.outputPeriod ? "period" : "freq";
@@ -228,7 +245,11 @@ int main(int argc, char *argv[]) {
 
         if (!use_hwloc_bind) {
             params.nbuffers = nThreads;
-            alloc_buffers(&params);
+            if (alloc_buffers(&params) != 0) {
+                if (topo) free_topology(topo);
+                free_parameters(&params);
+                return 1;
+            }
             kt_forpool_t *batchPool = NULL;
             if (nThreads > 1) {
                 batchPool = kt_forpool_init(nThreads, params.idle);
@@ -252,7 +273,11 @@ int main(int argc, char *argv[]) {
 
         if (splitDirectBatch) {
             params.nbuffers = 1;
-            alloc_buffers(&params);
+            if (alloc_buffers(&params) != 0) {
+                if (topo) free_topology(topo);
+                free_parameters(&params);
+                return 1;
+            }
             kt_forpool_t *directPool = NULL;
             if (nThreads > 1) {
                 directPool = kt_forpool_init(nThreads, params.idle);
@@ -260,7 +285,12 @@ int main(int argc, char *argv[]) {
             int permile = (int)targetCount / 1000;
             if (permile == 0) permile = 1;
             if (!params.buffers[0]->allocated) {
-                alloc_buffer(params.buffers[0], &params);
+                if (alloc_buffer(params.buffers[0], &params) != 0) {
+                    if (directPool) kt_forpool_destroy(directPool);
+                    if (topo) free_topology(topo);
+                    free_parameters(&params);
+                    return 1;
+                }
             }
             for (size_t i = 0; i < targetCount; ++i) {
                 process_target(kv_A(params.targets, i).path, params.buffers[0], &params, true, directPool);
@@ -304,6 +334,12 @@ int main(int argc, char *argv[]) {
         clock_gettime(CLOCK_MONOTONIC, &params.batch_start_time);
         params.iter_count = 0;
         l3_dispatcher_t *disp = l3_dispatcher_create(&params, topo);
+        if (!disp) {
+            fprintf(stderr, "Failed to create L3 dispatcher\n");
+            if (topo) free_topology(topo);
+            free_parameters(&params);
+            return 1;
+        }
 
         // Distribute processing of all targets across L3-local pools
         l3_dispatcher_run(disp);

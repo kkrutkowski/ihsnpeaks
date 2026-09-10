@@ -298,7 +298,10 @@ static bool process_path(parameters *params) {
         size_t file_count = 0;
 
         while ((entry = readdir(dir)) != NULL) {
-            if (entry->d_type == DT_REG && (has_dat_suffix(entry->d_name) || has_fits_suffix(entry->d_name))) {
+            // d_type == DT_UNKNOWN is common on some filesystems; fall back to
+            // stat(2) instead of silently skipping every candidate file.
+            bool may_be_regular = (entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN);
+            if (may_be_regular && (has_dat_suffix(entry->d_name) || has_fits_suffix(entry->d_name))) {
                 // Construct the full path for each file
                 char full_path[256];
                 snprintf(full_path, sizeof(full_path), "%s/%s", params->target, entry->d_name);
@@ -308,6 +311,9 @@ static bool process_path(parameters *params) {
                 if (stat(full_path, &file_stat) != 0) {
                     perror("stat");
                     exit(EXIT_FAILURE);
+                }
+                if (!S_ISREG(file_stat.st_mode)) {
+                    continue;
                 }
 
                 params->avgLen += file_stat.st_size;

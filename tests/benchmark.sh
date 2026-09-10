@@ -52,7 +52,7 @@ time_run() {
 # Runs j=1 and extracts sorted peaks (freq R²) — used for reference generation and comparison.
 extract_peaks() {
     local grid=$1 degree=$2
-    "$BINARY" "$TARGET" "$FMAX" -g "$grid" -d "$degree" -j 1 2>/dev/null | LC_ALL=C awk 'NR>3 && NF>=4 {printf "%.6f %.4f\n", $1, $4}'
+    LC_ALL=C "$BINARY" "$TARGET" "$FMAX" -g "$grid" -d "$degree" -j 1 -n 10 -c 0 2>/dev/null | LC_ALL=C awk 'NR>3 && NF>=4 {printf "%.6f %.4f\n", $1, $4}'
 }
 
 # correctness_check <grid> <degree>
@@ -67,22 +67,24 @@ correctness_check() {
     if [[ "$save_ref" == "--save-ref" ]]; then
         echo "$current" > "$reffile"
         echo "SAVED ($reffile)"
-        return
+        return 0
     fi
 
     if [[ ! -f "$reffile" ]]; then
         echo "NO REF (run with --save-ref to generate)"
-        return
+        return 1
     fi
 
     local expected
     expected=$(cat "$reffile")
     if [[ "$current" == "$expected" ]]; then
         echo "PASS"
-    else
-        echo "FAIL"
-        diff <(echo "$expected") <(echo "$current") | head -10 | sed 's/^/  /'
+        return 0
     fi
+
+    echo "FAIL"
+    diff <(echo "$expected") <(echo "$current") | head -10 | sed 's/^/  /' || true
+    return 1
 }
 
 echo "================================================================"
@@ -91,14 +93,19 @@ echo " target: OGLE-BLAP-035 (2240 pts, ~3500d timebase)"
 echo " fmax: $FMAX"
 echo "================================================================"
 
+overall_status=0
 for degree in $DEGREES; do
     for grid in ihs aov; do
         echo ""
         echo "--- $grid d=$degree ---"
 
-        # Correctness
-        result=$(correctness_check "$grid" "$degree" "$SAVE_REF")
-        echo "  correctness: $result"
+        # Correctness: capture status while still printing FAIL details.
+        if result=$(correctness_check "$grid" "$degree" "$SAVE_REF"); then
+            echo "  correctness: $result"
+        else
+            echo "  correctness: $result"
+            overall_status=1
+        fi
 
         # Skip benchmarks when saving references
         if [[ -n "$SAVE_REF" ]]; then
@@ -124,4 +131,9 @@ for degree in $DEGREES; do
 done
 
 echo ""
-echo "Done."
+if [[ "$overall_status" -ne 0 ]]; then
+    echo "Done with correctness failures."
+else
+    echo "Done."
+fi
+exit "$overall_status"

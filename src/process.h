@@ -1352,7 +1352,9 @@ void process_targets(void *data, long i, int thread_id) {
     parameters *params = (parameters *)data;
 
     if (!params->buffers[thread_id]->allocated) {
-        alloc_buffer(params->buffers[thread_id], params);
+        if (alloc_buffer(params->buffers[thread_id], params) != 0) {
+            exit(EXIT_FAILURE);
+        }
     }
     process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true, NULL);
 
