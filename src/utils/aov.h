@@ -106,8 +106,9 @@ static inline VEC aov_solve_levinson_vec(size_t n, const VEC *restrict Rr, const
     VEC E = Rr[0];
     VEC cond_bound = SET_VEC(1.0f);
 
-    Xr[0].data = Yr[0].data / E.data;
-    Xi[0].data = Yi[0].data / E.data;
+    VEC inv_E = {.data = SET_VEC(1.0f).data / E.data};
+    VEC r2 = {.data = (Yr[0].data * Yr[0].data + Yi[0].data * Yi[0].data) * inv_E.data};
+
     Ar[0] = SET_VEC(1.0f);
     Ai[0] = SET_VEC(0.0f);
 
@@ -119,8 +120,8 @@ static inline VEC aov_solve_levinson_vec(size_t n, const VEC *restrict Rr, const
             lambda_i.data += Rr[k - i].data * Ai[i].data + Ri[k - i].data * Ar[i].data;
         }
 
-        VEC gamma_r = {.data = -lambda_r.data / E.data};
-        VEC gamma_i = {.data = -lambda_i.data / E.data};
+        VEC gamma_r = {.data = -lambda_r.data * inv_E.data};
+        VEC gamma_i = {.data = -lambda_i.data * inv_E.data};
 
         for (size_t i = 0; i < k; ++i) {
             Apr[i] = Ar[i];
@@ -140,27 +141,21 @@ static inline VEC aov_solve_levinson_vec(size_t n, const VEC *restrict Rr, const
         VEC abs2_gamma = {.data = gamma_r.data * gamma_r.data + gamma_i.data * gamma_i.data};
         cond_bound.data *= aov_reflection_condition_step_vec(abs2_gamma).data;
         E.data *= SET_VEC(1.0f).data - abs2_gamma.data;
+        inv_E.data = SET_VEC(1.0f).data / E.data;
 
-        VEC mu_r = Yr[k];
-        VEC mu_i = Yi[k];
-        for (size_t i = 0; i < k; ++i) {
-            mu_r.data -= Rr[k - i].data * Xr[i].data - Ri[k - i].data * Xi[i].data;
-            mu_i.data -= Rr[k - i].data * Xi[i].data + Ri[k - i].data * Xr[i].data;
+        /* Forward R^2 inner product: xi_k = sum_{i=0}^k a[i] * y[k-i] */
+        VEC xi_r = Yr[k];
+        VEC xi_i = Yi[k];
+        for (size_t i = 1; i <= k; ++i) {
+            xi_r.data += Ar[i].data * Yr[k - i].data - Ai[i].data * Yi[k - i].data;
+            xi_i.data += Ar[i].data * Yi[k - i].data + Ai[i].data * Yr[k - i].data;
         }
-
-        VEC nu_r = {.data = mu_r.data / E.data};
-        VEC nu_i = {.data = mu_i.data / E.data};
-
-        Xr[k] = nu_r;
-        Xi[k] = nu_i;
-        for (size_t i = 0; i < k; ++i) {
-            VEC ak_r = Ar[k - i];
-            VEC ak_i = {.data = -Ai[k - i].data};
-            Xr[i].data += nu_r.data * ak_r.data - nu_i.data * ak_i.data;
-            Xi[i].data += nu_r.data * ak_i.data + nu_i.data * ak_r.data;
-        }
+        VEC abs2_xi = {.data = xi_r.data * xi_r.data + xi_i.data * xi_i.data};
+        r2.data += abs2_xi.data * inv_E.data;
     }
 
+    Xr[0] = r2;
+    Xi[0] = SET_VEC(0.0f);
     return cond_bound;
 }
 
@@ -169,8 +164,9 @@ static inline float aov_solve_levinson_scalar(size_t n, const float *restrict Rr
                                               float *restrict Api) {
     float E = Rr[0];
     float cond_bound = 1.0f;
-    Xr[0] = Yr[0] / E;
-    Xi[0] = Yi[0] / E;
+    float inv_E = 1.0f / E;
+    float r2 = ((Yr[0] * Yr[0]) + (Yi[0] * Yi[0])) * inv_E;
+
     Ar[0] = 1.0f;
     Ai[0] = 0.0f;
 
@@ -182,8 +178,8 @@ static inline float aov_solve_levinson_scalar(size_t n, const float *restrict Rr
             lambda_i += Rr[k - i] * Ai[i] + Ri[k - i] * Ar[i];
         }
 
-        float gamma_r = -lambda_r / E;
-        float gamma_i = -lambda_i / E;
+        float gamma_r = -lambda_r * inv_E;
+        float gamma_i = -lambda_i * inv_E;
 
         for (size_t i = 0; i < k; ++i) {
             Apr[i] = Ar[i];
@@ -203,26 +199,21 @@ static inline float aov_solve_levinson_scalar(size_t n, const float *restrict Rr
         float abs2_gamma = gamma_r * gamma_r + gamma_i * gamma_i;
         cond_bound *= aov_reflection_condition_step(abs2_gamma);
         E *= 1.0f - abs2_gamma;
+        inv_E = 1.0f / E;
 
-        float mu_r = Yr[k];
-        float mu_i = Yi[k];
-        for (size_t i = 0; i < k; ++i) {
-            mu_r -= Rr[k - i] * Xr[i] - Ri[k - i] * Xi[i];
-            mu_i -= Rr[k - i] * Xi[i] + Ri[k - i] * Xr[i];
+        /* Forward R^2 inner product: xi_k = sum_{i=0}^k a[i] * y[k-i] */
+        float xi_r = Yr[k];
+        float xi_i = Yi[k];
+        for (size_t i = 1; i <= k; ++i) {
+            xi_r += Ar[i] * Yr[k - i] - Ai[i] * Yi[k - i];
+            xi_i += Ar[i] * Yi[k - i] + Ai[i] * Yr[k - i];
         }
-
-        float nu_r = mu_r / E;
-        float nu_i = mu_i / E;
-        Xr[k] = nu_r;
-        Xi[k] = nu_i;
-        for (size_t i = 0; i < k; ++i) {
-            float ak_r = Ar[k - i];
-            float ak_i = -Ai[k - i];
-            Xr[i] += nu_r * ak_r - nu_i * ak_i;
-            Xi[i] += nu_r * ak_i + nu_i * ak_r;
-        }
+        float abs2_xi = xi_r * xi_r + xi_i * xi_i;
+        r2 += abs2_xi * inv_E;
     }
 
+    Xr[0] = r2;
+    Xi[0] = 0.0f;
     return cond_bound;
 }
 
@@ -344,8 +335,7 @@ static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw,
     float condition = aov_solve_levinson_scalar((size_t)norder, Rr, Ri, Yr, Yi, Xr, Xi, Ar, Ai, Apr, Api);
     if (aov_condition_is_singular(condition)) return aov_invalid_value();
 
-    float dot = 0.0f;
-    for (int k = 0; k < norder; ++k) dot += (Yr[k] * Xr[k]) + (Yi[k] * Xi[k]);
+    float dot = Xr[0];
     return aov_clamp_r2(dot / chi2_ref);
 }
 
@@ -411,8 +401,7 @@ static inline int aov_solve_periodogram_vec(const float *Sw, const float *Cw, co
                 power[idx] = aov_invalid_value();
                 continue;
             }
-            float dot = 0.0f;
-            for (int k = 0; k < norder; ++k) dot += (Yr[k].values[lane] * Xr[k].values[lane]) + (Yi[k].values[lane] * Xi[k].values[lane]);
+            float dot = Xr[0].values[lane];
             power[idx] = aov_clamp_r2(dot * inv_chi2_ref);
         }
     }
