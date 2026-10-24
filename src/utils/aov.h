@@ -15,6 +15,9 @@
 #    define M_SQRT1_2 0.70710678118654752440
 #endif
 
+#ifndef AOV_CONDITION_LIMIT
+#    define AOV_CONDITION_LIMIT 5e4f
+#endif
 #define AOV_R2_MAX (1.0f - 1.0e-7f)
 
 typedef struct {
@@ -97,6 +100,12 @@ static inline float aov_reflection_condition_step(float abs2) {
     return (1.0f + abs_reflection) / (1.0f - abs_reflection);
 }
 
+static inline float aov_clamp_reflection_abs2(float abs2) {
+    const float limit = 0.9999999f;
+    if (!(abs2 >= 0.0f) || abs2 > limit) return limit;
+    return abs2;
+}
+
 static inline bool aov_condition_is_singular(float condition_bound) {
     return float_is_nan_bits(condition_bound) || condition_bound < 0.0f || condition_bound > AOV_CONDITION_LIMIT;
 }
@@ -104,7 +113,7 @@ static inline bool aov_condition_is_singular(float condition_bound) {
 static inline VEC aov_solve_levinson_vec(size_t n, const VEC *restrict Rr, const VEC *restrict Ri, const VEC *restrict Yr, const VEC *restrict Yi,
                                          VEC *restrict Xr, VEC *restrict Xi, VEC *restrict Ar, VEC *restrict Ai, VEC *restrict Apr, VEC *restrict Api) {
     VEC E = Rr[0];
-    VEC cond_bound = SET_VEC(1.0f);
+    VEC cond_bound = SET_VEC((float)n);
 
     VEC inv_E = {.data = SET_VEC(1.0f).data / E.data};
     VEC r2 = {.data = (Yr[0].data * Yr[0].data + Yi[0].data * Yi[0].data) * inv_E.data};
@@ -163,7 +172,7 @@ static inline float aov_solve_levinson_scalar(size_t n, const float *restrict Rr
                                               float *restrict Xr, float *restrict Xi, float *restrict Ar, float *restrict Ai, float *restrict Apr,
                                               float *restrict Api) {
     float E = Rr[0];
-    float cond_bound = 1.0f;
+    float cond_bound = (float)n;
     float inv_E = 1.0f / E;
     float r2 = ((Yr[0] * Yr[0]) + (Yi[0] * Yi[0])) * inv_E;
 
@@ -275,8 +284,28 @@ static inline void aov_gls_impl(const float *Sw, const float *Cw, const float *S
 
         power[idx] = aov_clamp_r2((((YC * YC) / CC) + ((YS * YS) / SS)) * inv_chi2_ref);
         if (condition_out) {
-            float abs2 = ((C * C) + (S * S)) * (inv_ws * inv_ws);
-            condition_out[idx] = aov_reflection_condition_step(abs2);
+            /*
+             * Cybenko product P for the 3x3 Toeplitz matrix
+             * R0 = ws, R1 = C - iS, R2 = C2 - iS2:
+             *   |k1| = |R1| / R0
+             *   |k2| = |R0 R2 - R1^2| / (R0^2 - |R1|^2)
+             * The condition value is n * P with n = 3.
+             */
+            float c = C * inv_ws;
+            float s = S * inv_ws;
+            float c2 = C2 * inv_ws;
+            float s2 = S2 * inv_ws;
+            float c2_plus_s2 = (c * c) + (s * s);
+            float k1_abs2 = aov_clamp_reflection_abs2(c2_plus_s2);
+            float k2_num_r = c2 - (c * c) + (s * s);
+            float k2_num_i = s2 - (2.0f * c * s);
+            float k2_den = 1.0f - c2_plus_s2;
+            float max_abs2 = aov_clamp_reflection_abs2(10.0f);
+            float k2_abs2 = max_abs2;
+            if (k2_den > 0.0f) {
+                k2_abs2 = aov_clamp_reflection_abs2(((k2_num_r * k2_num_r) + (k2_num_i * k2_num_i)) / (k2_den * k2_den));
+            }
+            condition_out[idx] = 3.0f * aov_reflection_condition_step(k1_abs2) * aov_reflection_condition_step(k2_abs2);
         }
     }
 }
@@ -639,7 +668,10 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         // Phase 3: stream this block with global frequency indices
         float *bayes_arr = Sw;
         if (is_bayes) {
+            float inv_dim = 1.0f / (float)((2 * degree) + 1);
+            for (uint32_t i = 0; i < count; ++i) cond_arr[i] *= inv_dim;
             nll_convert_spectrum_bayes_batch(power_arr, cond_arr, bayes_arr, count, degree, n_eff);
+            for (uint32_t i = 0; i < count; ++i) cond_arr[i] *= (float)((2 * degree) + 1);
         }
 
         for (uint32_t i = 0; i < count; ++i) {
