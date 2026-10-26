@@ -164,7 +164,8 @@ void print_help(char **argv) {
     printf("  -p, --prewhiten           Attenuate detected variability modes\n");
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
-    printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio) or raw (Classical NLL, default: bayes for m0-m2 AoV, raw otherwise)\n");
+    printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio), raw (Classical NLL), or corrected (IHS-only Wilkie correction;\n");
+    printf("                            default: raw for IHS and AoV with -d <= 7, bayes for AoV with -d >= 8)\n");
     printf("      --norm                Fitting norm: l2 (standard least-squares, default) or l1 (IRLS L1 fitting for gbls)\n");
     printf("      --ddet, --detrending-degree\n");
     printf("                            Trigonometric polynomial detrending degree (default: 3, 0 = constant only)\n");
@@ -429,8 +430,10 @@ static parameters read_parameters(int argc, char *argv[]) {
                     params.statistic = STATISTIC_BAYES;
                 } else if (strcmp(opt.arg, "raw") == 0) {
                     params.statistic = STATISTIC_RAW;
+                } else if (strcmp(opt.arg, "corrected") == 0) {
+                    params.statistic = STATISTIC_CORRECTED;
                 } else {
-                    fprintf(stderr, "Invalid statistic '%s'. Expected 'bayes' or 'raw'.\n", opt.arg);
+                    fprintf(stderr, "Invalid statistic '%s'. Expected 'bayes', 'raw', or 'corrected'.\n", opt.arg);
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -546,7 +549,19 @@ static parameters read_parameters(int argc, char *argv[]) {
         params.periodogramMethod = (params.nterms >= 5) ? PERIODOGRAM_AOV : PERIODOGRAM_IHS;
     }
     if (params.statistic == STATISTIC_AUTO) {
-        params.statistic = (periodogram_uses_aov(params.periodogramMethod) && params.mode <= 2) ? STATISTIC_BAYES : STATISTIC_RAW;
+        params.statistic = (periodogram_uses_aov(params.periodogramMethod) && params.nterms >= 8) ? STATISTIC_BAYES : STATISTIC_RAW;
+    }
+    if (params.statistic == STATISTIC_CORRECTED && periodogram_uses_aov(params.periodogramMethod)) {
+        fprintf(stderr, "--statistic corrected is only supported for the IHS periodogram.\n");
+        exit(EXIT_FAILURE);
+    }
+    if (params.statistic == STATISTIC_CORRECTED && mode_uses_direct_eval_grid(params.mode)) {
+        fprintf(stderr, "--statistic corrected is not supported with direct-evaluation modes (-m >= 5).\n");
+        exit(EXIT_FAILURE);
+    }
+    if (params.statistic == STATISTIC_BAYES && !periodogram_uses_aov(params.periodogramMethod)) {
+        fprintf(stderr, "--statistic bayes is only supported for the AoV periodogram.\n");
+        exit(EXIT_FAILURE);
     }
     params.isFile = process_path(&params);
     return params;

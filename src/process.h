@@ -16,12 +16,7 @@
 #include "utils/strings.h"
 #include "utils/trig.h"
 
-static inline float correctPowerTmp(float K, float nInv) {
-    VEC K_tmp = SET_VEC(0.0f);
-    K_tmp.values[0] = K;
-    K_tmp = correctPower(K_tmp, nInv);
-    return K_tmp.values[0];
-}
+static inline float correctPowerTmp(float K, float nInv) { return correct_power_scalar(K, nInv); }
 
 static inline double effective_grid_fmin(const parameters *params, double delta_t) {
     if (params->fmin == 0.0f && delta_t > 0.0) return 2.0 / delta_t;
@@ -257,12 +252,38 @@ static inline void accumulate_power(buffer_t *buffer, uint32_t base, uint32_t co
     }
 }
 
+/* Accumulate the per-harmonic Wilkie-corrected IHS power.  The input buffer
+ * holds Rayleigh-scale harmonic powers because refresh_weighted_signal_buffer()
+ * normalizes |Z_k|^2 to unit expectation. */
+static inline void accumulate_power_corrected(buffer_t *buffer, uint32_t base, uint32_t count, float nInv) {
+    uint32_t i = 0;
+    uint32_t n_vec = count - (count % VEC_LEN);
+    for (; i < n_vec; i += VEC_LEN) {
+        VEC r = {.data = *(vecf_data *)(buffer->blockReal + i)};
+        VEC im = {.data = *(vecf_data *)(buffer->blockImag + i)};
+        VEC q = {.data = r.data * r.data + im.data * im.data};
+        VEC corrected = correctPower(q, nInv);
+        VEC p = {.data = *(vecf_data *)(buffer->power + base + i)};
+        *(vecf_data *)(buffer->power + base + i) = p.data + corrected.data;
+    }
+    for (; i < count; ++i) {
+        float q = (buffer->blockReal[i] * buffer->blockReal[i]) + (buffer->blockImag[i] * buffer->blockImag[i]);
+        buffer->power[base + i] += correct_power_scalar(q, nInv);
+    }
+}
+
 static inline bool execute_nufft_sweep(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq) {
-    (void)params;
     // Grow the power grid on demand: serial sweeps need the full nfreq+1 entries,
     // while parallel workers only need their slice (slice_nfreq+1).
     if (!buffer_ensure_power(buffer, (size_t)nfreq + 1U)) return false;
     memset(buffer->power, 0, ((size_t)nfreq + 1U) * sizeof(float));
+
+    const bool corrected = (params->statistic == STATISTIC_CORRECTED);
+    const double n_eff = periodogram_wilkie_n_eff(buffer);
+    float n_inv = (n_eff > 0.0 && double_is_finite_bits(n_eff)) ? (float)(1.0 / n_eff) : 0.0f;
+    if (!(n_inv > 0.0f) || !float_is_finite_bits(n_inv)) n_inv = 0.0f;
+    const bool use_corrected = corrected && (n_inv > 0.0f);
+
     {
         PROFILE_START(precompute);
         nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
@@ -299,7 +320,10 @@ static inline bool execute_nufft_sweep(buffer_t *buffer, parameters *params, dou
             }
             {
                 PROFILE_START(power_accumulate);
-                accumulate_power(buffer, base, count);
+                if (use_corrected)
+                    accumulate_power_corrected(buffer, base, count, n_inv);
+                else
+                    accumulate_power(buffer, base, count);
                 PROFILE_END(power_accumulate, PROFILE_PHASE_POWER_ACCUMULATE);
             }
             if (block_idx + 1U < num_blocks) {
@@ -419,6 +443,8 @@ static inline void freq_slice_ihs_worker(void *data, long i, int thread_id) {
     buf->n = primary->n;
     buf->paddedLen = primary->paddedLen;
     buf->terms = primary->terms;
+    buf->neff = primary->neff;
+    buf->amp_neff = primary->amp_neff;
     buf->x = primary->x;
     buf->y = primary->y;
     buf->dy = primary->dy;

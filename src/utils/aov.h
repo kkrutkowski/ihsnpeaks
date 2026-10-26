@@ -15,9 +15,6 @@
 #    define M_SQRT1_2 0.70710678118654752440
 #endif
 
-#ifndef AOV_CONDITION_LIMIT
-#    define AOV_CONDITION_LIMIT 5e4f
-#endif
 #define AOV_R2_MAX (1.0f - 1.0e-7f)
 
 typedef struct {
@@ -668,10 +665,9 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         // Phase 3: stream this block with global frequency indices
         float *bayes_arr = Sw;
         if (is_bayes) {
-            float inv_dim = 1.0f / (float)((2 * degree) + 1);
-            for (uint32_t i = 0; i < count; ++i) cond_arr[i] *= inv_dim;
+            /* The batch converter expects the (2d+1)*P upper bound and
+             * removes the dimensional factor internally. */
             nll_convert_spectrum_bayes_batch(power_arr, cond_arr, bayes_arr, count, degree, n_eff);
-            for (uint32_t i = 0; i < count; ++i) cond_arr[i] *= (float)((2 * degree) + 1);
         }
 
         for (uint32_t i = 0; i < count; ++i) {

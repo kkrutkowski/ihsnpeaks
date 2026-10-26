@@ -26,7 +26,7 @@ typedef enum {
 
 typedef enum { GB_EVAL_GBLS = 0, GB_EVAL_GBAW, GB_EVAL_BLS } gb_eval_mode;
 
-typedef enum { STATISTIC_AUTO = 0, STATISTIC_RAW, STATISTIC_BAYES } statistic_type_t;
+typedef enum { STATISTIC_AUTO = 0, STATISTIC_RAW, STATISTIC_BAYES, STATISTIC_CORRECTED } statistic_type_t;
 
 static inline const char* statistic_name(statistic_type_t stat) {
     switch (stat) {
@@ -36,6 +36,8 @@ static inline const char* statistic_name(statistic_type_t stat) {
             return "raw";
         case STATISTIC_BAYES:
             return "bayes";
+        case STATISTIC_CORRECTED:
+            return "corrected";
         default:
             return "unknown";
     }
@@ -225,6 +227,13 @@ static inline int periodogram_effective_n(const buffer_t* buffer) {
     if (n_eff < 1.0) return 0;
     if (n_eff > (double)INT32_MAX) return INT32_MAX;
     return (int)n_eff;
+}
+
+/* Continuous effective sample size used by the IHS Wilkie correction.
+ * Mirrors the reference's norm_neff = amp_neff if positive else neff. */
+static inline double periodogram_wilkie_n_eff(const buffer_t* buffer) {
+    if (!buffer) return 0.0;
+    return buffer->amp_neff > 0.0 ? buffer->amp_neff : buffer->neff;
 }
 
 enum { GB_SCRATCH_BUF_COUNT = 5 };

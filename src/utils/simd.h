@@ -61,7 +61,7 @@ typedef union {
 #endif
 
 #ifndef AOV_CONDITION_LIMIT
-#    define AOV_CONDITION_LIMIT 5.0e3f
+#    define AOV_CONDITION_LIMIT 5.0e4f
 #endif
 
 #ifndef float_is_finite_bits
@@ -165,10 +165,40 @@ static inline VEC correctPower(const VEC K, const float nInv) {
     VEC term1 = {.data = ((SET_VEC(2.0f).data * K.data) - (K.data * K.data)) * (SET_VEC(0.25f).data * n.data)};
     VEC term2 = {.data = ((SET_VEC(24.0f).data * K.data) - (SET_VEC(132.0f).data * K.data * K.data) + (SET_VEC(76.0f).data * K.data * K.data * K.data) -
                           (SET_VEC(9.0f).data * K.data * K.data * K.data * K.data)) *
-                         (n.data * n.data * SET_VEC(3.4722222e-3f).data)};
+                         (n.data * n.data * SET_VEC(1.0f / 288.0f).data)};
     VEC inside_log = {.data = SET_VEC(1.0f).data + term1.data - term2.data};
     VEC log_result = ln_ps(inside_log);
-    return (VEC){.data = K.data - log_result.data};
+    VEC out = {.data = K.data - log_result.data};
+
+    /*
+     * Wilkie's quartic expansion is only valid near the Rayleigh critical
+     * region.  For large K the bracket can become non-positive, in which case
+     * the reference implementation falls back to the uncorrected power.
+     */
+    for (int lane = 0; lane < VEC_LEN; ++lane) {
+        float bracket = inside_log.values[lane];
+        float corrected = out.values[lane];
+        if (!(bracket > 0.0f) || !float_is_finite_bits(bracket) || !(corrected > 0.0f) || !float_is_finite_bits(corrected)) {
+            out.values[lane] = K.values[lane];
+        }
+    }
+    return out;
+}
+
+static inline float correct_power_scalar(float K, float nInv) {
+    if (!(K > 0.0f) || !float_is_finite_bits(K) || !(nInv > 0.0f) || !float_is_finite_bits(nInv)) return K;
+
+    float K2 = K * K;
+    float K3 = K2 * K;
+    float K4 = K3 * K;
+    float term1 = ((2.0f * K) - K2) * (0.25f * nInv);
+    float term2 = ((24.0f * K) - (132.0f * K2) + (76.0f * K3) - (9.0f * K4)) * (nInv * nInv * (1.0f / 288.0f));
+    float delta = term1 - term2;
+    float bracket = 1.0f + delta;
+    if (!(bracket > 0.0f) || !float_is_finite_bits(bracket)) return K;
+
+    float corrected = K - log1pf(delta);
+    return (corrected > 0.0f && float_is_finite_bits(corrected)) ? corrected : K;
 }
 
 /* ========================================================================= */
@@ -598,7 +628,8 @@ static inline VEC nll_cybenko_vec(const VEC kappa, const cybenko_model_t *m, int
 
         if (fabsf(delta) > 1.0e-5f) {
             VEC ln_z = ln_ps(z);
-            VEC corr = {.data = SET_VEC(delta).data * ((ln_z.data - d_poly.data) / poly.data)};
+            /* Reference scalar formula: nll -= delta * (ln(z) + d_poly / poly). */
+            VEC corr = {.data = SET_VEC(delta).data * (ln_z.data + d_poly.data / poly.data)};
             nll.data -= corr.data;
         }
 
@@ -699,7 +730,12 @@ static inline VEC compute_bayes_laplace_vec(const VEC nll_r2, const VEC nll_cond
     return out;
 }
 
-/* Batch converter for Bayes NLL (using R^2 and condition array) */
+/* Batch converter for Bayes NLL (using R^2 and condition array).
+ *
+ * cond_in carries the Toeplitz condition upper bound (2*degree + 1) * P.
+ * The Cybenko NLL consumes the reflection-coefficient product P, so the
+ * dimensional factor is removed here.  This keeps both the CLI and the
+ * downstream Qt backend on the same contract. */
 static inline void nll_convert_spectrum_bayes_batch(const float *r2_in, const float *cond_in, float *nll_out, size_t count, int degree, int n_eff) {
     if (count == 0) return;
     if (n_eff <= 2 * degree + 1) {
@@ -707,16 +743,19 @@ static inline void nll_convert_spectrum_bayes_batch(const float *r2_in, const fl
         return;
     }
     float b_f = 0.5f * (float)(n_eff - (2 * degree + 1));
+    const float inv_dim = 1.0f / (float)((2 * degree) + 1);
     cybenko_model_t m = cybenko_model_init(degree, n_eff);
     size_t i = 0;
 
     for (; i + VEC_LEN <= count; i += VEC_LEN) {
         VEC r2_chunk, cond_chunk;
         memcpy(r2_chunk.values, r2_in + i, sizeof(float) * VEC_LEN);
-        if (cond_in)
+        if (cond_in) {
             memcpy(cond_chunk.values, cond_in + i, sizeof(float) * VEC_LEN);
-        else
+            cond_chunk.data *= SET_VEC(inv_dim).data;
+        } else {
             cond_chunk = SET_VEC(1.0f);
+        }
 
         VEC nll_r2 = nll_exact_pochhammer_vec(degree, r2_chunk, b_f);
         VEC nll_cond = nll_cybenko_vec(cond_chunk, &m, degree);
@@ -729,7 +768,7 @@ static inline void nll_convert_spectrum_bayes_batch(const float *r2_in, const fl
         VEC r2_pad = {0}, cond_pad = SET_VEC(1.0f);
         for (size_t k = 0; k < rem; ++k) {
             r2_pad.values[k] = r2_in[i + k];
-            if (cond_in) cond_pad.values[k] = cond_in[i + k];
+            if (cond_in) cond_pad.values[k] = cond_in[i + k] * inv_dim;
         }
         VEC nll_r2 = nll_exact_pochhammer_vec(degree, r2_pad, b_f);
         VEC nll_cond = nll_cybenko_vec(cond_pad, &m, degree);

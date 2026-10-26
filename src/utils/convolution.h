@@ -757,13 +757,18 @@ static inline void evaluate_peak_at_current_frequency(peak_t* peak, buffer_t* bu
 }
 
 static inline double correct_ihs_res(const double sum, const int n) {
+    if (!(sum > 0.0) || !double_is_finite_bits(sum)) return 0.0;
+
     double logSum = 1.0;
     double term = 1.0;
     for (int i = 1; i < n; i++) {
         term *= sum / (double)i;
         logSum += term;
     }
-    return sum - log(logSum);
+    if (!(logSum > 0.0) || !double_is_finite_bits(logSum)) return 0.0;
+
+    double result = sum - log(logSum);
+    return (result > 0.0 && double_is_finite_bits(result)) ? result : 0.0;
 }
 
 static inline void sortPeaks(peak_t* peaks, int length, buffer_t* buf, const parameters* params, double df) {

@@ -146,7 +146,7 @@ ihsnpeaks <target> <fmax> [options]
 | `-d N` | Number of harmonics/terms (default: 3) |
 | `-m N` | Peak evaluation mode 0–6 (default: 2) |
 | `-g METHOD` | Periodogram method: `ihs` (default for `-d <= 4`), `aov`/`aovmh`/`chi`/`chi2` (default for `-d >= 5`) |
-| `--statistic TYPE` | Statistic type: `bayes` (Relative Evidence Ratio) or `raw` (Classical NLL; default: `bayes` for m0-m2 AoV, `raw` otherwise) |
+| `--statistic TYPE` | Statistic type: `bayes` (Relative Evidence Ratio), `raw` (Classical NLL), or `corrected` (IHS-only Wilkie correction; default: `raw` for IHS and AoV `-d <= 7`, `bayes` for AoV `-d >= 8`) |
 | `-e METHOD` | Peak evaluation: `gbls[alpha]`, `gbaw[alpha]`, or `bls[a,b,count]` |
 | `-t THRESHOLD` | Detection threshold in dB (default: 10.0) |
 | `-n N` | Max number of peaks to report (default: 10) |

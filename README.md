@@ -53,6 +53,7 @@ ihsnpeaks OGLE-BLAP-035.dat 100
 - `-d, --degree, --terms`: number of harmonics.
 - `-m, --mode`: peak evaluation/refinement mode.
 - `-g, --grid`: periodogram method: default `ihs` or phase-coherent `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2` (all phase-coherent keys are aliases of the same method).
+- `--statistic`: `raw` (Classical NLL, default for IHS and AoV `-d <= 7`), `bayes` (Relative Evidence Ratio, default for AoV `-d >= 8`), or `corrected` (IHS-only Wilkie correction).
 - `-s, --save, --spectrum`: write generated spectra to `.tsv` files.
 - `-j, --jobs`: limit worker threads (default:0 - unlimited threads)
 
