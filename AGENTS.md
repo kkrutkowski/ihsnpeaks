@@ -16,6 +16,8 @@
 - hwloc-based L3-cache-aware thread pools with per-PU CPU binding and first-touch NUMA placement
 - Native multithreading (pthreads) with L3-aware per-pool chunked dispatch and work-stealing
 - Built-in PSWF-based NuFFT backend (no FFTW3 dependency)
+- Fused Radix-2 pair FFT with interleaved twiddles (one pass per two DIF stages)
+- Cache-optimal COBRA/COBRAVO bit-reversal; COBRAVO uses AVX-512/AVX2 gather with a scalar fallback and is selected at build time by `scaling_gen`
 
 **Architecture:**
 - Single-file CLI binary: `src/main.c` is the entry point
@@ -45,7 +47,7 @@
 │   ├── nufft/           — PSWF-based non-uniform FFT backend
 │   │   ├── nufft1.c     — NuFFT implementation
 │   │   ├── nufft1.h     — NuFFT public API
-│   │   ├── scaling.c    — PSWF scaling coefficients generator
+│   │   ├── scaling.c    — Build-time PSWF scaling, FFT alpha fit, and COBRA/COBRAVO calibration generator
 │   │   └── scaling_generic.h — Fallback PSWF scaling coefficients
 │   ├── utils/           — Shared utilities
 │   │   ├── common.h     — Core types: buffer_t, parameters, peak_t, enums
@@ -178,7 +180,9 @@ ihsnpeaks <target> <fmax> [options]
 - **Memory management:** Uses system allocator by default. Optionally links mimalloc (`MIMALLOC=1`). For simplicity within the hot path, the code allocates and reuses pre-sized buffers per thread rather than frequent malloc/free.
 - **Batch mode:** When a directory is provided as target, the metadata pass discovers all matching `.dat`/`.fits` files, but **inspects only the largest `.dat` file and the largest `.fits` file** (one per format, by `stat` size) to size the NuFFT plan. Buffer sizes are derived from these two files only.
 - **Batch metadata scan performance (IMPORTANT):** The metadata pass must NOT loop over all files calling `inspect_dat_file()` or `inspect_fits_file()`. Doing so introduces severe startup latency on large directories (e.g., 10+ seconds on 15 000+ files where < 1 second is acceptable). The current implementation in `metadata.h::process_path()` tracks `largest_dat_path` / `largest_fits_path` during `readdir()` and opens at most two files after the loop. Any refactor must preserve this property.
-- **Threading / hwloc:** At startup, `load_or_probe_topology()` probes the hardware via hwloc (or loads the cached topology from `~/.ihsnpeaks/hwloc_config`). One worker thread pool is created per active L3 domain; workers are pinned to specific PUs via `hwloc_set_cpubind(HWLOC_CPUBIND_THREAD)` before their per-thread `buffer_t` is allocated, so first-touch NUMA placement puts the per-thread buffers on the local node. Shared NuFFT twiddle arrays (`nufftTwiddleReal/Imag`) are allocated before workers exist, so the OS kernel distributes them across NUMA nodes by default (acceptable for read-mostly data).
-- **Testing:** Shell-based reference/determinism scripts live in `tests/` (`benchmark.sh`, `verify_determinism.sh`); they do not require a test framework. The `src/debug/` directory contains Python debugging/viewer scripts.
+- **Threading / hwloc:** At startup, `load_or_probe_topology()` probes the hardware via hwloc (or loads the cached topology from `~/.ihsnpeaks/hwloc_config`). One worker thread pool is created per active L3 domain; workers are pinned to specific PUs via `hwloc_set_cpubind(HWLOC_CPUBIND_THREAD)` before their per-thread `buffer_t` is allocated, so first-touch NUMA placement puts the per-thread buffers on the local node. The shared NuFFT twiddle allocation (`nufftTwiddleReal/Imag`) is one block containing a private region per cached plan and is allocated before workers exist, so the OS kernel distributes it across NUMA nodes by default (acceptable for read-mostly data).
+- **FFT / twiddles:** `src/nufft/nufft1.c` uses a fused Radix-2 pair (two DIF stages per pass) with interleaved `W1`/`W2` twiddle blocks.  The fused layout is not suffix-compatible across plan sizes, so every cached NuFFT plan must own its twiddle region; `src/metadata.h` allocates these per-plan regions.  `nufft1_initialize_shared_precomputed()` therefore requires a buffer that already contains that plan's fused layout, never a suffix of a larger plan's buffer.
+- **Build-time calibration:** `src/nufft/scaling.c` self-tests the fused FFT, fits `F_ALPHA` from FFT log-log timing, measures stable beta/gamma with min-of-repetitions, and selects COBRA/COBRAVO.  Run `tests/verify_bitrev.sh` after touching the FFT, twiddle layout, or plan cache.
+- **Testing:** Shell-based reference/determinism scripts live in `tests/` (`benchmark.sh`, `verify_determinism.sh`, `verify_bitrev.sh`, `bitrev_scaling_test.c`); they do not require a test framework. The `src/debug/` directory contains Python debugging/viewer scripts.
 - **No warnings policy:** Compilation with `-Wall -Wextra` is expected to be clean. The makefile adds specific `-Wno-*` flags for certain compiler quirks.
 - **Version:** Defined as `IHSNPEAKS_VERSION "v1.1.0-preview"` (work in progress) in `src/main.c`.

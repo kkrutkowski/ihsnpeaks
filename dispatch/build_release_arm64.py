@@ -100,7 +100,6 @@ def write_text(path: Path, text: str) -> None:
 def try_generate_proxy_scaling(root: Path, build_root: Path, host_cc: str, stdflag: str, name: str, cflags: list[str]) -> Path | None:
     proxy_dir = build_root / "scaling-proxy" / name
     proxy_dir.mkdir(parents=True, exist_ok=True)
-    nufft_obj = proxy_dir / "nufft1.o"
     scaling_gen = proxy_dir / "scaling_gen"
     scaling_header = proxy_dir / "scaling.h"
     common_flags = [stdflag, "-D_GNU_SOURCE", "-DHAS_MIMALLOC=0", f"-DMAX_TWIDDLE_REUSE={MAX_TWIDDLE_REUSE}", "-pthread"]
@@ -116,24 +115,8 @@ def try_generate_proxy_scaling(root: Path, build_root: Path, host_cc: str, stdfl
                 "-fno-sanitize=all",
                 *cflags,
                 *include_flags,
-                "-c",
-                str(root / "src/nufft/nufft1.c"),
-                "-o",
-                str(nufft_obj),
-            ],
-            root,
-        )
-        run(
-            [
-                host_cc,
-                *common_flags,
-                "-O3",
-                "-ffast-math",
-                "-fno-sanitize=all",
-                *cflags,
-                *include_flags,
+                "-DNUFFT1_SCALING_BOOTSTRAP",
                 str(root / "src/nufft/scaling.c"),
-                str(nufft_obj),
                 "-static",
                 "-lm",
                 "-o",

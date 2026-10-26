@@ -20,7 +20,6 @@ if(NOT DEFINED LCQT_DIR)
 endif()
 
 # Generate scaling.h
-set(SCALING_NUFFT_OBJ "${CMAKE_BINARY_DIR}/nufft1.scaling.o")
 set(SCALING_GEN "${CMAKE_BINARY_DIR}/scaling_gen")
 set(SCALING_HEADER "${CMAKE_BINARY_DIR}/scaling.h")
 set(SCALING_FLAGS -std=gnu23 -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=8 -O3 -ffast-math -fno-sanitize=all)
@@ -28,9 +27,8 @@ set(SCALING_FLAGS -std=gnu23 -D_GNU_SOURCE -DHAS_MIMALLOC=0 -DMAX_TWIDDLE_REUSE=
 add_custom_command(
     OUTPUT "${SCALING_HEADER}"
     COMMAND ${CMAKE_C_COMPILER} ${SCALING_FLAGS} -I${UPSTREAM_SRC_DIR}/nufft
-            -c ${UPSTREAM_SRC_DIR}/nufft/nufft1.c -o ${SCALING_NUFFT_OBJ}
-    COMMAND ${CMAKE_C_COMPILER} ${SCALING_FLAGS} -I${UPSTREAM_SRC_DIR}/nufft
-            ${UPSTREAM_SRC_DIR}/nufft/scaling.c ${SCALING_NUFFT_OBJ}
+            -DNUFFT1_SCALING_BOOTSTRAP
+            ${UPSTREAM_SRC_DIR}/nufft/scaling.c
             -static -lm -o ${SCALING_GEN}
     COMMAND ${SCALING_GEN} ${SCALING_HEADER}
     DEPENDS ${UPSTREAM_SRC_DIR}/nufft/nufft1.c ${UPSTREAM_SRC_DIR}/nufft/scaling.c ${UPSTREAM_SRC_DIR}/nufft/nufft1.h

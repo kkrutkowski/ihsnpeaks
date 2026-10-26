@@ -30,7 +30,6 @@ set(LC_BACKEND_MARCH "" CACHE STRING "Backend microarchitecture (e.g. x86-64, x8
 # shipping the generic constants. scaling.c + nufft1.c are compiled into a small static
 # helper that is run to emit tuned F_ALPHA / F_PSWF*_BETA / F_PSWF*_GAMMA into the build dir.
 # ---------------------------------------------------------------------------------------
-set(SCALING_NUFFT_OBJ "${CMAKE_BINARY_DIR}/nufft1.scaling.o")
 set(SCALING_GEN "${CMAKE_BINARY_DIR}/scaling_gen")
 set(SCALING_HEADER "${CMAKE_BINARY_DIR}/scaling.h")
 
@@ -42,9 +41,8 @@ endif()
 add_custom_command(
     OUTPUT "${SCALING_HEADER}"
     COMMAND ${CMAKE_C_COMPILER} ${SCALING_FLAGS} -I${UPSTREAM_SRC_DIR}/nufft
-            -c ${UPSTREAM_SRC_DIR}/nufft/nufft1.c -o ${SCALING_NUFFT_OBJ}
-    COMMAND ${CMAKE_C_COMPILER} ${SCALING_FLAGS} -I${UPSTREAM_SRC_DIR}/nufft
-            ${UPSTREAM_SRC_DIR}/nufft/scaling.c ${SCALING_NUFFT_OBJ}
+            -DNUFFT1_SCALING_BOOTSTRAP
+            ${UPSTREAM_SRC_DIR}/nufft/scaling.c
             -static -lm -o ${SCALING_GEN}
     COMMAND ${SCALING_GEN} ${SCALING_HEADER}
     DEPENDS ${UPSTREAM_SRC_DIR}/nufft/nufft1.c ${UPSTREAM_SRC_DIR}/nufft/scaling.c ${UPSTREAM_SRC_DIR}/nufft/nufft1.h

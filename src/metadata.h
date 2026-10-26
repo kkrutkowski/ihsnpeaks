@@ -183,13 +183,6 @@ static void initialize_nufft_plan(parameters *params) {
 
     params->nufftExternalSizes = nufft1_external_sizes_for_plan((int)params->gridLen, params->gridMode);
     int nufft_factors = periodogram_uses_aov(params->periodogramMethod) ? 2 * params->nterms : params->nterms;
-    params->nufftTwiddleReal = aligned_alloc(64, round_metadata_alloc(params->nufftExternalSizes.twiddle_len * sizeof(float)));
-    params->nufftTwiddleImag = aligned_alloc(64, round_metadata_alloc(params->nufftExternalSizes.twiddle_len * sizeof(float)));
-    if (!params->nufftTwiddleReal || !params->nufftTwiddleImag) {
-        fprintf(stderr, "Failed to allocate shared NuFFT twiddles\n");
-        free_nufft_plan_cache(params);
-        exit(EXIT_FAILURE);
-    }
 
     uint32_t plan_count = 0;
     for (uint32_t len = 1U << 8; len < params->gridLen; len <<= 1U) ++plan_count;
@@ -208,30 +201,36 @@ static void initialize_nufft_plan(parameters *params) {
     params->nufftPlanCache[idx++].gridLen = params->gridLen;
     params->nufftPlanCount = idx;
 
-    nufft_plan_cache_entry_t *max_entry = &params->nufftPlanCache[params->nufftPlanCount - 1U];
-    max_entry->outputLen = nufft_output_len_for_grid(max_entry->gridLen, params->gridMode);
-    max_entry->externalSizes = params->nufftExternalSizes;
-    max_entry->twiddleReal = params->nufftTwiddleReal;
-    max_entry->twiddleImag = params->nufftTwiddleImag;
-    max_entry->plan =
-        nufft1_initialize_shared((int)params->maxLen, (int)max_entry->gridLen, nufft_factors, params->gridMode, max_entry->twiddleReal, max_entry->twiddleImag);
-    if (!max_entry->plan) {
-        fprintf(stderr, "Failed to initialize shared NuFFT plan\n");
+    /* The fused-Radix-2 twiddle layout is not a suffix of the next-larger
+     * plan's layout, so every cached plan needs its own region inside the
+     * shared allocation.  The total is dominated by the largest plan and is
+     * roughly twice the old suffix-shared size. */
+    size_t total_twiddle_len = 0;
+    for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
+        nufft_plan_cache_entry_t *entry = &params->nufftPlanCache[i];
+        if (params->gridMode == NUFFT1_PSWF43) entry->gridLen = (uint32_t)nufft1_pswf43_plan_len_from_base((int)entry->gridLen);
+        entry->externalSizes = nufft1_external_sizes_for_plan((int)entry->gridLen, params->gridMode);
+        total_twiddle_len += entry->externalSizes.twiddle_len;
+    }
+    params->nufftTwiddleReal = aligned_alloc(64, round_metadata_alloc(total_twiddle_len * sizeof(float)));
+    params->nufftTwiddleImag = aligned_alloc(64, round_metadata_alloc(total_twiddle_len * sizeof(float)));
+    if (!params->nufftTwiddleReal || !params->nufftTwiddleImag) {
+        fprintf(stderr, "Failed to allocate shared NuFFT twiddles\n");
         free_nufft_plan_cache(params);
         exit(EXIT_FAILURE);
     }
 
+    size_t twiddle_offset = 0;
     for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
         nufft_plan_cache_entry_t *entry = &params->nufftPlanCache[i];
-        if (i == params->nufftPlanCount - 1U) continue;
-        if (params->gridMode == NUFFT1_PSWF43) entry->gridLen = (uint32_t)nufft1_pswf43_plan_len_from_base((int)entry->gridLen);
         entry->outputLen = nufft_output_len_for_grid(entry->gridLen, params->gridMode);
-        entry->externalSizes = nufft1_external_sizes_for_plan((int)entry->gridLen, params->gridMode);
-        size_t twiddle_offset = params->nufftExternalSizes.twiddle_len - entry->externalSizes.twiddle_len;
         entry->twiddleReal = params->nufftTwiddleReal + twiddle_offset;
         entry->twiddleImag = params->nufftTwiddleImag + twiddle_offset;
-        entry->plan = nufft1_initialize_shared_precomputed((int)params->maxLen, (int)entry->gridLen, nufft_factors, params->gridMode, entry->twiddleReal,
-                                                           entry->twiddleImag);
+        twiddle_offset += entry->externalSizes.twiddle_len;
+        /* nufft1_initialize_shared generates the fused layout into this
+         * plan's own region; the old suffix-sharing path is invalid. */
+        entry->plan =
+            nufft1_initialize_shared((int)params->maxLen, (int)entry->gridLen, nufft_factors, params->gridMode, entry->twiddleReal, entry->twiddleImag);
         if (!entry->plan) {
             fprintf(stderr, "Failed to initialize shared NuFFT plan\n");
             free_nufft_plan_cache(params);

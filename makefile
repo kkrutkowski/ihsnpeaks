@@ -290,11 +290,11 @@ $(MIMALLOC_OVERRIDE_HEADER): $(MIMALLOC_COMPAT_HEADER) | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	@printf '#ifndef IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#define IHSNPEAKS_MIMALLOC_OVERRIDE_H\n#include <mimalloc/mimalloc.h>\n#define malloc(n) mi_malloc(n)\n#define calloc(c,n) mi_calloc(c,n)\n#define realloc(p,n) mi_realloc(p,n)\n#define free(p) mi_free(p)\n#define strdup(s) mi_strdup(s)\n#define strndup(s,n) mi_strndup(s,n)\n#define realpath(f,n) mi_realpath(f,n)\n#define aligned_alloc(a,n) mi_aligned_alloc(a,n)\n#define posix_memalign(p,a,n) mi_posix_memalign(p,a,n)\n#define reallocarray(p,c,n) mi_reallocarray(p,c,n)\n#endif\n' > $@
 
-$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(MIMALLOC_HEADER_DEP) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
+$(NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(SCALING_HEADER) $(MIMALLOC_HEADER_DEP) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
-	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra $(SCALING_WARNFLAGS) -D_GNU_SOURCE -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=16 -march=native -mtune=native -static $< $(NUFFT_OBJ) $(LDLIBS) -o $@
+$(SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(lastword $(MAKEFILE_LIST)) $(COMPILER_STAMP) | $(BUILD_DIR)
+	$(CC) $(STDFLAG) -O3 -ffast-math -Wall -Wextra $(SCALING_WARNFLAGS) -D_GNU_SOURCE -DNUFFT1_SCALING_BOOTSTRAP -I$(MAKEFILE_DIR)src/nufft -DMAX_TWIDDLE_REUSE=16 -march=native -mtune=native -static $< $(LDLIBS) -o $@
 
 $(SCALING_HEADER): $(SCALING_GEN)
 	$(SCALING_GEN) $@
@@ -352,11 +352,11 @@ $(PROFILE_BUILD_DIR):
 $(PROFILE_ROOT):
 	@mkdir -p $@
 
-$(PROFILE_NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) | $(PROFILE_BUILD_DIR)
+$(PROFILE_NUFFT_OBJ): $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) $(PROFILE_SCALING_HEADER) | $(PROFILE_BUILD_DIR)
 	$(PROFILE_CC) $(PROFILE_CFLAGS) -c $< -o $@
 
-$(PROFILE_SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(PROFILE_NUFFT_OBJ) $(NUFFT_HDR) $(COMPAT_HDR) | $(PROFILE_BUILD_DIR)
-	$(PROFILE_CC) $(PROFILE_SCALING_CFLAGS) $< $(PROFILE_NUFFT_OBJ) -static -lm -o $@
+$(PROFILE_SCALING_GEN): $(MAKEFILE_DIR)src/nufft/scaling.c $(NUFFT_SRC) $(NUFFT_HDR) $(TRIG_HDR) $(COMPAT_HDR) | $(PROFILE_BUILD_DIR)
+	$(PROFILE_CC) $(PROFILE_SCALING_CFLAGS) -DNUFFT1_SCALING_BOOTSTRAP $< -static -lm -o $@
 
 $(PROFILE_SCALING_HEADER): $(PROFILE_SCALING_GEN)
 	$(PROFILE_SCALING_GEN) $@

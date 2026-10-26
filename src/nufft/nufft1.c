@@ -9,6 +9,18 @@
 #include "../utils/trig.h"
 #include "nufft1.h"
 
+/* Build-time calibrated by src/nufft/scaling.c. The generated header is absent
+ * in downstream builds that do not run scaling_gen (for example the CUDA
+ * benchmark); in that case COBRAVO remains the safe default. */
+#if !defined(NUFFT1_SCALING_BOOTSTRAP) && defined(__has_include)
+#    if __has_include("scaling.h")
+#        include "scaling.h"
+#    endif
+#endif
+#ifndef F_BITREV_COBRAVO
+#    define F_BITREV_COBRAVO 1
+#endif
+
 #ifndef M_PI
 #    define M_PI 3.14159265358979323846
 #endif
@@ -20,6 +32,18 @@
 typedef float VECF __attribute__((vector_size(VEC_BYTES)));
 typedef uint32_t VECF_INT __attribute__((vector_size(VEC_BYTES)));
 typedef int32_t VECF_SINT __attribute__((vector_size(VEC_BYTES)));
+
+#if VEC_BYTES == 64 && defined(__AVX512F__)
+#    define COBRAVO_GATHER_LANES 16
+#elif VEC_BYTES == 32 && defined(__AVX2__)
+#    define COBRAVO_GATHER_LANES 8
+#else
+#    define COBRAVO_GATHER_LANES 0
+#endif
+
+#if COBRAVO_GATHER_LANES
+#    include <immintrin.h>
+#endif
 
 #if defined(__clang__)
 static inline VECF nanofft_shuffle1_vec(VECF a, VECF_INT mask) {
@@ -46,6 +70,17 @@ static inline VECF nanofft_shuffle2_vec(VECF a, VECF b, VECF_INT mask) {
 
 #define LOAD_VEC(ptr) (*(const VECF *)(ptr))
 #define STORE_VEC(ptr, val) (*(VECF *)(ptr) = (val))
+
+/* The fused Radix-2 stages always address VECF_LEN-aligned offsets, so the
+ * compiler can use aligned moves.  Keep a portable fallback for non-GNU
+ * compilers. */
+#if defined(__GNUC__) || defined(__clang__)
+#    define LOAD_VEC_ALIGNED(ptr) (*(const VECF *)__builtin_assume_aligned((ptr), VEC_BYTES))
+#    define STORE_VEC_ALIGNED(ptr, val) (*(VECF *)__builtin_assume_aligned((ptr), VEC_BYTES) = (val))
+#else
+#    define LOAD_VEC_ALIGNED(ptr) LOAD_VEC(ptr)
+#    define STORE_VEC_ALIGNED(ptr, val) STORE_VEC(ptr, val)
+#endif
 
 static inline void storeu_vecf(float *ptr, VECF val) { memcpy(ptr, &val, sizeof(val)); }
 
@@ -126,6 +161,7 @@ static inline uint32_t int_max(int32_t a, int32_t b) { return a > b ? (uint32_t)
 
 #define LOG_BLOCK_WIDTH 6
 #define BLOCK_WIDTH (1 << LOG_BLOCK_WIDTH)
+#define BLOCK_ELEMS (BLOCK_WIDTH * BLOCK_WIDTH)
 
 static inline uint32_t intlog2(uint32_t input) {
     uint32_t output;
@@ -156,6 +192,26 @@ static inline uint32_t reverse_bits(uint32_t num, uint32_t bits) {
     result >>= (8U * bytes - bits);
     return result;
 }
+
+#if COBRAVO_GATHER_LANES
+static int cobravo_gather_idx[BLOCK_ELEMS] __attribute__((aligned(64)));
+static bool cobravo_gather_ready = false;
+
+/* The index table is pure data derived from the fixed 12-bit tile reversal, so
+ * it can be initialized once during plan construction (before worker threads). */
+static inline void cobravo_init(void) {
+    if (cobravo_gather_ready) return;
+    for (uint32_t o = 0; o < (uint32_t)BLOCK_ELEMS / COBRAVO_GATHER_LANES; ++o) {
+        for (uint32_t l = 0; l < COBRAVO_GATHER_LANES; ++l) {
+            uint32_t src = reverse_bits(o * COBRAVO_GATHER_LANES + l, 2U * LOG_BLOCK_WIDTH);
+            cobravo_gather_idx[o * COBRAVO_GATHER_LANES + l] = (int)src;
+        }
+    }
+    cobravo_gather_ready = true;
+}
+#else
+static inline void cobravo_init(void) {}
+#endif
 
 static inline void table_shuffle(float *real, float *imag, uint32_t log_n) {
     for (uint32_t i = 0; i < (1U << log_n); ++i) {
@@ -236,12 +292,96 @@ static inline void cobra_shuffle(float *real, float *imag, uint32_t log_n, float
     }
 }
 
+/* COBRAVO: keep COBRA's cache-optimal 64x64 tiling, but process each pair
+ * {b, rev(b)} out-of-place in two tile buffers and vectorize the intra-tile
+ * bit reversal.  Loading both members of a pair before writing either target
+ * makes the tile moves cycle-safe. */
+static inline void cobravo_load_tile(const float *src, uint32_t b_shifted, uint32_t shift_top, float *dst) {
+    for (uint32_t a = 0; a < BLOCK_WIDTH; ++a) {
+        memcpy(dst + a * BLOCK_WIDTH, src + (a << shift_top) + b_shifted, BLOCK_WIDTH * sizeof(float));
+    }
+}
+
+static inline void cobravo_store_tile(const float *src, float *dst, uint32_t b_shifted, uint32_t shift_top) {
+    for (uint32_t a = 0; a < BLOCK_WIDTH; ++a) {
+        memcpy(dst + (a << shift_top) + b_shifted, src + a * BLOCK_WIDTH, BLOCK_WIDTH * sizeof(float));
+    }
+}
+
+static inline void cobravo_emit_tile(float *src_real, float *src_imag, float *real, float *imag, uint32_t b_shifted, uint32_t shift_top) {
+#if COBRAVO_GATHER_LANES == 16
+    for (uint32_t o = 0; o < (uint32_t)BLOCK_ELEMS / 16U; ++o) {
+        __m512i idx = _mm512_load_si512((const void *)&cobravo_gather_idx[o * 16U]);
+        __m512 vr = _mm512_i32gather_ps(idx, src_real, 4);
+        __m512 vi = _mm512_i32gather_ps(idx, src_imag, 4);
+        uint32_t v = o * 16U;
+        uint32_t off = ((v >> LOG_BLOCK_WIDTH) << shift_top) | b_shifted | (v & (BLOCK_WIDTH - 1U));
+        _mm512_storeu_ps(real + off, vr);
+        _mm512_storeu_ps(imag + off, vi);
+    }
+#elif COBRAVO_GATHER_LANES == 8
+    for (uint32_t o = 0; o < (uint32_t)BLOCK_ELEMS / 8U; ++o) {
+        __m256i idx = _mm256_load_si256((const void *)&cobravo_gather_idx[o * 8U]);
+        __m256 vr = _mm256_i32gather_ps(src_real, idx, 4);
+        __m256 vi = _mm256_i32gather_ps(src_imag, idx, 4);
+        uint32_t v = o * 8U;
+        uint32_t off = ((v >> LOG_BLOCK_WIDTH) << shift_top) | b_shifted | (v & (BLOCK_WIDTH - 1U));
+        _mm256_storeu_ps(real + off, vr);
+        _mm256_storeu_ps(imag + off, vi);
+    }
+#else
+    for (uint32_t i = 0; i < (uint32_t)BLOCK_ELEMS; ++i) {
+        uint32_t j = reverse_bits(i, 2U * LOG_BLOCK_WIDTH);
+        if (j > i) {
+            float tr = src_real[i], ti = src_imag[i];
+            src_real[i] = src_real[j];
+            src_imag[i] = src_imag[j];
+            src_real[j] = tr;
+            src_imag[j] = ti;
+        }
+    }
+    cobravo_store_tile(src_real, real, b_shifted, shift_top);
+    cobravo_store_tile(src_imag, imag, b_shifted, shift_top);
+#endif
+}
+
+static inline void cobravo_shuffle(float *real, float *imag, uint32_t log_n, float *bufA_real, float *bufA_imag, float *bufB_real, float *bufB_imag) {
+    if (log_n <= 2U * LOG_BLOCK_WIDTH) return;
+    cobravo_init();
+
+    uint32_t num_b_bits = log_n - 2U * LOG_BLOCK_WIDTH;
+    uint32_t b_size = 1U << num_b_bits;
+    uint32_t shift_top = num_b_bits + LOG_BLOCK_WIDTH;
+
+    for (uint32_t b = 0; b < b_size; ++b) {
+        uint32_t b_rev = reverse_bits(b, num_b_bits);
+        if (b > b_rev) continue;
+
+        uint32_t b_shifted = b << LOG_BLOCK_WIDTH;
+        uint32_t b_rev_shifted = b_rev << LOG_BLOCK_WIDTH;
+
+        cobravo_load_tile(real, b_shifted, shift_top, bufA_real);
+        cobravo_load_tile(imag, b_shifted, shift_top, bufA_imag);
+        if (b != b_rev) {
+            cobravo_load_tile(real, b_rev_shifted, shift_top, bufB_real);
+            cobravo_load_tile(imag, b_rev_shifted, shift_top, bufB_imag);
+        }
+
+        cobravo_emit_tile(bufA_real, bufA_imag, real, imag, b_rev_shifted, shift_top);
+        if (b != b_rev) cobravo_emit_tile(bufB_real, bufB_imag, real, imag, b_shifted, shift_top);
+    }
+}
+
 static inline void bit_reverse_permutation(float *real, float *imag, uint32_t n, float *buffer_real, float *buffer_imag) {
     uint32_t order = intlog2(n);
     if (order <= 2U * LOG_BLOCK_WIDTH) {
         table_shuffle(real, imag, order);
     } else {
+#if F_BITREV_COBRAVO
+        cobravo_shuffle(real, imag, order, buffer_real, buffer_imag, buffer_real + BLOCK_ELEMS, buffer_imag + BLOCK_ELEMS);
+#else
         cobra_shuffle(real, imag, order, buffer_real, buffer_imag);
+#endif
     }
 }
 
@@ -324,6 +464,10 @@ static inline void nanofft_vec_inv_perm(VECF *a, VECF *b, uint32_t idx) {
 }
 #endif
 
+#ifdef NUFFT1_SCALING_BOOTSTRAP
+/* Reference two-pass Radix-2 implementation.  Production builds always use the
+ * fused pair below; the calibration TU keeps this version to self-test and
+ * benchmark the replacement. */
 static void generate_fft_buffer(uint32_t n, float *real_buffer, float *imag_buffer) {
     uint32_t shift = 0;
     for (uint32_t step = n; step > 1U; step >>= 1U) {
@@ -363,7 +507,7 @@ static void sande_tukey_in_place(float *real, float *imag, const float *twiddle_
         shift += half_step;
     }
 
-#ifdef HAS_INTRA_VEC_PASS
+#    ifdef HAS_INTRA_VEC_PASS
     for (uint32_t i = int_max(0, (int32_t)intlog2(VECF_LEN) - (int32_t)intlog2(n)); i < (uint32_t)intlog2(VECF_LEN); ++i) {
         for (uint32_t j = 0; j < n; j += VECF_LEN * 2U) {
             VECF r_even = LOAD_VEC(&real[j]);
@@ -394,7 +538,7 @@ static void sande_tukey_in_place(float *real, float *imag, const float *twiddle_
             STORE_VEC(&imag[j + VECF_LEN], i_odd);
         }
     }
-#else
+#    else
     for (uint32_t step = uint_min(VECF_LEN, n); step > 1U; step >>= 1U) {
         uint32_t half_step = step >> 1U;
         for (uint32_t i = 0; i < n; i += step) {
@@ -413,17 +557,224 @@ static void sande_tukey_in_place(float *real, float *imag, const float *twiddle_
         }
         shift += half_step;
     }
+#    endif
+}
+
+#endif /* NUFFT1_SCALING_BOOTSTRAP */
+
+/* Fused Radix-2 pair with interleaved twiddles.
+ *
+ * Two adjacent DIF Radix-2 stages are processed in one pass over the data.
+ * For a group of four inputs a,b,c,d (spaced q apart) the two stages are:
+ *   stage 1: (a,c) with W1, (b,d) with i*W1
+ *   stage 2: the two half-blocks with W2
+ * The outputs are stored as X0, X2, X1, X3, which is exactly the binary
+ * bit-reversed order produced by the old two-pass code.  The permutation
+ * (COBRA/COBRAVO) is therefore unchanged.
+ *
+ * W1 and W2 for each j-block are stored contiguously (two VECF_LEN-wide
+ * vectors per block).  This is the layout that removed the large-N cache
+ * thrashing of the three-stream Radix-4 prototype; fusing the two stages also
+ * halves the number of full-array passes. */
+static void generate_fft_buffer_fused_r2(uint32_t n, float *real_buffer, float *imag_buffer) {
+    uint32_t logn = intlog2(n);
+    uint32_t logv = intlog2(VECF_LEN);
+    uint32_t diff = logn > logv ? logn - logv : 0;
+    uint32_t n4 = diff / 2U;
+    uint32_t rem = diff & 1U;
+    uint32_t shift = 0;
+    uint32_t step = n;
+
+    for (uint32_t s = 0; s < n4; ++s) {
+        uint32_t q = step >> 2U;
+        for (uint32_t jb = 0; jb < q; jb += VECF_LEN) {
+            for (uint32_t l = 0; l < VECF_LEN; ++l) {
+                uint32_t j = jb + l;
+                size_t b = (size_t)shift + 2U * jb + l;
+                float a1 = -(float)j / (float)step;
+                real_buffer[b] = cos2pif_tls(a1);
+                imag_buffer[b] = -sin2pif_tls(a1);
+                float a2 = -(float)(2U * j) / (float)step;
+                real_buffer[b + VECF_LEN] = cos2pif_tls(a2);
+                imag_buffer[b + VECF_LEN] = -sin2pif_tls(a2);
+            }
+        }
+        shift += 2U * q;
+        step >>= 2U;
+    }
+
+    if (rem) {
+        uint32_t half = step >> 1U;
+        for (uint32_t j = 0; j < half; ++j) {
+            float a = -(float)j / (float)step;
+            real_buffer[shift + j] = cos2pif_tls(a);
+            imag_buffer[shift + j] = -sin2pif_tls(a);
+        }
+        shift += half;
+        step >>= 1U;
+    }
+
+    /* Tail stages are consumed by the intra-vector pass (hard-coded twiddles)
+     * or by the scalar fallback; fill them for the latter. */
+    for (; step > 1U; step >>= 1U) {
+        uint32_t half = step >> 1U;
+        for (uint32_t j = 0; j < half; ++j) {
+            float a = -(float)j / (float)step;
+            real_buffer[shift + j] = cos2pif_tls(a);
+            imag_buffer[shift + j] = -sin2pif_tls(a);
+        }
+        shift += half;
+    }
+}
+
+static void sande_tukey_in_place_fused_r2(float *real, float *imag, const float *twiddle_real, const float *twiddle_imag, uint32_t n) {
+    uint32_t logn = intlog2(n);
+    uint32_t logv = intlog2(VECF_LEN);
+    uint32_t diff = logn > logv ? logn - logv : 0;
+    uint32_t n4 = diff / 2U;
+    uint32_t rem = diff & 1U;
+    uint32_t shift = 0;
+    uint32_t step = n;
+
+    for (uint32_t s = 0; s < n4; ++s) {
+        uint32_t q = step >> 2U;
+        for (uint32_t i = 0; i < n; i += step) {
+            for (uint32_t j = 0; j < q; j += VECF_LEN) {
+                VECF ar = LOAD_VEC_ALIGNED(&real[i + j]);
+                VECF ai = LOAD_VEC_ALIGNED(&imag[i + j]);
+                VECF br = LOAD_VEC_ALIGNED(&real[i + j + q]);
+                VECF bi = LOAD_VEC_ALIGNED(&imag[i + j + q]);
+                VECF cr = LOAD_VEC_ALIGNED(&real[i + j + 2U * q]);
+                VECF ci = LOAD_VEC_ALIGNED(&imag[i + j + 2U * q]);
+                VECF dr = LOAD_VEC_ALIGNED(&real[i + j + 3U * q]);
+                VECF di = LOAD_VEC_ALIGNED(&imag[i + j + 3U * q]);
+
+                VECF t0r = ar + cr, t0i = ai + ci;
+                VECF t1r = ar - cr, t1i = ai - ci;
+                VECF t2r = br + dr, t2i = bi + di;
+                VECF t3r = br - dr, t3i = bi - di;
+
+                VECF w1r = LOAD_VEC_ALIGNED(&twiddle_real[shift + 2U * j]);
+                VECF w1i = LOAD_VEC_ALIGNED(&twiddle_imag[shift + 2U * j]);
+                VECF w2r = LOAD_VEC_ALIGNED(&twiddle_real[shift + 2U * j + VECF_LEN]);
+                VECF w2i = LOAD_VEC_ALIGNED(&twiddle_imag[shift + 2U * j + VECF_LEN]);
+
+                /* Stage 1: (a,c) uses W1, (b,d) uses i*W1. */
+                VECF c1r = t1r * w1r - t1i * w1i;
+                VECF c1i = t1r * w1i + t1i * w1r;
+                VECF d1r = t3r * w1r - t3i * w1i;
+                VECF d1i = t3r * w1i + t3i * w1r;
+                VECF c1ir = -d1i, c1ii = d1r;
+
+                /* Stage 2: two Radix-2 butterflies with W2. */
+                VECF o0r = t0r + t2r, o0i = t0i + t2i;
+                VECF o1r = (t0r - t2r) * w2r - (t0i - t2i) * w2i;
+                VECF o1i = (t0r - t2r) * w2i + (t0i - t2i) * w2r;
+                VECF o2r = c1r + c1ir, o2i = c1i + c1ii;
+                VECF o3r = (c1r - c1ir) * w2r - (c1i - c1ii) * w2i;
+                VECF o3i = (c1r - c1ir) * w2i + (c1i - c1ii) * w2r;
+
+                STORE_VEC_ALIGNED(&real[i + j], o0r);
+                STORE_VEC_ALIGNED(&imag[i + j], o0i);
+                STORE_VEC_ALIGNED(&real[i + j + q], o1r);
+                STORE_VEC_ALIGNED(&imag[i + j + q], o1i);
+                STORE_VEC_ALIGNED(&real[i + j + 2U * q], o2r);
+                STORE_VEC_ALIGNED(&imag[i + j + 2U * q], o2i);
+                STORE_VEC_ALIGNED(&real[i + j + 3U * q], o3r);
+                STORE_VEC_ALIGNED(&imag[i + j + 3U * q], o3i);
+            }
+        }
+        shift += 2U * q;
+        step >>= 2U;
+    }
+
+    if (rem) {
+        uint32_t half_step = step >> 1U;
+        for (uint32_t i = 0; i < n; i += step) {
+            for (uint32_t j = 0; j < half_step; j += VECF_LEN) {
+                VECF r_even = LOAD_VEC(&real[i + j]);
+                VECF i_even = LOAD_VEC(&imag[i + j]);
+                VECF r_odd = LOAD_VEC(&real[i + j + half_step]);
+                VECF i_odd = LOAD_VEC(&imag[i + j + half_step]);
+                STORE_VEC(&real[i + j], r_even + r_odd);
+                STORE_VEC(&imag[i + j], i_even + i_odd);
+                VECF r_tmp = r_even - r_odd;
+                VECF i_tmp = i_even - i_odd;
+                VECF b_real = LOAD_VEC(&twiddle_real[shift + j]);
+                VECF b_imag = LOAD_VEC(&twiddle_imag[shift + j]);
+                STORE_VEC(&real[i + j + half_step], r_tmp * b_real - i_tmp * b_imag);
+                STORE_VEC(&imag[i + j + half_step], r_tmp * b_imag + i_tmp * b_real);
+            }
+        }
+        shift += half_step;
+        step >>= 1U;
+    }
+
+#ifdef HAS_INTRA_VEC_PASS
+    if (n >= 2U * VECF_LEN) {
+        for (uint32_t i = 0; i < (uint32_t)intlog2(VECF_LEN); ++i) {
+            for (uint32_t j = 0; j < n; j += VECF_LEN * 2U) {
+                VECF r_even = LOAD_VEC(&real[j]);
+                VECF r_odd = LOAD_VEC(&real[j + VECF_LEN]);
+                nanofft_vec_perm(&r_even, &r_odd, i);
+                nanofft_vec_shuffle(&r_even, &r_odd);
+
+                VECF i_even = LOAD_VEC(&imag[j]);
+                VECF i_odd = LOAD_VEC(&imag[j + VECF_LEN]);
+                nanofft_vec_perm(&i_even, &i_odd, i);
+                nanofft_vec_shuffle(&i_even, &i_odd);
+
+                VECF r_tmp = r_even - r_odd;
+                VECF i_tmp = i_even - i_odd;
+                r_even = r_even + r_odd;
+                i_even = i_even + i_odd;
+                r_odd = r_tmp * real_twiddles[i] - i_tmp * imag_twiddles[i];
+                i_odd = r_tmp * imag_twiddles[i] + i_tmp * real_twiddles[i];
+
+                nanofft_vec_shuffle(&r_even, &r_odd);
+                nanofft_vec_inv_perm(&r_even, &r_odd, i);
+                STORE_VEC(&real[j], r_even);
+                STORE_VEC(&real[j + VECF_LEN], r_odd);
+
+                nanofft_vec_shuffle(&i_even, &i_odd);
+                nanofft_vec_inv_perm(&i_even, &i_odd, i);
+                STORE_VEC(&imag[j], i_even);
+                STORE_VEC(&imag[j + VECF_LEN], i_odd);
+            }
+        }
+    } else
 #endif
+    {
+        for (; step > 1U; step >>= 1U) {
+            uint32_t half_step = step >> 1U;
+            for (uint32_t i = 0; i < n; i += step) {
+                for (uint32_t j = 0; j < half_step; ++j) {
+                    float re = real[i + j];
+                    float ie = imag[i + j];
+                    float ro = real[i + j + half_step];
+                    float io = imag[i + j + half_step];
+                    real[i + j] = re + ro;
+                    imag[i + j] = ie + io;
+                    float rt = re - ro;
+                    float it = ie - io;
+                    real[i + j + half_step] = rt * twiddle_real[shift + j] - it * twiddle_imag[shift + j];
+                    imag[i + j + half_step] = rt * twiddle_imag[shift + j] + it * twiddle_real[shift + j];
+                }
+            }
+            shift += half_step;
+        }
+    }
 }
 
 static nufft1_nanofft_plan *nufft1_nanofft_make_plan(uint32_t n, float *twiddle_real, float *twiddle_imag, bool precomputed_twiddles) {
     if (!is_power_of_two(n) || !twiddle_real || !twiddle_imag) return NULL;
+    cobravo_init();
     nufft1_nanofft_plan *plan = (nufft1_nanofft_plan *)calloc(1, sizeof(*plan));
     if (!plan) return NULL;
     plan->n = n;
     plan->twiddle_real = twiddle_real;
     plan->twiddle_imag = twiddle_imag;
-    if (!precomputed_twiddles) generate_fft_buffer(n, plan->twiddle_real, plan->twiddle_imag);
+    if (!precomputed_twiddles) generate_fft_buffer_fused_r2(n, plan->twiddle_real, plan->twiddle_imag);
     return plan;
 }
 
@@ -433,7 +784,7 @@ static void nufft1_nanofft_destroy_plan(nufft1_nanofft_plan *plan) {
 }
 
 static void nufft1_nanofft_execute(const nufft1_nanofft_plan *plan, float *real, float *imag, float *cobra_real, float *cobra_imag) {
-    sande_tukey_in_place(real, imag, plan->twiddle_real, plan->twiddle_imag, plan->n);
+    sande_tukey_in_place_fused_r2(real, imag, plan->twiddle_real, plan->twiddle_imag, plan->n);
     bit_reverse_permutation(real, imag, plan->n, cobra_real, cobra_imag);
 }
 
@@ -566,7 +917,11 @@ nufft1_external_sizes nufft1_external_sizes_for_plan(int N, nufft1_mode mode) {
     int nfft = next_fast_len(2 * N);
     sizes.twiddle_len = (size_t)nfft;
     sizes.fft_len = (size_t)nfft + (size_t)spread_stride;
-    sizes.cobra_len = (size_t)BLOCK_WIDTH * (size_t)BLOCK_WIDTH;
+#if F_BITREV_COBRAVO
+    sizes.cobra_len = 2U * (size_t)BLOCK_ELEMS;
+#else
+    sizes.cobra_len = (size_t)BLOCK_ELEMS;
+#endif
     return sizes;
 }
 

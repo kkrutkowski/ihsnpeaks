@@ -171,7 +171,14 @@ static inline void profile_report(const parameters *params) {
                              ((size_t)params->maxLen * (size_t)params->nterms * 2U * sizeof(float)) +
                              ((size_t)params->maxLen * (size_t)params->nterms * (size_t)NUFFT1_PSWF_WIDTH * sizeof(float));
     size_t per_thread_total = time_series + power_grid + block_io + ladder + fft + cobra + input + read_buf + nufft_workspace;
-    size_t shared_twiddles = params->nufftExternalSizes.twiddle_len * 2U * sizeof(float);
+    size_t shared_twiddles = 0;
+    if (params->nufftPlanCache) {
+        for (uint32_t i = 0; i < params->nufftPlanCount; ++i) {
+            shared_twiddles += params->nufftPlanCache[i].externalSizes.twiddle_len * 2U * sizeof(float);
+        }
+    } else {
+        shared_twiddles = params->nufftExternalSizes.twiddle_len * 2U * sizeof(float);
+    }
 
     size_t l1_bytes = profile_read_cache_size(1, "Data");
     size_t l2_bytes = profile_read_cache_size(2, "Unified");

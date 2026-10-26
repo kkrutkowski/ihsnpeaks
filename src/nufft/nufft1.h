@@ -37,13 +37,21 @@ typedef struct nufft1_plan nufft1_plan;
 typedef struct nufft1_workspace nufft1_workspace;
 
 typedef struct {
+    /* One plan's twiddle region.  The fused-Radix-2 layout is not a suffix of
+     * the next-larger plan's layout, so a plan cache must give every plan its
+     * own twiddle_len-sized region (as src/metadata.h does). */
     size_t twiddle_len;
     size_t fft_len;
+    /* Scratch space for the bit-reversal backend. One 64x64 tile buffer for the
+     * scalar COBRA fallback, two when the build selects COBRAVO. Both real and
+     * imaginary arrays must be allocated with this length. */
     size_t cobra_len;
 } nufft1_external_sizes;
 
 nufft1_external_sizes nufft1_external_sizes_for_plan(int N, nufft1_mode mode);
 nufft1_plan *nufft1_initialize_shared(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag);
+/* twiddle_real/imag must already contain this plan's fused-Radix-2 layout.
+ * They cannot be a suffix of a larger plan's twiddle buffer. */
 nufft1_plan *nufft1_initialize_shared_precomputed(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag);
 nufft1_workspace *nufft1_create_workspace(const nufft1_plan *plan, float *fft_real, float *fft_imag, float *cobra_real, float *cobra_imag);
 int nufft1_workspace_set_plan(nufft1_workspace *workspace, const nufft1_plan *plan);
