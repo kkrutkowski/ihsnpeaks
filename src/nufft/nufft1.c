@@ -193,19 +193,74 @@ static inline uint32_t reverse_bits(uint32_t num, uint32_t bits) {
     return result;
 }
 
+/*
+ * Smallest bit-reversal order that uses COBRAVO instead of the in-place table
+ * permutation.  Measured (1-D result array, hot in L1/L2, ns/element, x86-64):
+ * the gather kernels win from 2^8 (0.35 vs 0.57) and lose below it (2^6: 0.63
+ * vs 0.56); the scalar in-tile kernel wins from 2^9 (0.64 vs 0.76) and loses at
+ * 2^8 (0.66 vs 0.57).  The previous 2^12 boundary was scalar COBRA's hard floor
+ * (its 64x64 tiling needs log_n >= 13), not a measured crossover.  With
+ * COBRAVO disabled the gate must stay on that floor.
+ */
+#ifndef F_BITREV_MIN_LOG
+#    if F_BITREV_COBRAVO
+#        if COBRAVO_GATHER_LANES
+#            define F_BITREV_MIN_LOG 8
+#        else
+#            define F_BITREV_MIN_LOG 9
+#        endif
+#    else
+#        define F_BITREV_MIN_LOG 13
+#    endif
+#endif
+#if F_BITREV_MIN_LOG < 8
+/* The in-tile gather needs at least one vector per tile row. */
+#    error "F_BITREV_MIN_LOG must be >= 8"
+#endif
+#if F_BITREV_MIN_LOG < 13 && !F_BITREV_COBRAVO
+#    error "scalar COBRA needs F_BITREV_MIN_LOG >= 13"
+#endif
+
+/* -------------------------------------------------------------------------
+ * Bit reversal
+ *
+ * COBRA's tiling splits the index into three fields: a (tile row, w bits),
+ * b (middle, log_n - 2w bits) and c (tile column, w bits).  A bit reversal
+ * sends a to c's position and c to a's, so the permutation is a per-tile
+ * operation: load a 2^w x 2^w tile, reverse the 2w bits *inside* it, and
+ * store it at the mirrored tile offset.  Loading both tiles of a {b, rev(b)}
+ * pair before storing either keeps the move cycle-safe.
+ *
+ * w = min(log_n / 2, 6) covers every size: for log_n >= 13 it is exactly the
+ * classic 64x64 COBRA tiling, and for log_n in [8, 12] the tile shrinks with
+ * the transform (b then has 0 or 1 bit and is self-paired), which is what
+ * makes COBRAVO usable below scalar COBRA's 2^13 floor.
+ * ------------------------------------------------------------------------- */
+
+#define COBRAVO_W4_LEN (1 << 8)  /* in-tile indices of a 16x16 tile */
+#define COBRAVO_W5_LEN (1 << 10) /* 32x32 */
+#define COBRAVO_W6_LEN (1 << 12) /* 64x64 */
+#define COBRAVO_IDX_LEN (COBRAVO_W4_LEN + COBRAVO_W5_LEN + COBRAVO_W6_LEN)
+
 #if COBRAVO_GATHER_LANES
-static int cobravo_gather_idx[BLOCK_ELEMS] __attribute__((aligned(64)));
+/* In-tile reversal indices of every supported tile width, packed back to back.
+ * Pure data derived from the fixed bit reversal, so it is built once during
+ * plan construction (before worker threads exist). */
+static int cobravo_gather_idx[COBRAVO_IDX_LEN] __attribute__((aligned(64)));
 static bool cobravo_gather_ready = false;
 
-/* The index table is pure data derived from the fixed 12-bit tile reversal, so
- * it can be initialized once during plan construction (before worker threads). */
+static inline int *cobravo_idx_table(uint32_t w) {
+    if (w > 5U) return cobravo_gather_idx + COBRAVO_W4_LEN + COBRAVO_W5_LEN;
+    if (w == 5U) return cobravo_gather_idx + COBRAVO_W4_LEN;
+    return cobravo_gather_idx;
+}
+
 static inline void cobravo_init(void) {
     if (cobravo_gather_ready) return;
-    for (uint32_t o = 0; o < (uint32_t)BLOCK_ELEMS / COBRAVO_GATHER_LANES; ++o) {
-        for (uint32_t l = 0; l < COBRAVO_GATHER_LANES; ++l) {
-            uint32_t src = reverse_bits(o * COBRAVO_GATHER_LANES + l, 2U * LOG_BLOCK_WIDTH);
-            cobravo_gather_idx[o * COBRAVO_GATHER_LANES + l] = (int)src;
-        }
+    for (uint32_t w = 4U; w <= (uint32_t)LOG_BLOCK_WIDTH; ++w) {
+        int *tab = cobravo_idx_table(w);
+        const uint32_t tile = 1U << (2U * w);
+        for (uint32_t i = 0; i < tile; ++i) tab[i] = (int)reverse_bits(i, 2U * w);
     }
     cobravo_gather_ready = true;
 }
@@ -213,6 +268,9 @@ static inline void cobravo_init(void) {
 static inline void cobravo_init(void) {}
 #endif
 
+/* In-place swap permutation.  This is the kernel for the smallest transforms,
+ * where half the permutations are self-swaps and the whole array is L1
+ * resident, so the tile machinery only adds overhead. */
 static inline void table_shuffle(float *real, float *imag, uint32_t log_n) {
     for (uint32_t i = 0; i < (1U << log_n); ++i) {
         uint32_t j = reverse_bits(i, log_n);
@@ -292,46 +350,52 @@ static inline void cobra_shuffle(float *real, float *imag, uint32_t log_n, float
     }
 }
 
-/* COBRAVO: keep COBRA's cache-optimal 64x64 tiling, but process each pair
+/* COBRAVO: keep COBRA's cache-optimal tiling, but process each pair
  * {b, rev(b)} out-of-place in two tile buffers and vectorize the intra-tile
  * bit reversal.  Loading both members of a pair before writing either target
  * makes the tile moves cycle-safe. */
-static inline void cobravo_load_tile(const float *src, uint32_t b_shifted, uint32_t shift_top, float *dst) {
-    for (uint32_t a = 0; a < BLOCK_WIDTH; ++a) {
-        memcpy(dst + a * BLOCK_WIDTH, src + (a << shift_top) + b_shifted, BLOCK_WIDTH * sizeof(float));
-    }
+static inline void cobravo_load_tile(const float *src, uint32_t b_shifted, uint32_t shift_top, uint32_t w, float *dst) {
+    const uint32_t width = 1U << w;
+    for (uint32_t a = 0; a < width; ++a) memcpy(dst + a * width, src + (a << shift_top) + b_shifted, width * sizeof(float));
 }
 
-static inline void cobravo_store_tile(const float *src, float *dst, uint32_t b_shifted, uint32_t shift_top) {
-    for (uint32_t a = 0; a < BLOCK_WIDTH; ++a) {
-        memcpy(dst + (a << shift_top) + b_shifted, src + a * BLOCK_WIDTH, BLOCK_WIDTH * sizeof(float));
-    }
+static inline void cobravo_store_tile(const float *src, float *dst, uint32_t b_shifted, uint32_t shift_top, uint32_t w) {
+    const uint32_t width = 1U << w;
+    for (uint32_t a = 0; a < width; ++a) memcpy(dst + (a << shift_top) + b_shifted, src + a * width, width * sizeof(float));
 }
 
-static inline void cobravo_emit_tile(float *src_real, float *src_imag, float *real, float *imag, uint32_t b_shifted, uint32_t shift_top) {
-#if COBRAVO_GATHER_LANES == 16
-    for (uint32_t o = 0; o < (uint32_t)BLOCK_ELEMS / 16U; ++o) {
-        __m512i idx = _mm512_load_si512((const void *)&cobravo_gather_idx[o * 16U]);
-        __m512 vr = _mm512_i32gather_ps(idx, src_real, 4);
-        __m512 vi = _mm512_i32gather_ps(idx, src_imag, 4);
-        uint32_t v = o * 16U;
-        uint32_t off = ((v >> LOG_BLOCK_WIDTH) << shift_top) | b_shifted | (v & (BLOCK_WIDTH - 1U));
-        _mm512_storeu_ps(real + off, vr);
-        _mm512_storeu_ps(imag + off, vi);
+static inline void cobravo_emit_tile(float *src_real, float *src_imag, float *real, float *imag, uint32_t b_shifted, uint32_t shift_top, uint32_t w) {
+    const uint32_t tile = 1U << (2U * w);
+#if COBRAVO_GATHER_LANES
+    const uint32_t row_mask = (1U << w) - 1U;
+    /* One vector never straddles a tile row, so the whole row can be stored
+     * with a single contiguous store. */
+    if (tile >= (uint32_t)COBRAVO_GATHER_LANES && (1U << w) >= (uint32_t)COBRAVO_GATHER_LANES) {
+        const int *idx = cobravo_idx_table(w);
+#    if COBRAVO_GATHER_LANES == 16
+        for (uint32_t v = 0; v < tile; v += 16U) {
+            __m512i ix = _mm512_load_si512((const void *)(idx + v));
+            __m512 vr = _mm512_i32gather_ps(ix, src_real, 4);
+            __m512 vi = _mm512_i32gather_ps(ix, src_imag, 4);
+            uint32_t off = ((v >> w) << shift_top) | b_shifted | (v & row_mask);
+            _mm512_storeu_ps(real + off, vr);
+            _mm512_storeu_ps(imag + off, vi);
+        }
+#    elif COBRAVO_GATHER_LANES == 8
+        for (uint32_t v = 0; v < tile; v += 8U) {
+            __m256i ix = _mm256_load_si256((const __m256i *)(const void *)(idx + v));
+            __m256 vr = _mm256_i32gather_ps(src_real, ix, 4);
+            __m256 vi = _mm256_i32gather_ps(src_imag, ix, 4);
+            uint32_t off = ((v >> w) << shift_top) | b_shifted | (v & row_mask);
+            _mm256_storeu_ps(real + off, vr);
+            _mm256_storeu_ps(imag + off, vi);
+        }
+#    endif
+        return;
     }
-#elif COBRAVO_GATHER_LANES == 8
-    for (uint32_t o = 0; o < (uint32_t)BLOCK_ELEMS / 8U; ++o) {
-        __m256i idx = _mm256_load_si256((const void *)&cobravo_gather_idx[o * 8U]);
-        __m256 vr = _mm256_i32gather_ps(src_real, idx, 4);
-        __m256 vi = _mm256_i32gather_ps(src_imag, idx, 4);
-        uint32_t v = o * 8U;
-        uint32_t off = ((v >> LOG_BLOCK_WIDTH) << shift_top) | b_shifted | (v & (BLOCK_WIDTH - 1U));
-        _mm256_storeu_ps(real + off, vr);
-        _mm256_storeu_ps(imag + off, vi);
-    }
-#else
-    for (uint32_t i = 0; i < (uint32_t)BLOCK_ELEMS; ++i) {
-        uint32_t j = reverse_bits(i, 2U * LOG_BLOCK_WIDTH);
+#endif
+    for (uint32_t i = 0; i < tile; ++i) {
+        uint32_t j = reverse_bits(i, 2U * w);
         if (j > i) {
             float tr = src_real[i], ti = src_imag[i];
             src_real[i] = src_real[j];
@@ -340,41 +404,43 @@ static inline void cobravo_emit_tile(float *src_real, float *src_imag, float *re
             src_imag[j] = ti;
         }
     }
-    cobravo_store_tile(src_real, real, b_shifted, shift_top);
-    cobravo_store_tile(src_imag, imag, b_shifted, shift_top);
-#endif
+    cobravo_store_tile(src_real, real, b_shifted, shift_top, w);
+    cobravo_store_tile(src_imag, imag, b_shifted, shift_top, w);
 }
 
 static inline void cobravo_shuffle(float *real, float *imag, uint32_t log_n, float *bufA_real, float *bufA_imag, float *bufB_real, float *bufB_imag) {
-    if (log_n <= 2U * LOG_BLOCK_WIDTH) return;
+    if (log_n < (uint32_t)F_BITREV_MIN_LOG) return;
     cobravo_init();
 
-    uint32_t num_b_bits = log_n - 2U * LOG_BLOCK_WIDTH;
-    uint32_t b_size = 1U << num_b_bits;
-    uint32_t shift_top = num_b_bits + LOG_BLOCK_WIDTH;
+    uint32_t w = log_n >> 1;
+    if (w > (uint32_t)LOG_BLOCK_WIDTH) w = (uint32_t)LOG_BLOCK_WIDTH;
+    const uint32_t width = 1U << w;
+    const uint32_t num_b_bits = log_n - 2U * w;
+    const uint32_t b_size = 1U << num_b_bits;
+    const uint32_t shift_top = num_b_bits + w;
 
     for (uint32_t b = 0; b < b_size; ++b) {
         uint32_t b_rev = reverse_bits(b, num_b_bits);
         if (b > b_rev) continue;
 
-        uint32_t b_shifted = b << LOG_BLOCK_WIDTH;
-        uint32_t b_rev_shifted = b_rev << LOG_BLOCK_WIDTH;
+        uint32_t b_shifted = b * width;
+        uint32_t b_rev_shifted = b_rev * width;
 
-        cobravo_load_tile(real, b_shifted, shift_top, bufA_real);
-        cobravo_load_tile(imag, b_shifted, shift_top, bufA_imag);
+        cobravo_load_tile(real, b_shifted, shift_top, w, bufA_real);
+        cobravo_load_tile(imag, b_shifted, shift_top, w, bufA_imag);
         if (b != b_rev) {
-            cobravo_load_tile(real, b_rev_shifted, shift_top, bufB_real);
-            cobravo_load_tile(imag, b_rev_shifted, shift_top, bufB_imag);
+            cobravo_load_tile(real, b_rev_shifted, shift_top, w, bufB_real);
+            cobravo_load_tile(imag, b_rev_shifted, shift_top, w, bufB_imag);
         }
 
-        cobravo_emit_tile(bufA_real, bufA_imag, real, imag, b_rev_shifted, shift_top);
-        if (b != b_rev) cobravo_emit_tile(bufB_real, bufB_imag, real, imag, b_shifted, shift_top);
+        cobravo_emit_tile(bufA_real, bufA_imag, real, imag, b_rev_shifted, shift_top, w);
+        if (b != b_rev) cobravo_emit_tile(bufB_real, bufB_imag, real, imag, b_shifted, shift_top, w);
     }
 }
 
 static inline void bit_reverse_permutation(float *real, float *imag, uint32_t n, float *buffer_real, float *buffer_imag) {
     uint32_t order = intlog2(n);
-    if (order <= 2U * LOG_BLOCK_WIDTH) {
+    if (order < (uint32_t)F_BITREV_MIN_LOG) {
         table_shuffle(real, imag, order);
     } else {
 #if F_BITREV_COBRAVO

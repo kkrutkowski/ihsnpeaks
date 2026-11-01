@@ -938,11 +938,16 @@ static inline bool execute_direct_grid(buffer_t *buffer, parameters *params, con
     return ok;
 }
 
-void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch, kt_forpool_t *direct_pool) {
+void process_target(const char *in_file, const char *out_label, buffer_t *buffer, parameters *params, const bool batch, kt_forpool_t *direct_pool) {
+    const char *label = out_label ? out_label : in_file;
     if (has_fits_suffix(in_file)) {
         read_fits(in_file, buffer);
     } else {
         read_dat(in_file, buffer);
+    }
+    if (buffer->n == 0U) {
+        fprintf(stderr, "No data rows found in '%s', skipping\n", label);
+        return;
     }
     preprocess_buffer(buffer, params->epsilon, params->detrend_degree, params->detrend_norm);
 
@@ -1166,9 +1171,9 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
     }
 
     if (!batch) {
-        print_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+        print_peaks(buffer, params, n, stringBuff, label, params->mode, params->gbEvalMode);
     } else {
-        append_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+        append_peaks(buffer, params, n, stringBuff, label, params->mode, params->gbEvalMode);
     }
     if (params->spectrum) {
         if (spectrum_prewhiten) {
@@ -1196,7 +1201,7 @@ void process_targets(void *data, long i, int thread_id) {
             exit(EXIT_FAILURE);
         }
     }
-    process_target(kv_A(params->targets, i).path, params->buffers[thread_id], params, true, NULL);
+    process_target(kv_A(params->targets, i).path, kv_A(params->targets, i).label, params->buffers[thread_id], params, true, NULL);
 
     int total = (int)kv_size(params->targets);
     int permile = total / 1000;

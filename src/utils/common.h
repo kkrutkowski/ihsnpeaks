@@ -272,12 +272,14 @@ typedef union {
 
 // Define the target struct to hold file path and
 typedef struct {
-    char* path;
+    char* path;   // resolved path used to open the photometry file (prefix applied)
+    char* label;  // logical, prefix-free path reported in the output's first column
 } target_t;
 typedef kvec_t(target_t) kvec_target_t;
 
 typedef struct {
     char* target;
+    char* prefix;  // optional prefix prepended to photometry paths (never to the list itself)
     char* outFile;
     float fmin;
     float fmax;
@@ -301,6 +303,7 @@ typedef struct {
     norm_type norm;
     norm_type detrend_norm;
     bool isFile;
+    bool isList;
     bool spectrum;
     bool debug;
     bool corrected;

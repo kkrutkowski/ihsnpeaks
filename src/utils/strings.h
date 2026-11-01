@@ -2,7 +2,12 @@
 #define STRINGS_H
 
 #include <fast_convert.h>
+#include <limits.h>
 #include <sds.h>
+
+#ifndef PATH_MAX
+#    define PATH_MAX 4096
+#endif
 
 /* CLI entry points define the version before including the headers (see
  * src/main.c); test translation units that only pull in aov.h do not, so fall
@@ -101,15 +106,31 @@ static inline void appendFreq(double freq, float magnitude, int precision, bool 
     *buffer = sdscatlen(*buffer, "\n", 1);  // Add a newline character
 }
 
-static inline void write_tsv(buffer_t *buffer, char *in_file) {
-    char out_file[256];
-    strncpy(out_file, in_file, sizeof(out_file) - 1);
-    out_file[sizeof(out_file) - 1] = '\0';  // Ensure null-termination
-    char *dot = strrchr(out_file, '.');     // Find the last dot in the file name
+/* Derive the -s spectrum output path from the photometry path: replace the last
+ * extension with ".tsv". Fixed-size PATH_MAX buffer, with an explicit warning
+ * instead of silently truncating long (e.g. prefixed) paths. */
+static inline bool spectrum_output_path(const char *in_file, char *out_file, size_t out_file_size) {
+    int written = snprintf(out_file, out_file_size, "%s", in_file);
+    if (written < 0 || (size_t)written >= out_file_size) {
+        fprintf(stderr, "Spectrum output path too long for '%s' (max %zu bytes)\n", in_file, out_file_size - 1U);
+        return false;
+    }
+    char *dot = strrchr(out_file, '.');  // Find the last dot in the file name
     if (dot) {
         *dot = '\0';
     }  // Remove the existing extension
-    strcat(out_file, ".tsv");  // Append the new extension
+    size_t len = strlen(out_file);
+    if (len + 4U >= out_file_size) {
+        fprintf(stderr, "Spectrum output path too long for '%s' (max %zu bytes)\n", in_file, out_file_size - 1U);
+        return false;
+    }
+    memcpy(out_file + len, ".tsv", 5U);  // Append the new extension
+    return true;
+}
+
+static inline void write_tsv(buffer_t *buffer, const char *in_file) {
+    char out_file[PATH_MAX];
+    if (!spectrum_output_path(in_file, out_file, sizeof(out_file))) return;
 
     // Write the formatted string to the new .tsv file
     FILE *fp = fopen(out_file, "w");
@@ -123,18 +144,12 @@ static inline void write_tsv(buffer_t *buffer, char *in_file) {
     sdsclear(buffer->spectrum);
 };
 
-static inline void write_spectrum_matrix_tsv(char *in_file, double fmin, double fstep, uint32_t nfreq, uint32_t ncols, const float *matrix, int precision,
+static inline void write_spectrum_matrix_tsv(const char *in_file, double fmin, double fstep, uint32_t nfreq, uint32_t ncols, const float *matrix, int precision,
                                              bool outputPeriod, char *stringBuff) {
     if (!matrix || nfreq == 0U || ncols == 0U) return;
 
-    char out_file[256];
-    strncpy(out_file, in_file, sizeof(out_file) - 1);
-    out_file[sizeof(out_file) - 1] = '\0';
-    char *dot = strrchr(out_file, '.');
-    if (dot) {
-        *dot = '\0';
-    }
-    strcat(out_file, ".tsv");
+    char out_file[PATH_MAX];
+    if (!spectrum_output_path(in_file, out_file, sizeof(out_file))) return;
 
     FILE *fp = fopen(out_file, "w");
     if (fp == NULL) {
@@ -177,7 +192,7 @@ static inline void append_center_cell(sds *buffer, const char *str, int width) {
     append_spaces(buffer, right);
 }
 
-void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
+void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, const char *label, int mode, gb_eval_mode evalMode) {
     if (mode > 1) {
         n += 1;
     }
@@ -230,7 +245,7 @@ void print_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, 
 
     // Append file information (unchanged)
     buffer->outBuf = sdscat(buffer->outBuf, "File: ");
-    buffer->outBuf = sdscat(buffer->outBuf, in_file);
+    buffer->outBuf = sdscat(buffer->outBuf, label);
     buffer->outBuf = sdscat(buffer->outBuf, "    NofData: ");
     custom_ftoa(buffer->n, 0, stringBuff);  // using custom_ftoa to print integer
     buffer->outBuf = sdscat(buffer->outBuf, stringBuff);
@@ -305,7 +320,7 @@ void fprint_buffer(buffer_t *buffer, parameters *params) {
     pthread_mutex_unlock(&params->mutex);
 }
 
-void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, char *in_file, int mode, gb_eval_mode evalMode) {
+void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff, const char *label, int mode, gb_eval_mode evalMode) {
     const eval_method_t *method = eval_method_for_mode(evalMode);
     bool print_width = mode > 0 && method->width_label;
     bool use_aov = periodogram_uses_aov(params->periodogramMethod);
@@ -314,7 +329,7 @@ void append_peaks(buffer_t *buffer, parameters *params, int n, char *stringBuff,
     int max_cols = (params->columns > 0 && params->columns < (int)buffer->nPeaks) ? params->columns : (int)buffer->nPeaks;
     if (buffer->nPeaks > 0) {
         // Append file information to the output buffer
-        buffer->outBuf = sdscat(buffer->outBuf, in_file);
+        buffer->outBuf = sdscat(buffer->outBuf, label);
         custom_coordinate_dtoa(buffer->peaks[0].freq, params->outputPeriod, n, stringBuff);
         buffer->outBuf = sdscatlen(buffer->outBuf, "\t", 1);
         buffer->outBuf = sdscat(buffer->outBuf, stringBuff);

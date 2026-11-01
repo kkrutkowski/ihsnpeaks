@@ -22,7 +22,7 @@
 #    define DEFAULT_MEASUREMENT_SIZE 24
 #endif
 #ifndef IHSNPEAKS_VERSION
-#    define IHSNPEAKS_VERSION "v1.1.0-preview"
+#    define IHSNPEAKS_VERSION "v1.1.0"
 #endif
 
 #include <stdatomic.h>

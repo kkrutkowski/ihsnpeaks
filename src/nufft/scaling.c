@@ -364,7 +364,12 @@ static int fit_power_alpha(double *alpha_out, double *r2_out) {
 }
 
 static int bitrev_self_test(void) {
-    static const uint32_t orders[] = {13U, 14U, 16U};
+    /* Include the sizes below scalar COBRA's 2^13 floor, where COBRAVO is now
+     * also used (the scalar COBRA reference is skipped there).  COBRAVO itself
+     * is only checked from F_BITREV_MIN_LOG up: the gate is 2^9 for the scalar
+     * in-tile kernel and 2^8 for the gather kernels, and below it the kernel is
+     * intentionally a no-op (see tests/bitrev_scaling_test.c). */
+    static const uint32_t orders[] = {8U, 9U, 10U, 11U, 12U, 13U, 14U, 16U};
     for (size_t t = 0; t < sizeof(orders) / sizeof(orders[0]); ++t) {
         uint32_t order = orders[t];
         size_t n = (size_t)1U << order;
@@ -393,21 +398,27 @@ static int bitrev_self_test(void) {
         }
         table_shuffle(ref_r, ref_i, order);
 
-        cobra_shuffle(got_r, got_i, order, buf_a_r, buf_a_i);
-        if (memcmp(ref_r, got_r, n * sizeof(float)) != 0 || memcmp(ref_i, got_i, n * sizeof(float)) != 0) {
-            fprintf(stderr, "scaling: COBRA bit-reversal mismatch at N=%zu\n", n);
-            return 1;
+        if (order >= 13U) {
+            cobra_shuffle(got_r, got_i, order, buf_a_r, buf_a_i);
+            if (memcmp(ref_r, got_r, n * sizeof(float)) != 0 || memcmp(ref_i, got_i, n * sizeof(float)) != 0) {
+                fprintf(stderr, "scaling: COBRA bit-reversal mismatch at N=%zu\n", n);
+                return 1;
+            }
         }
 
         for (size_t k = 0; k < n; ++k) {
             got_r[k] = (float)k + 0.25f;
             got_i[k] = -(float)k - 0.5f;
         }
-        cobravo_init();
-        cobravo_shuffle(got_r, got_i, order, buf_a_r, buf_a_i, buf_b_r, buf_b_i);
-        if (memcmp(ref_r, got_r, n * sizeof(float)) != 0 || memcmp(ref_i, got_i, n * sizeof(float)) != 0) {
-            fprintf(stderr, "scaling: COBRAVO bit-reversal mismatch at N=%zu\n", n);
-            return 1;
+        /* Below the gate the library selects the in-place table permutation, so
+         * there is nothing to compare here. */
+        if (order >= (uint32_t)F_BITREV_MIN_LOG) {
+            cobravo_init();
+            cobravo_shuffle(got_r, got_i, order, buf_a_r, buf_a_i, buf_b_r, buf_b_i);
+            if (memcmp(ref_r, got_r, n * sizeof(float)) != 0 || memcmp(ref_i, got_i, n * sizeof(float)) != 0) {
+                fprintf(stderr, "scaling: COBRAVO bit-reversal mismatch at N=%zu\n", n);
+                return 1;
+            }
         }
         free(ref_r);
         free(ref_i);

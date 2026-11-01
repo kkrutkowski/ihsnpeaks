@@ -17,19 +17,19 @@ sh -c 'case $(uname -m) in x86_64|amd64) echo "\nx86-64";; aarch64|armv*|arm64) 
 #### x86-64
 To install the **x86-64** release binary, run:
 ```sh
-sudo curl -fL -o /usr/local/bin/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.0.0/ihsnpeaks-linux-x86-64"
+sudo curl -fL -o /usr/local/bin/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.1.0/ihsnpeaks-linux-x86-64"
 sudo chmod 0755 /usr/local/bin/ihsnpeaks
 ```
 #### ARM64
 Analogically, to install the **ARM64** release, run:
 ```sh
-sudo curl -fL -o /usr/local/bin/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.0.0/ihsnpeaks-linux-arm64"
+sudo curl -fL -o /usr/local/bin/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.1.0/ihsnpeaks-linux-arm64"
 sudo chmod 0755 /usr/local/bin/ihsnpeaks
 ```
 ### MacOS
 Unlike Linux executables, the MacOS release contains a single 'fat' precompiled binary. As such, the installation is generally architecture-independent and can be performed by executing the commands below.
 ```sh
-curl -fL -o /tmp/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.0.0/ihsnpeaks-macos"
+curl -fL -o /tmp/ihsnpeaks "https://github.com/kkrutkowski/ihsnpeaks/releases/download/v1.1.0/ihsnpeaks-macos"
 sudo install -m 0755 /tmp/ihsnpeaks /usr/local/bin/ihsnpeaks
 sudo xattr -d com.apple.quarantine /usr/local/bin/ihsnpeaks 2>/dev/null || true
 ```
@@ -48,6 +48,26 @@ wget https://www.astrouw.edu.pl/ogle/ogle4/OCVS/BLAP/phot/phot_ogle4/I/OGLE-BLAP
 ihsnpeaks OGLE-BLAP-035.dat 100
 ```
 
+Batch and list input:
+```sh
+# a directory of .dat/.fits light curves -> <directory>.tsv
+ihsnpeaks /data/phot 100 -o 10
+
+# a .tsv list (first column = photometry path, extra columns ignored)
+# reads /data/phot/<entry> for every relative entry, writes run.out.tsv
+ihsnpeaks runs/run.tsv 100 --prefix /data/phot -o 10
+```
+
+A `.tsv` target is treated as a **list of photometry files**: only the first
+(tab-separated) column is used, and blank lines, `#` comments and an `Input_file`
+header are skipped, so a previous `<list>.out.tsv` can be fed straight back in.
+The listed names are reported verbatim in the output's first column. A list
+always writes `<list>.out.tsv` next to the list (never overwriting it), even when
+it contains a single entry. `--prefix` is prepended to the photometry file /
+directory target, or to every relative path in a list; it is never applied to the
+list file itself. Relative list entries resolve against the current working
+directory, not against the directory containing the list.
+
 ### Useful options:
 
 - `-d, --degree, --terms`: number of harmonics.
@@ -55,6 +75,7 @@ ihsnpeaks OGLE-BLAP-035.dat 100
 - `-g, --grid`: periodogram method: default `ihs` or phase-coherent `aov`, `aovmh`, `aobmhw`, `chi`, `chi2`, and `fastchi2` (all phase-coherent keys are aliases of the same method).
 - `--statistic`: `raw` (Classical NLL, default for IHS and AoV `-d <= 7`), `bayes` (Relative Evidence Ratio, default for AoV `-d >= 8`), or `corrected` (IHS-only Wilkie correction).
 - `-s, --save, --spectrum`: write generated spectra to `.tsv` files.
+- `--prefix`: prefix prepended to the photometry target or to the entries of a `.tsv` list (never to the list itself).
 - `-j, --jobs`: limit worker threads (default:0 - unlimited threads)
 
 Run `./ihsnpeaks --help` for the full option list.
@@ -62,6 +83,7 @@ Run `./ihsnpeaks --help` for the full option list.
 
 ## Features
 
+- Batch processing of `.dat`/`.fits` directories and `.tsv` photometry file lists, with an optional `--prefix` for relocating the data root.
 - Built-in (NU)FFT backend; FFTW3 is no longer downloaded or linked.
 - Full static musl Linux x86-64 and ARM64 release builds with runtime dispatch, plus a Docker-built macOS ARM64 artifact.
 - Runtime dispatch variants for `x86-64`, `x86-64-v2`, `x86-64-v2+avx`, `x86-64-v3`, and `x86-64-v4` when supported by the build host.
@@ -93,6 +115,14 @@ make release-full
 Which uses Docker to save multiple dispatch `ihsnpeaks-linux-x86_64`, `ihsnpeaks-linux-arm64` and `ihsnpeaks-macos` into `dist/` subdirectory.
 
 This writes the two Linux artifacts plus the universal macOS binary `dist/ihsnpeaks-macos`. Use `make release-macos` to build only the macOS artifact. The macOS build uses `zig cc -target x86_64-macos` and `zig cc -target aarch64-macos`, links project code directly into each thin executable, and merges them with `llvm-lipo`. The only normal runtime dependency is macOS `libSystem`. `MACOS_MIN_VERSION` defaults to `12.0`; set `MACOS_SDK_PATH` when an explicit SDK sysroot is required.
+
+The produced artifacts can be smoke-tested with:
+
+```sh
+make check-release
+```
+
+This checks each `dist/` binary's format, reported version, dispatch table and one short periodogram, running the ARM64 binary under `qemu-aarch64` and the macOS binary under [Darling](https://www.darlinghq.org/). Whichever emulator is missing is skipped; pass `REQUIRE_EMULATORS=1` to make that a failure instead.
 
 ## Release Notes
 

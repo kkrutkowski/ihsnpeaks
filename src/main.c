@@ -1,5 +1,5 @@
 #define DEFAULT_MEASUREMENT_SIZE 24
-#define IHSNPEAKS_VERSION "v1.1.0-preview"
+#define IHSNPEAKS_VERSION "v1.1.0"
 
 #if __STDC_VERSION__ < 202311L  // If C23 is not available
 #    define constexpr const
@@ -33,10 +33,13 @@
 #include "hwloc_topo.h"
 #include "pool.h"
 
-static void build_batch_output_path(const char *target, char *out_file, size_t out_file_size) {
+/* Returns false when the derived output path does not fit; callers must abort
+ * instead of silently writing somewhere else. List targets get ".out.tsv" so the
+ * input list is never overwritten. */
+static bool build_batch_output_path(const char *target, bool is_list, char *out_file, size_t out_file_size) {
     char target_path[PATH_MAX];
-    strncpy(target_path, target, sizeof(target_path) - 1U);
-    target_path[sizeof(target_path) - 1U] = '\0';
+    int written = snprintf(target_path, sizeof(target_path), "%s", target);
+    if (written < 0 || (size_t)written >= sizeof(target_path)) return false;
 
     size_t len = strlen(target_path);
     while (len > 1U && target_path[len - 1U] == '/') {
@@ -49,7 +52,9 @@ static void build_batch_output_path(const char *target, char *out_file, size_t o
         *dot = '\0';
     }
 
-    snprintf(out_file, out_file_size, "%s.tsv", target_path);
+    const char *suffix = is_list ? ".out.tsv" : ".tsv";
+    written = snprintf(out_file, out_file_size, "%s%s", target_path, suffix);
+    return written >= 0 && (size_t)written < out_file_size;
 }
 
 int main(int argc, char *argv[]) {
@@ -77,6 +82,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     parameters params = read_parameters(argc, argv);
+    // A list target is always batch, even when it holds a single file: its
+    // results must go to <list>.out.tsv rather than the terminal.
+    const bool single_target = (kv_size(params.targets) == 1U && !params.isList);
     int nThreads = sysconf(_SC_NPROCESSORS_ONLN);
     if (nThreads < 1) nThreads = 1;
     if (params.jobs < nThreads && params.jobs > 0) {
@@ -127,7 +135,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (topology_probed) {
-        if (kv_size(params.targets) == 1 && topo->total_cores >= 1) {
+        if (single_target && topo->total_cores >= 1) {
             // Single target: m5+ direct GB-grid modes can use all logical PUs;
             // m0-m4 NuFFT/AoV sweeps stay capped at one worker per physical core.
             nThreads = mode_uses_direct_gb_grid(params.mode) ? topo->total_workers : topo->total_cores;
@@ -153,7 +161,7 @@ int main(int argc, char *argv[]) {
     // for (size_t i = 0; i < kv_size(params.targets); i++) {printf("File: %s\n", kv_A(params.targets, i).path);}
     // printf("File: %s\n", kv_A(params.targets, kv_size(params.targets)-1).path);
 
-    if (kv_size(params.targets) == 1) {
+    if (single_target) {
         // printf("Single file mode\n");
         buffer_t buffer = {0};  // initalize the pointers to NULL to avoid segfaults
         if (alloc_buffer(&buffer, &params) != 0) {
@@ -192,7 +200,7 @@ int main(int argc, char *argv[]) {
                 directPool = kt_forpool_init(nThreads, params.idle);
             }
         }
-        process_target(kv_A(params.targets, 0).path, &buffer, &params, false, directPool);
+        process_target(kv_A(params.targets, 0).path, kv_A(params.targets, 0).label, &buffer, &params, false, directPool);
         // print_buffer(&buffer);
         // process the data here
         if (directPool) kt_forpool_destroy(directPool);
@@ -205,7 +213,12 @@ int main(int argc, char *argv[]) {
     // to avoid asigning more, than 1 thread per target
     else {
         char outputFilePath[PATH_MAX];
-        build_batch_output_path(params.target, outputFilePath, sizeof(outputFilePath));
+        if (!build_batch_output_path(params.target, params.isList, outputFilePath, sizeof(outputFilePath))) {
+            fprintf(stderr, "Output path for target '%s' is too long (max %d bytes)\n", params.target, PATH_MAX - 1);
+            if (topo) free_topology(topo);
+            free_parameters(&params);
+            return 1;
+        }
 
         // Create the output file
         FILE *outputFile = fopen(outputFilePath, "w");
@@ -291,7 +304,7 @@ int main(int argc, char *argv[]) {
                 }
             }
             for (size_t i = 0; i < targetCount; ++i) {
-                process_target(kv_A(params.targets, i).path, params.buffers[0], &params, true, directPool);
+                process_target(kv_A(params.targets, i).path, kv_A(params.targets, i).label, params.buffers[0], &params, true, directPool);
                 fprint_buffer(params.buffers[0], &params);
                 int current = (int)i + 1;
                 if (current % permile == 0 || (size_t)current == targetCount) {

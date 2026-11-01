@@ -58,7 +58,7 @@ static void pool_process_targets(void* data, long i, int thread_id) {
     }
 
     long global_i = ctx->chunk_offset + i;
-    process_target(kv_A(ctx->params->targets, global_i).path, ctx->buffers[thread_id], ctx->params, true, NULL);
+    process_target(kv_A(ctx->params->targets, global_i).path, kv_A(ctx->params->targets, global_i).label, ctx->buffers[thread_id], ctx->params, true, NULL);
 
     int total = (int)ctx->disp->total_files;
     int permile = total / 1000;

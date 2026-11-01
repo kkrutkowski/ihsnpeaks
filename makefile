@@ -1,4 +1,4 @@
-.PHONY: all native check_compiler install clean format release release-linux release-full release-x86 release-arm release-macos release-linux-x86_64-musl release-linux-arm64-musl release-macos-universal clean-docker FORCE
+.PHONY: all native check_compiler check-release install clean format release release-linux release-full release-x86 release-arm release-macos release-linux-x86_64-musl release-linux-arm64-musl release-macos-universal clean-docker FORCE
 
 CC ?= cc
 AR ?= ar
@@ -376,6 +376,12 @@ release-macos-universal:
 
 clean-docker:
 	@docker rm -f $(RELEASE_CONTAINER) >/dev/null 2>&1 || true
+
+# Smoke-test the artifacts left in dist/ by `make release-full`.  The ARM64
+# binary runs under qemu-aarch64 and the macOS binary under Darling; either is
+# skipped when the emulator is not installed, unless REQUIRE_EMULATORS=1.
+check-release:
+	./tests/verify_release_artifacts.sh $(if $(filter 1,$(REQUIRE_EMULATORS)),--require-emulators)
 
 install: native
 	@if [ "$$(id -u)" -ne 0 ]; then \

@@ -2,6 +2,7 @@
 #define METADATA_H
 
 #include <dirent.h>
+#include <errno.h>
 #include <klib/kvec.h>
 #include <math.h>
 #include <qfits/qfits.h>
@@ -27,16 +28,6 @@ uint32_t bitCeil(uint32_t n) {
     }
     // Otherwise, return 2^exp
     return 1 << exp;
-}
-
-// Function to check if the path is a file or directory
-static int is_directory(const char *path) {
-    struct stat path_stat;
-    if (stat(path, &path_stat) != 0) {
-        perror("stat");
-        exit(EXIT_FAILURE);
-    }
-    return S_ISDIR(path_stat.st_mode);
 }
 
 void generate_plans(char *argv[]) {
@@ -235,153 +226,404 @@ static void initialize_nufft_plan(parameters *params) {
     }
 }
 
+/* ---------- Input target discovery (file / directory / .tsv list) ---------- */
+
+static bool has_tsv_suffix(const char *path) {
+    size_t len = strlen(path);
+    return len >= 4U && strcmp(path + len - 4U, ".tsv") == 0;
+}
+
+static bool has_photometry_suffix(const char *path) { return has_dat_suffix(path) || has_fits_suffix(path); }
+
+/* Prepend the optional --prefix to a photometry path. Absolute paths bypass the
+ * prefix (there is no sensible way to prefix them); *bypassed reports that. */
+static char *resolve_photometry_path(const parameters *params, const char *path, bool *bypassed) {
+    if (bypassed) *bypassed = false;
+    if (!params->prefix || params->prefix[0] == '\0' || path[0] == '\0') return strdup(path);
+    if (path[0] == '/') {
+        if (bypassed) *bypassed = true;
+        return strdup(path);
+    }
+
+    size_t prefix_len = strlen(params->prefix);
+    size_t path_len = strlen(path);
+    bool need_slash = params->prefix[prefix_len - 1U] != '/';
+    char *resolved = malloc(prefix_len + path_len + (need_slash ? 2U : 1U));
+    if (!resolved) return NULL;
+    memcpy(resolved, params->prefix, prefix_len);
+    size_t offset = prefix_len;
+    if (need_slash) resolved[offset++] = '/';
+    memcpy(resolved + offset, path, path_len + 1U);
+    return resolved;
+}
+
+static char *join_directory_entry(const char *dir, const char *name) {
+    size_t dir_len = strlen(dir);
+    size_t name_len = strlen(name);
+    char *joined = malloc(dir_len + name_len + 2U);
+    if (!joined) return NULL;
+    memcpy(joined, dir, dir_len);
+    size_t offset = dir_len;
+    joined[offset++] = '/';
+    memcpy(joined + offset, name, name_len + 1U);
+    return joined;
+}
+
+/* Batch sizing accumulators. Only the largest file per format is inspected. */
+typedef struct {
+    off_t largest_size;
+    off_t largest_dat_size;
+    off_t largest_fits_size;
+    size_t file_count;
+    uint64_t total_bytes;
+    char *largest_dat_path;
+    char *largest_fits_path;
+} batch_meta_t;
+
+static void batch_meta_init(batch_meta_t *meta) { memset(meta, 0, sizeof(*meta)); }
+
+static void batch_meta_add(batch_meta_t *meta, const char *path, const struct stat *file_stat) {
+    meta->file_count++;
+    meta->total_bytes += (uint64_t)file_stat->st_size;
+    if (file_stat->st_size > meta->largest_size) meta->largest_size = file_stat->st_size;
+
+    if (has_dat_suffix(path) && file_stat->st_size > meta->largest_dat_size) {
+        char *copy = strdup(path);
+        if (!copy) {
+            fprintf(stderr, "Out of memory while tracking the largest .dat file\n");
+            exit(EXIT_FAILURE);
+        }
+        free(meta->largest_dat_path);
+        meta->largest_dat_path = copy;
+        meta->largest_dat_size = file_stat->st_size;
+    }
+    if (has_fits_suffix(path) && file_stat->st_size > meta->largest_fits_size) {
+        char *copy = strdup(path);
+        if (!copy) {
+            fprintf(stderr, "Out of memory while tracking the largest .fits file\n");
+            exit(EXIT_FAILURE);
+        }
+        free(meta->largest_fits_path);
+        meta->largest_fits_path = copy;
+        meta->largest_fits_size = file_stat->st_size;
+    }
+}
+
+/* Size the NuFFT plan from at most one file per format: the largest .dat and the
+ * largest .fits. Never inspect every file of a large batch - see AGENTS.md. */
+static void finalize_batch_metadata(parameters *params, batch_meta_t *meta) {
+    uint32_t max_newline_count = 0;
+    double max_time_span = 0.0;
+
+    if (meta->largest_dat_path) {
+        uint32_t count = 0;
+        double span = 0.0;
+        inspect_dat_file(meta->largest_dat_path, &count, &span);
+        if (count > max_newline_count) max_newline_count = count;
+        if (span > max_time_span) max_time_span = span;
+    }
+    if (meta->largest_fits_path) {
+        uint32_t count = 0;
+        double span = 0.0;
+        inspect_fits_file(meta->largest_fits_path, &count, &span);
+        if (count > max_newline_count) max_newline_count = count;
+        if (span > max_time_span) max_time_span = span;
+    }
+
+    if (max_newline_count == 0U) {
+        fprintf(stderr, "No data rows found in the largest inspected .dat/.fits file of '%s'\n", params->target);
+        free(meta->largest_dat_path);
+        free(meta->largest_fits_path);
+        meta->largest_dat_path = NULL;
+        meta->largest_fits_path = NULL;
+        exit(EXIT_FAILURE);
+    }
+
+    params->maxSize = (uint32_t)(meta->largest_size + 1);
+    params->maxLen = max_newline_count;
+    params->maxTimeSpan = max_time_span;
+
+    size_t file_count = meta->file_count > 0U ? meta->file_count : 1U;
+    params->avgLen = meta->total_bytes / ((uint64_t)DEFAULT_MEASUREMENT_SIZE * (uint64_t)file_count);
+    params->maxFreqCount = estimate_frequency_count(params, params->maxTimeSpan);
+    initialize_nufft_plan(params);
+
+    free(meta->largest_dat_path);
+    free(meta->largest_fits_path);
+    meta->largest_dat_path = NULL;
+    meta->largest_fits_path = NULL;
+}
+
+static void list_entry_skip_warning(size_t skipped, const char *entry, const char *reason) {
+    if (skipped <= 10U) fprintf(stderr, "Warning: skipping list entry '%s' (%s)\n", entry, reason);
+}
+
+static void exit_with_list_cleanup(FILE *list, char *line, batch_meta_t *meta, const char *message) {
+    fprintf(stderr, "%s\n", message);
+    free(line);
+    fclose(list);
+    free(meta->largest_dat_path);
+    free(meta->largest_fits_path);
+    exit(EXIT_FAILURE);
+}
+
+/* Read a .tsv list: the first column is the photometry path, everything after the
+ * first tab is ignored. Blank lines, '#' comments and the batch header line are
+ * skipped so an ihsnpeaks .out.tsv can be fed back in directly. */
+static void process_target_list(parameters *params) {
+    FILE *list = fopen(params->target, "r");
+    if (!list) {
+        fprintf(stderr, "Failed to open input list '%s': %s\n", params->target, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    batch_meta_t meta;
+    batch_meta_init(&meta);
+
+    char *line = NULL;
+    size_t line_capacity = 0;
+    ssize_t line_length;
+    size_t entry_count = 0U;
+    size_t skipped_count = 0U;
+    size_t absolute_count = 0U;
+    bool first_line = true;
+
+    while ((line_length = getline(&line, &line_capacity, list)) != -1) {
+        while (line_length > 0 && (line[line_length - 1] == '\n' || line[line_length - 1] == '\r')) {
+            line[--line_length] = '\0';
+        }
+
+        char *field = line;
+        if (first_line) {
+            if (line_length >= 3 && (unsigned char)field[0] == 0xEF && (unsigned char)field[1] == 0xBB && (unsigned char)field[2] == 0xBF) {
+                field += 3;
+            }
+            first_line = false;
+        }
+
+        char *tab = strchr(field, '\t');
+        if (tab) *tab = '\0';
+        while (*field == ' ' || *field == '\t') field++;
+        size_t field_len = strlen(field);
+        while (field_len > 0U && (field[field_len - 1U] == ' ' || field[field_len - 1U] == '\t')) field[--field_len] = '\0';
+        if (field_len == 0U || field[0] == '#' || strcmp(field, "Input_file") == 0) continue;
+
+        entry_count++;
+
+        bool bypassed = false;
+        char *resolved = resolve_photometry_path(params, field, &bypassed);
+        if (!resolved) exit_with_list_cleanup(list, line, &meta, "Out of memory while reading the input list");
+        if (bypassed) absolute_count++;
+
+        struct stat file_stat;
+        if (stat(resolved, &file_stat) != 0) {
+            int stat_errno = errno;
+            char reason[160];
+            snprintf(reason, sizeof(reason), "cannot stat: %s", strerror(stat_errno));
+            skipped_count++;
+            list_entry_skip_warning(skipped_count, field, reason);
+            free(resolved);
+            continue;
+        }
+        if (!S_ISREG(file_stat.st_mode)) {
+            skipped_count++;
+            list_entry_skip_warning(skipped_count, field, "not a regular file");
+            free(resolved);
+            continue;
+        }
+        if (!has_photometry_suffix(resolved)) {
+            skipped_count++;
+            list_entry_skip_warning(skipped_count, field, "unsupported format (expected .dat, .fit or .fits)");
+            free(resolved);
+            continue;
+        }
+
+        target_t target;
+        target.label = strdup(field);
+        if (!target.label) {
+            free(resolved);
+            exit_with_list_cleanup(list, line, &meta, "Out of memory while reading the input list");
+        }
+        target.path = resolved;
+        batch_meta_add(&meta, resolved, &file_stat);
+        kv_push(target_t, params->targets, target);
+    }
+
+    free(line);
+    fclose(list);
+
+    if (absolute_count > 0U && params->prefix && params->prefix[0] != '\0') {
+        fprintf(stderr, "Warning: --prefix ignored for %zu absolute list entr%s\n", absolute_count, absolute_count == 1U ? "y" : "ies");
+    }
+    if (skipped_count > 0U) {
+        fprintf(stderr, "Warning: skipped %zu of %zu list entr%s\n", skipped_count, entry_count, entry_count == 1U ? "y" : "ies");
+    }
+    if (meta.file_count == 0U) {
+        free(meta.largest_dat_path);
+        free(meta.largest_fits_path);
+        fprintf(stderr, "No usable photometry files listed in '%s'\n", params->target);
+        exit(EXIT_FAILURE);
+    }
+
+    finalize_batch_metadata(params, &meta);
+}
+
+/* Directory branch: labels use the target as typed; paths use the prefixed
+ * directory, so --prefix only redirects where photometry is read from. */
+static void process_target_directory(parameters *params, char *resolved_dir) {
+    DIR *dir = opendir(resolved_dir);
+    if (!dir) {
+        fprintf(stderr, "Failed to open directory '%s': %s\n", resolved_dir, strerror(errno));
+        free(resolved_dir);
+        exit(EXIT_FAILURE);
+    }
+
+    batch_meta_t meta;
+    batch_meta_init(&meta);
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // d_type == DT_UNKNOWN is common on some filesystems; fall back to
+        // stat(2) instead of silently skipping every candidate file.
+        bool may_be_regular = (entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN);
+        if (!may_be_regular || !has_photometry_suffix(entry->d_name)) continue;
+
+        char *label = join_directory_entry(params->target, entry->d_name);
+        char *path = join_directory_entry(resolved_dir, entry->d_name);
+        if (!label || !path) {
+            free(label);
+            free(path);
+            closedir(dir);
+            free(resolved_dir);
+            fprintf(stderr, "Out of memory while scanning directory '%s'\n", params->target);
+            exit(EXIT_FAILURE);
+        }
+
+        struct stat file_stat;
+        if (stat(path, &file_stat) != 0) {
+            int stat_errno = errno;
+            fprintf(stderr, "Failed to stat '%s': %s\n", path, strerror(stat_errno));
+            free(label);
+            free(path);
+            closedir(dir);
+            free(resolved_dir);
+            exit(EXIT_FAILURE);
+        }
+        if (!S_ISREG(file_stat.st_mode)) {
+            free(label);
+            free(path);
+            continue;
+        }
+
+        target_t target = {.path = path, .label = label};
+        batch_meta_add(&meta, path, &file_stat);
+        kv_push(target_t, params->targets, target);
+    }
+    closedir(dir);
+    free(resolved_dir);
+
+    if (meta.file_count == 0U) {
+        free(meta.largest_dat_path);
+        free(meta.largest_fits_path);
+        fprintf(stderr, "No regular .dat or .fits files found in '%s'\n", params->target);
+        exit(EXIT_FAILURE);
+    }
+
+    finalize_batch_metadata(params, &meta);
+}
+
+static bool process_target_single(parameters *params, char *resolved) {
+    target_t target;
+    target.path = resolved;
+    target.label = strdup(params->target);
+    if (!target.label) {
+        free(resolved);
+        fprintf(stderr, "Out of memory\n");
+        exit(EXIT_FAILURE);
+    }
+
+    struct stat file_stat;
+    if (stat(resolved, &file_stat) != 0) {
+        int stat_errno = errno;
+        fprintf(stderr, "Failed to stat target '%s': %s\n", resolved, strerror(stat_errno));
+        free(resolved);
+        exit(EXIT_FAILURE);
+    }
+    params->maxSize = (uint32_t)(file_stat.st_size + 1);
+
+    uint32_t line_count = 0U;
+    double time_span = 0.0;
+    if (has_dat_suffix(resolved)) {
+        inspect_dat_file(resolved, &line_count, &time_span);
+    } else if (has_fits_suffix(resolved)) {
+        inspect_fits_file(resolved, &line_count, &time_span);
+    } else {
+        fprintf(stderr, "Unsupported input file format: '%s' (expected .dat, .fit, .fits or a .tsv list)\n", params->target);
+        free(resolved);
+        exit(EXIT_FAILURE);
+    }
+    if (line_count == 0U) {
+        fprintf(stderr, "No data rows found in '%s'\n", params->target);
+        free(resolved);
+        exit(EXIT_FAILURE);
+    }
+
+    params->maxLen = line_count;
+    params->maxTimeSpan = time_span;
+    params->maxFreqCount = estimate_frequency_count(params, params->maxTimeSpan);
+    initialize_nufft_plan(params);
+
+    kv_push(target_t, params->targets, target);
+    return true;
+}
+
 // Function to process the path and populate the target vector
 static bool process_path(parameters *params) {
     kv_init(params->targets);
     params->maxLen = 0;
     params->maxTimeSpan = 0.0;
+    params->avgLen = 0;
+    params->isList = false;
 
-    if (!is_directory(params->target)) {
-        // Allocate and populate a target struct with the file path and params pointer
-        target_t target;
-        target.path = strdup(params->target);
-        kv_push(target_t, params->targets, target);  // Store the target in the vector
-
-        // Use stat to get the file size
-        struct stat file_stat;
-        if (stat(params->target, &file_stat) != 0) {
-            perror("stat");
-            exit(EXIT_FAILURE);
-        }
-
-        params->maxSize = file_stat.st_size + 1;
-
-        params->maxSize = file_stat.st_size + 1;
-        uint32_t newline_count = 0;
-        double time_span = 0.0;
-        if (has_dat_suffix(params->target)) {
-            inspect_dat_file(params->target, &newline_count, &time_span);
-        } else if (has_fits_suffix(params->target)) {
-            inspect_fits_file(params->target, &newline_count, &time_span);
-        } else {
-            fprintf(stderr, "Unsupported input file format: '%s' (expected .dat or .fits)\n", params->target);
-            exit(EXIT_FAILURE);
-        }
-        if (newline_count == 0U) {
-            fprintf(stderr, "No data rows found in '%s'\n", params->target);
-            exit(EXIT_FAILURE);
-        }
-        params->maxLen = newline_count;
-        params->maxTimeSpan = time_span;
-        params->maxFreqCount = estimate_frequency_count(params, params->maxTimeSpan);
-        initialize_nufft_plan(params);
-        return true;
-    } else {
-        DIR *dir = opendir(params->target);
-        if (!dir) {
-            perror("opendir");
-            exit(EXIT_FAILURE);
-        }
-
-        struct dirent *entry;
-        off_t largest_size = 0;
-        char largest_path[256] = {0};
-        off_t largest_dat_size = 0;
-        char largest_dat_path[256] = {0};
-        off_t largest_fits_size = 0;
-        char largest_fits_path[256] = {0};
-        size_t file_count = 0;
-
-        while ((entry = readdir(dir)) != NULL) {
-            // d_type == DT_UNKNOWN is common on some filesystems; fall back to
-            // stat(2) instead of silently skipping every candidate file.
-            bool may_be_regular = (entry->d_type == DT_REG || entry->d_type == DT_UNKNOWN);
-            if (may_be_regular && (has_dat_suffix(entry->d_name) || has_fits_suffix(entry->d_name))) {
-                // Construct the full path for each file
-                char full_path[256];
-                snprintf(full_path, sizeof(full_path), "%s/%s", params->target, entry->d_name);
-
-                // Get the file size
-                struct stat file_stat;
-                if (stat(full_path, &file_stat) != 0) {
-                    perror("stat");
-                    exit(EXIT_FAILURE);
-                }
-                if (!S_ISREG(file_stat.st_mode)) {
-                    continue;
-                }
-
-                params->avgLen += file_stat.st_size;
-                file_count++;
-
-                // Track largest file overall (for readBuf sizing)
-                if (file_stat.st_size > largest_size) {
-                    largest_size = file_stat.st_size;
-                    params->maxSize = largest_size + 1;
-                    snprintf(largest_path, sizeof(largest_path), "%s", full_path);
-                }
-
-                // Track largest .dat file (for metadata inspection)
-                if (has_dat_suffix(entry->d_name) && file_stat.st_size > largest_dat_size) {
-                    largest_dat_size = file_stat.st_size;
-                    snprintf(largest_dat_path, sizeof(largest_dat_path), "%s", full_path);
-                }
-
-                // Track largest .fits file (for metadata inspection)
-                if (has_fits_suffix(entry->d_name) && file_stat.st_size > largest_fits_size) {
-                    largest_fits_size = file_stat.st_size;
-                    snprintf(largest_fits_path, sizeof(largest_fits_path), "%s", full_path);
-                }
-
-                // Allocate and populate a target struct with the file path and params pointer
-                target_t target;
-                target.path = strdup(full_path);
-                kv_push(target_t, params->targets, target);  // Store the target in the vector
-            }
-        }
-        closedir(dir);
-
-        if (largest_path[0] == '\0') {
-            fprintf(stderr, "No regular .dat or .fits files found in '%s'\n", params->target);
-            exit(EXIT_FAILURE);
-        }
-
-        // Inspect at most 1 file per format (the largest of each) to estimate
-        // row count and time span. Avoids scanning all 10k+ files in large batches.
-        uint32_t max_newline_count = 0;
-        double max_time_span = 0.0;
-
-        if (largest_dat_path[0] != '\0') {
-            uint32_t count = 0;
-            double span = 0.0;
-            inspect_dat_file(largest_dat_path, &count, &span);
-            if (count > max_newline_count) max_newline_count = count;
-            if (span > max_time_span) max_time_span = span;
-        }
-        if (largest_fits_path[0] != '\0') {
-            uint32_t count = 0;
-            double span = 0.0;
-            inspect_fits_file(largest_fits_path, &count, &span);
-            if (count > max_newline_count) max_newline_count = count;
-            if (span > max_time_span) max_time_span = span;
-        }
-
-        params->maxLen = max_newline_count;
-        params->maxTimeSpan = max_time_span;
-
-        // approximate an near-optimal transform size
-        if (file_count == 0) file_count = 1;
-        params->avgLen /= DEFAULT_MEASUREMENT_SIZE * file_count;
-        params->maxFreqCount = estimate_frequency_count(params, params->maxTimeSpan);
-        initialize_nufft_plan(params);
+    struct stat target_stat;
+    bool target_exists = (stat(params->target, &target_stat) == 0);
+    if (target_exists && S_ISREG(target_stat.st_mode) && has_tsv_suffix(params->target)) {
+        params->isList = true;
+        process_target_list(params);
+        return false;
     }
-    return false;
+
+    bool bypassed = false;
+    char *resolved = resolve_photometry_path(params, params->target, &bypassed);
+    if (!resolved) {
+        fprintf(stderr, "Out of memory while resolving target '%s'\n", params->target);
+        exit(EXIT_FAILURE);
+    }
+    if (bypassed) fprintf(stderr, "Warning: --prefix ignored for absolute target '%s'\n", params->target);
+
+    struct stat resolved_stat;
+    if (stat(resolved, &resolved_stat) != 0) {
+        int stat_errno = errno;
+        fprintf(stderr, "Failed to stat target '%s': %s\n", resolved, strerror(stat_errno));
+        if (params->prefix && params->prefix[0] != '\0') {
+            fprintf(stderr, "  (target '%s' with prefix '%s')\n", params->target, params->prefix);
+        }
+        free(resolved);
+        exit(EXIT_FAILURE);
+    }
+
+    if (S_ISDIR(resolved_stat.st_mode)) {
+        process_target_directory(params, resolved);
+        return false;
+    }
+    return process_target_single(params, resolved);
 }
 
 // Function to free all memory allocated in the kvec and destroy it
 static void free_targets(kvec_target_t *targets) {
     for (size_t i = 0; i < kv_size(*targets); i++) {
         free(kv_A(*targets, i).path);
+        free(kv_A(*targets, i).label);
     }
     kv_destroy(*targets);
 }

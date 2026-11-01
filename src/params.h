@@ -54,6 +54,8 @@ static parameters init_parameters(int argc, char *argv[]) {
 void print_parameters(parameters *params) {
     printf("Parsed parameters:\n");
     printf("\tTarget: %s\n", params->target);
+    printf("\tTarget kind: %s\n", params->isList ? "list" : (params->isFile ? "file" : "directory"));
+    printf("\tPrefix: %s\n", params->prefix ? params->prefix : "(none)");
     printf("\tMaximum frequency: %.2f\n", params->fmax);
     printf("\tMinimum frequency: %.2f\n", params->fmin);
     printf("\tOversampling Factor: %.2f\n", params->oversamplingFactor);
@@ -111,6 +113,8 @@ static inline int alloc_buffers(parameters *params) {
 void free_parameters(parameters *params) {
     free_nufft_plan_cache(params);
     free(params->target);  // Free the allocated string
+    free(params->prefix);  // Optional photometry path prefix
+    params->prefix = NULL;
     free_targets(&params->targets);
     if (params->buffers) {
         for (int i = 0; i < params->nbuffers; i++) {
@@ -133,7 +137,8 @@ void print_help(char **argv) {
     printf("Usage: %s target fmax [options]\n", argv[0]);
     printf("\n");
     printf("Positional arguments:\n");
-    printf("  target                   Path containing .dat file(s) (file or directory)\n");
+    printf("  target                   .dat/.fits light curve, directory of .dat/.fits files, or a .tsv\n");
+    printf("                           list of photometry files (first column, extra columns ignored)\n");
     printf("  fmax                     Upper bound of the frequency grid \n");
     printf("\n");
     printf("Options:\n");
@@ -163,6 +168,9 @@ void print_help(char **argv) {
         "otherwise\n");
     printf("  -p, --prewhiten           Attenuate detected variability modes\n");
     printf("                            \tbefore appending next peaks to the list (default: false)\n");
+    printf("      --prefix              Prefix prepended to the photometry file/directory, or to every relative\n");
+    printf("                            path listed in a .tsv list. The list file itself is never prefixed.\n");
+    printf("                            Relative list entries resolve against the current directory (default: none)\n");
     printf("      --epsilon             Set expected systemic variation (default: 0.001)\n");
     printf("      --statistic           Statistic type: bayes (Relative Evidence Ratio), raw (Classical NLL), or corrected (IHS-only Wilkie correction;\n");
     printf("                            default: raw for IHS and AoV with -d <= 7, bayes for AoV with -d >= 8)\n");
@@ -181,6 +189,8 @@ void print_help(char **argv) {
     printf("  -h, --help                Display this help message and exit\n\n");
     printf("Example:\n");
     printf("  %s /path/to/target.dat 10.0 -o 10.0 -t15.0 --peaks=5 --debug -s \n", argv[0]);
+    printf("  %s /path/to/list.tsv 10.0 --prefix /data/phot/ -o 10.0\n", argv[0]);
+    printf("      (reads /data/phot/<entry> for every relative list entry; writes /path/to/list.out.tsv)\n");
 }
 
 static bool parse_nufft_mode(const char *arg, nufft1_mode *mode) {
@@ -311,7 +321,8 @@ static parameters read_parameters(int argc, char *argv[]) {
         OPT_DEBUG = 0xFC,
         OPT_STRIP = 0xFD,
         OPT_PACK = 0xFE,
-        OPT_GENERATE = 0xFB
+        OPT_GENERATE = 0xFB,
+        OPT_PREFIX = 0x100
     };  // OPT_PREWHITEN = 0xFB,
 
     // Define long options
@@ -351,6 +362,7 @@ static parameters read_parameters(int argc, char *argv[]) {
                                       {"strip", ko_no_argument, OPT_STRIP},
                                       {"pack", ko_no_argument, OPT_PACK},
                                       {"generate", ko_no_argument, OPT_GENERATE},
+                                      {"prefix", ko_required_argument, OPT_PREFIX},
                                       {NULL, 0, 0}};
 
     // Initialize ketopt, skipping the first two positional arguments
@@ -504,6 +516,10 @@ static parameters read_parameters(int argc, char *argv[]) {
                 break;
             case OPT_GENERATE:
                 params.generate = true;
+                break;
+            case OPT_PREFIX:
+                free(params.prefix);
+                params.prefix = (opt.arg && opt.arg[0] != '\0') ? strdup(opt.arg) : NULL;
                 break;
             case '?': {
                 const char *bad = NULL;

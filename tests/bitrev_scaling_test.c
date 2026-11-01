@@ -47,18 +47,28 @@ static int check_order(uint32_t order) {
   }
   table_shuffle(ref_r, ref_i, order);
 
-  cobra_shuffle(got_r, got_i, order, a_r, a_i);
-  int cobra_ok = memcmp(ref_r, got_r, n * sizeof(float)) == 0 &&
-                 memcmp(ref_i, got_i, n * sizeof(float)) == 0;
+  /* Scalar COBRA's 64x64 tiling only exists for log_n >= 13; below that the
+   * COBRAVO kernel is the only tiled permutation. */
+  int cobra_ok = 1;
+  if (order >= 13) {
+    cobra_shuffle(got_r, got_i, order, a_r, a_i);
+    cobra_ok = memcmp(ref_r, got_r, n * sizeof(float)) == 0 &&
+               memcmp(ref_i, got_i, n * sizeof(float)) == 0;
+  }
 
   for (size_t k = 0; k < n; ++k) {
     got_r[k] = (float)k + 0.25f;
     got_i[k] = -(float)k - 0.5f;
   }
-  cobravo_init();
-  cobravo_shuffle(got_r, got_i, order, a_r, a_i, b_r, b_i);
-  int cobravo_ok = memcmp(ref_r, got_r, n * sizeof(float)) == 0 &&
-                   memcmp(ref_i, got_i, n * sizeof(float)) == 0;
+  /* Below the gate the COBRAVO kernel is intentionally a no-op, so it is only
+   * checked where the library actually selects it. */
+  int cobravo_ok = -1;
+  if (order >= (uint32_t)F_BITREV_MIN_LOG) {
+    cobravo_init();
+    cobravo_shuffle(got_r, got_i, order, a_r, a_i, b_r, b_i);
+    cobravo_ok = memcmp(ref_r, got_r, n * sizeof(float)) == 0 &&
+                 memcmp(ref_i, got_i, n * sizeof(float)) == 0;
+  }
 
   for (size_t k = 0; k < n; ++k) {
     got_r[k] = (float)k + 0.25f;
@@ -69,7 +79,8 @@ static int check_order(uint32_t order) {
                     memcmp(ref_i, got_i, n * sizeof(float)) == 0;
 
   printf("CHECK order=%u N=%zu cobra=%s cobravo=%s selected=%s\n", order, n,
-         cobra_ok ? "OK" : "FAIL", cobravo_ok ? "OK" : "FAIL",
+         order >= 13 ? (cobra_ok ? "OK" : "FAIL") : "n/a",
+         cobravo_ok < 0 ? "n/a" : (cobravo_ok ? "OK" : "FAIL"),
          selected_ok ? "OK" : "FAIL");
   free(ref_r);
   free(ref_i);
@@ -344,10 +355,12 @@ static int check_fused_perm(uint32_t order) {
 }
 
 int main(void) {
-  printf("F_BITREV_COBRAVO=%d gather_lanes=%d\n", F_BITREV_COBRAVO,
-         COBRAVO_GATHER_LANES);
+  printf("F_BITREV_COBRAVO=%d gather_lanes=%d min_log=%d\n", F_BITREV_COBRAVO,
+         COBRAVO_GATHER_LANES, F_BITREV_MIN_LOG);
   int failed = 0;
-  for (uint32_t order = 13; order <= 18; ++order)
+  /* Every order the permutation can be asked for, including the sizes where
+   * the gate still selects the table kernel and the range COBRAVO now covers. */
+  for (uint32_t order = 8; order <= 18; ++order)
     failed |= check_order(order);
   for (uint32_t order = 13; order <= 18; ++order)
     failed |= check_fused_fft(order);
