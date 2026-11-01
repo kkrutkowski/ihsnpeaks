@@ -1257,39 +1257,6 @@ int nufft1_pswf43_plan_len_from_base(int base_len) {
 
 int nufft1_pswf43_output_len_for_plan(int plan_len) { return plan_len + (plan_len >> 1); }
 
-int nufft1_twiddle_ladder_levels(int N, int block) {
-    if (N <= 0 || block <= 0) return 1;
-    size_t num_blocks = ((size_t)N + (size_t)block - 1U) / (size_t)block;
-    if (num_blocks <= 1U) return 1;
-
-    size_t max_advance = num_blocks - 1U;
-    size_t stride = (size_t)MAX_TWIDDLE_REUSE;
-    int levels = 1;
-    while (max_advance >= stride) {
-        ++levels;
-        if (stride > SIZE_MAX / (size_t)MAX_TWIDDLE_REUSE) break;
-        stride *= (size_t)MAX_TWIDDLE_REUSE;
-    }
-    return levels;
-}
-
-int nufft1_twiddle_ladder_carry_level(size_t next_block, int levels) {
-    int level = 0;
-    size_t stride = (size_t)MAX_TWIDDLE_REUSE;
-    while (level + 1 < levels && next_block % stride == 0U) {
-        ++level;
-        if (stride > SIZE_MAX / (size_t)MAX_TWIDDLE_REUSE) break;
-        stride *= (size_t)MAX_TWIDDLE_REUSE;
-    }
-    return level;
-}
-
-double nufft1_twiddle_ladder_advance(int block, int level) {
-    double advance = (double)block;
-    for (int i = 0; i < level; ++i) advance *= (double)MAX_TWIDDLE_REUSE;
-    return advance;
-}
-
 /* -------------------------------------------------------------------------
  * Peak detection: three-point quadratic/Lagrange-form interpolation
  * ------------------------------------------------------------------------- */

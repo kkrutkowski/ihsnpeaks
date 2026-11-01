@@ -84,6 +84,11 @@ static inline bool double_is_finite_bits(double value) {
     return (bits.u & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000);
 }
 
+/* Included after the finite-bit helpers above: simd.h (pulled in through
+ * ladder.h) defines same-named function-like macros in its fallback block, so
+ * it must not be seen before these definitions. */
+#include "ladder.h"
+
 static inline bool periodogram_uses_aov(periodogram_method method) { return method != PERIODOGRAM_IHS && method != PERIODOGRAM_AUTO; }
 
 static inline const char* periodogram_method_name(periodogram_method method) {
@@ -151,8 +156,6 @@ typedef struct {
     float width;
 } peak_t;
 
-enum { NUFFT_LADDER_LEVEL_CAP = 8U };
-
 typedef struct {
     uint32_t gridLen;
     uint32_t outputLen;
@@ -194,14 +197,6 @@ typedef struct {
     size_t powerCap;
     float* blockReal;
     float* blockImag;
-    float* inputReal;
-    float* inputImag;
-    float* workReal;
-    float* workImag;
-    float* deltaReal;
-    float* deltaImag;
-    float* deltaBackReal;
-    float* deltaBackImag;
     float* fftReal;
     float* fftImag;
     float* cobraReal;
@@ -211,11 +206,14 @@ typedef struct {
     float *aovSw, *aovCw, *aovSyw, *aovCyw, *aovPower, *aovCondition;
     size_t aovArrayCap;
     int aovTerms;
+    float* aovSolverVec;  // VEC-sized Levinson rows for the vectorized AoV solver
+    size_t aovSolverVecCap;
+    int aovSolverTerms;
+    twiddle_ladder ladder;  // two-level twiddle ladder (IHS + AoV sweeps)
     nufft1_workspace* nufftWorkspace;
     uint32_t activePlanIndex;
     uint32_t activeGridLen;
     uint32_t activeOutputLen;
-    uint32_t activeLadderLevels;
 
     sds spectrum;
     sds outBuf;
@@ -321,7 +319,6 @@ typedef struct {
     uint32_t gridLen;  // length of the NuFFT block plan
     uint32_t outputLen;
     uint32_t maxFreqCount;
-    uint32_t ladderLevels;
     uint64_t avgLen;  // average number of measurements per time series in the batch
     double maxTimeSpan;
     nufft1_mode gridMode;

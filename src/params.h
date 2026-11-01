@@ -88,7 +88,7 @@ void print_parameters(parameters *params) {
     printf("\tNuFFT grid: pswf%i\n", params->gridMode);
     printf("\tNuFFT plan length: %i\n", params->gridLen);
     printf("\tNuFFT output block length: %i\n", params->outputLen);
-    printf("\tNuFFT twiddle ladder levels: %i\n", params->ladderLevels);
+    printf("\tTwiddle ladder reuse budget: %i\n", (int)MAX_TWIDDLE_REUSE);
     printf("\tMaximum target frequencies: %i\n", params->maxFreqCount);
     printf("\tNumber of worker threads available: %i\n", params->jobs);
     if (!params->isFile) {

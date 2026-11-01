@@ -177,10 +177,6 @@ static void initialize_nufft_plan(parameters *params) {
 
     params->gridLen = (uint32_t)base_len;
     params->outputLen = nufft_output_len_for_grid(params->gridLen, params->gridMode);
-    params->ladderLevels = (uint32_t)nufft1_twiddle_ladder_levels((int)params->maxFreqCount, (int)params->outputLen);
-    if (params->ladderLevels > 8U) params->ladderLevels = 8U;
-    if (params->ladderLevels == 0U) params->ladderLevels = 1U;
-
     params->nufftExternalSizes = nufft1_external_sizes_for_plan((int)params->gridLen, params->gridMode);
     int nufft_factors = periodogram_uses_aov(params->periodogramMethod) ? 2 * params->nterms : params->nterms;
 

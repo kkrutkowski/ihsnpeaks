@@ -781,4 +781,16 @@ static inline void nll_convert_spectrum_bayes_batch(const float *r2_in, const fl
 #    define lnFAP(dK, dH, R2, N) lnFAP_fast((dK), (dH), (double)(R2), (N))
 #endif
 
+/* Unaligned VEC load/store.  memcpy keeps the type punning well-defined and
+ * still lowers to a single movups/vmovups.  Note: deliberately not named
+ * loadu_vecf/storeu_vecf -- src/nufft/nufft1.c defines same-named helpers for
+ * its raw VECF type and release builds compile both files into one TU. */
+static inline VEC load_vecf_u(const float *src) {
+    VEC out;
+    memcpy(&out.data, src, sizeof(out.data));
+    return out;
+}
+
+static inline void store_vecf_u(float *dst, VEC val) { memcpy(dst, &val.data, sizeof(val.data)); }
+
 #endif  // SIMD_H

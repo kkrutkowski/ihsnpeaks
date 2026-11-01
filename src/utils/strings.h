@@ -4,6 +4,13 @@
 #include <fast_convert.h>
 #include <sds.h>
 
+/* CLI entry points define the version before including the headers (see
+ * src/main.c); test translation units that only pull in aov.h do not, so fall
+ * back to an empty string instead of requiring the prologue. */
+#ifndef IHSNPEAKS_VERSION
+#    define IHSNPEAKS_VERSION ""
+#endif
+
 inline unsigned int custom_ftoa(float v, int size, char *line) {
     int new_size = size + (int)ceil(log10(v));
     if (new_size < 1) {

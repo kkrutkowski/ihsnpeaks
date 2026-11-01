@@ -20,17 +20,6 @@ extern "C" {
 
 #define NUFFT1_PSWF_WIDTH 8
 
-/* Twiddle-ladder radix: adjustable at compile time via -DMAX_TWIDDLE_REUSE=N
- * (native dev makefile uses 16; release builds and lc-qt use 8). Every TU that
- * reasons about the ladder (process.h compute_work_at_block) must see the same
- * value as nufft1.c, so this header is the single default. */
-#ifndef MAX_TWIDDLE_REUSE
-#    define MAX_TWIDDLE_REUSE 8
-#endif
-#if MAX_TWIDDLE_REUSE < 2 || (MAX_TWIDDLE_REUSE & (MAX_TWIDDLE_REUSE - 1)) != 0
-#    error "MAX_TWIDDLE_REUSE must be a power of two >= 2"
-#endif
-
 typedef enum { NUFFT1_PSWF21 = 21, NUFFT1_PSWF43 = 43 } nufft1_mode;
 
 typedef struct nufft1_plan nufft1_plan;
@@ -70,9 +59,6 @@ double nufft1_approximate_cost(int N, int M, int block, int degree, double alpha
 int nufft1_optimize_plan_size(int N, int M, int degree, double alpha, double beta, double gamma, int backend);
 int nufft1_pswf43_plan_len_from_base(int base_len);
 int nufft1_pswf43_output_len_for_plan(int plan_len);
-int nufft1_twiddle_ladder_levels(int N, int block);
-int nufft1_twiddle_ladder_carry_level(size_t next_block, int levels);
-double nufft1_twiddle_ladder_advance(int block, int level);
 
 enum { NUFFT1_UTIL_OK = 0, NUFFT1_UTIL_ERR_ARGUMENT = -1, NUFFT1_UTIL_ERR_ALLOC = -3 };
 

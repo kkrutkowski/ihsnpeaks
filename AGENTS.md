@@ -41,7 +41,6 @@
 │   ├── params.h         — Parameter struct, init, parsing, help text
 │   ├── metadata.h       — File discovery, NuFFT plan sizing, plan cache init
 │   ├── process.h        — Core periodogram evaluation pipeline (main logic)
-│   ├── profile.h        — Instrumentation/profiling macros (IHSNPEAKS_PROFILE)
 │   ├── hwloc_topo.h     — hwloc topology probing, L3 domain enumeration, per-PU CPU binding, XML export to ~/.ihsnpeaks/hwloc_config
 │   ├── pool.h           — L3-aware thread-pool dispatcher: per-pool buffer sets, chunked atomic file dispatch
 │   ├── nufft/           — PSWF-based non-uniform FFT backend
@@ -113,16 +112,6 @@ The macOS build uses `zig cc` + `llvm-lipo` to create a universal Mach-O binary.
 
 **hwloc is built from source (v2.14.0) for each release target.** Each `dispatch/build_release*.py` downloads the hwloc tarball into the variant's build directory and compiles `libhwloc.a` with the target cross-compiler (zig musl for Linux, zig darwin for macOS per-arch slices). The native makefile follows the same pattern in `build/native/<allocator>/`.
 
-### Profile build
-
-```sh
-make profile         # Builds a profiled binary with -DIHSNPEAKS_PROFILE=1
-make profile-run     # Runs profiling across thread counts (1, 2, 4, 8, 16, 32)
-make profile-clean   # Removes profile artifacts
-```
-
-Configure via `PROFILE_ISA` (e.g., `make profile PROFILE_ISA=x86-64-v3`), `PROFILE_TARGET`, `PROFILE_FMAX`, and `PROFILE_JOBS`.
-
 ### Other make targets
 
 ```sh
@@ -176,13 +165,14 @@ ihsnpeaks <target> <fmax> [options]
 - **No dynamic dispatch dispatcher source:** Runtime dispatch resolves via `IHSNPEAKS_DISPATCH` or is baked into release builds at link time.
 - **Alignment:** All buffers use 64-byte aligned allocation (`aligned_alloc(64, ...)`). A C99 fallback keeps aligned allocations even on pre-C11 systems.
 - **SIMD abstraction:** Vector code uses GCC/Clang vector extensions via `src/utils/simd.h` — auto-scales between SSE (128-bit), AVX (256-bit), and AVX-512 (512-bit) through `VEC_BYTES`.
-- **Profiling:** Compile with `-DIHSNPEAKS_PROFILE=1` to enable cycle-accurate phase profiling. Thread-local accumulators get flushed atomically. The `profile_report()` function dumps timing and working-set estimates to stderr.
 - **Memory management:** Uses system allocator by default. Optionally links mimalloc (`MIMALLOC=1`). For simplicity within the hot path, the code allocates and reuses pre-sized buffers per thread rather than frequent malloc/free.
 - **Batch mode:** When a directory is provided as target, the metadata pass discovers all matching `.dat`/`.fits` files, but **inspects only the largest `.dat` file and the largest `.fits` file** (one per format, by `stat` size) to size the NuFFT plan. Buffer sizes are derived from these two files only.
 - **Batch metadata scan performance (IMPORTANT):** The metadata pass must NOT loop over all files calling `inspect_dat_file()` or `inspect_fits_file()`. Doing so introduces severe startup latency on large directories (e.g., 10+ seconds on 15 000+ files where < 1 second is acceptable). The current implementation in `metadata.h::process_path()` tracks `largest_dat_path` / `largest_fits_path` during `readdir()` and opens at most two files after the loop. Any refactor must preserve this property.
 - **Threading / hwloc:** At startup, `load_or_probe_topology()` probes the hardware via hwloc (or loads the cached topology from `~/.ihsnpeaks/hwloc_config`). One worker thread pool is created per active L3 domain; workers are pinned to specific PUs via `hwloc_set_cpubind(HWLOC_CPUBIND_THREAD)` before their per-thread `buffer_t` is allocated, so first-touch NUMA placement puts the per-thread buffers on the local node. The shared NuFFT twiddle allocation (`nufftTwiddleReal/Imag`) is one block containing a private region per cached plan and is allocated before workers exist, so the OS kernel distributes it across NUMA nodes by default (acceptable for read-mostly data).
+- **Twiddle ladder (IHS + AoV sweeps):** the per-block frequency advance is a two-level ladder in `src/utils/ladder.h`. Level 0 is mutable state: for each live harmonic q, the complex point twiddle `amp * exp(2*pi*i*x*q*(fmin + df*block_len*block))`, advanced by exactly one complex multiply per block against a pregenerated, read-only per-harmonic step. Level 1 is the exact-phase anchor: every `MAX_TWIDDLE_REUSE` blocks the state is regenerated from a double-precision phase, folded to its fractional part in a DVEC, packed two-DVECs-to-one-VEC and passed through `sin2pif_vec`/`cos2pif_vec` (`src/utils/trig.h`). There is no third level; drift is bounded by the reuse budget. Do not reintroduce float phase arithmetic for ladder steps — folding the phase in double first is the accuracy fix this design exists for. `MAX_TWIDDLE_REUSE` is a reuse budget (not a radix) and need not be a power of two; build systems pass it with `-DMAX_TWIDDLE_REUSE=N` (native 16, release + lc-qt 8).
+- **Peak scan semantics (IMPORTANT, intentional):** the sweep interpolates on the *raw* grid and only *uses* the parabola for local maxima that clear the detection threshold; the Erlang correction (`correct_ihs_res`) is a reporting transform applied only to retained peaks and to spectrum rows (the detection threshold is pre-inverted in `params.h`, so detection stays in the raw-sum domain). Do not move the Erlang correction or the interpolation into the grid loop and do not apply them to every frequency - that would change peak enumeration and is not a bug fix.
 - **FFT / twiddles:** `src/nufft/nufft1.c` uses a fused Radix-2 pair (two DIF stages per pass) with interleaved `W1`/`W2` twiddle blocks.  The fused layout is not suffix-compatible across plan sizes, so every cached NuFFT plan must own its twiddle region; `src/metadata.h` allocates these per-plan regions.  `nufft1_initialize_shared_precomputed()` therefore requires a buffer that already contains that plan's fused layout, never a suffix of a larger plan's buffer.
-- **Build-time calibration:** `src/nufft/scaling.c` self-tests the fused FFT, fits `F_ALPHA` from FFT log-log timing, measures stable beta/gamma with min-of-repetitions, and selects COBRA/COBRAVO.  Run `tests/verify_bitrev.sh` after touching the FFT, twiddle layout, or plan cache.
-- **Testing:** Shell-based reference/determinism scripts live in `tests/` (`benchmark.sh`, `verify_determinism.sh`, `verify_bitrev.sh`, `bitrev_scaling_test.c`); they do not require a test framework. The `src/debug/` directory contains Python debugging/viewer scripts.
+- **Build-time calibration:** `src/nufft/scaling.c` self-tests the fused FFT, fits `F_ALPHA` from FFT log-log timing, measures stable beta/gamma with min-of-repetitions, and selects COBRA/COBRAVO.  Run `tests/verify_bitrev.sh` after touching the FFT, twiddle layout, or plan cache, and `tests/verify_ladder.sh` after touching the ladder, trig kernels, or AoV trig sums.
+- **Testing:** Shell-based reference/determinism scripts live in `tests/` (`benchmark.sh`, `verify_determinism.sh`, `verify_bitrev.sh`, `verify_core.sh`, `verify_ladder.sh`, `verify_statistics.sh`, `bitrev_scaling_test.c`, `ladder_test.c`); they do not require a test framework. The `src/debug/` directory contains Python debugging/viewer scripts.
 - **No warnings policy:** Compilation with `-Wall -Wextra` is expected to be clean. The makefile adds specific `-Wno-*` flags for certain compiler quirks.
 - **Version:** Defined as `IHSNPEAKS_VERSION "v1.1.0-preview"` (work in progress) in `src/main.c`.

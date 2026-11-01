@@ -56,22 +56,6 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->blockReal = NULL;
     free(buffer->blockImag);
     buffer->blockImag = NULL;
-    free(buffer->inputReal);
-    buffer->inputReal = NULL;
-    free(buffer->inputImag);
-    buffer->inputImag = NULL;
-    free(buffer->workReal);
-    buffer->workReal = NULL;
-    free(buffer->workImag);
-    buffer->workImag = NULL;
-    free(buffer->deltaReal);
-    buffer->deltaReal = NULL;
-    free(buffer->deltaImag);
-    buffer->deltaImag = NULL;
-    free(buffer->deltaBackReal);
-    buffer->deltaBackReal = NULL;
-    free(buffer->deltaBackImag);
-    buffer->deltaBackImag = NULL;
     free(buffer->fftReal);
     buffer->fftReal = NULL;
     free(buffer->fftImag);
@@ -97,6 +81,11 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->aovCondition = NULL;
     buffer->aovArrayCap = 0;
     buffer->aovTerms = 0;
+    free(buffer->aovSolverVec);
+    buffer->aovSolverVec = NULL;
+    buffer->aovSolverVecCap = 0;
+    buffer->aovSolverTerms = 0;
+    ladder_free(&buffer->ladder);
     if (buffer->peaks) {
         free(buffer->peaks);
         buffer->peaks = NULL;
@@ -163,6 +152,22 @@ static inline bool buffer_ensure_power(buffer_t* buffer, size_t cap) {
     return true;
 }
 
+// Lazily allocate (or grow) the VEC-sized Levinson row scratch used by the
+// vectorized AoV solver.  Rows: Rr/Ri (norder+1) + Yr/Yi/Xr/Xi/Ar/Ai/Apr/Api
+// (norder each) VECs, stored as raw floats of VEC_LEN lanes each.
+static inline bool buffer_ensure_aov_solver_vec(buffer_t* buffer, int nterms) {
+    if (buffer->aovSolverVec && buffer->aovSolverTerms >= nterms) return true;
+    int norder = (2 * nterms) + 1;
+    size_t vec_count = (size_t)(2 * (norder + 1) + 8 * norder);
+    float* nv = aligned_alloc(64, round_buffer(vec_count * VEC_LEN * sizeof(float)));
+    if (!nv) return false;
+    free(buffer->aovSolverVec);
+    buffer->aovSolverVec = nv;
+    buffer->aovSolverVecCap = vec_count;
+    buffer->aovSolverTerms = nterms;
+    return true;
+}
+
 static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
     buffer->len = params->maxLen;
     buffer->allocated = true;
@@ -174,7 +179,6 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->activePlanIndex = max_plan_idx;
         buffer->activeGridLen = params->nufftPlanCache[max_plan_idx].gridLen;
         buffer->activeOutputLen = params->nufftPlanCache[max_plan_idx].outputLen;
-        buffer->activeLadderLevels = params->ladderLevels;
     }
     buffer->spectrum = sdsempty();
     buffer->outBuf = sdsempty();
@@ -223,39 +227,6 @@ static inline int alloc_buffer(buffer_t* buffer, parameters* params) {
         buffer->blockImag = aligned_alloc(64, round_buffer((size_t)params->outputLen * sizeof(float)));
     }
     if (!buffer->blockImag) goto error;
-    if (!buffer->inputReal) {
-        buffer->inputReal = aligned_alloc(64, round_buffer((size_t)buffer->paddedLen * sizeof(float)));
-    }
-    if (!buffer->inputReal) goto error;
-    if (!buffer->inputImag) {
-        buffer->inputImag = aligned_alloc(64, round_buffer((size_t)buffer->paddedLen * sizeof(float)));
-    }
-    if (!buffer->inputImag) goto error;
-    size_t ladder_len = (size_t)NUFFT_LADDER_LEVEL_CAP * (size_t)buffer->paddedLen;
-    if (!buffer->workReal) {
-        buffer->workReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
-    }
-    if (!buffer->workReal) goto error;
-    if (!buffer->workImag) {
-        buffer->workImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
-    }
-    if (!buffer->workImag) goto error;
-    if (!buffer->deltaReal) {
-        buffer->deltaReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
-    }
-    if (!buffer->deltaReal) goto error;
-    if (!buffer->deltaImag) {
-        buffer->deltaImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
-    }
-    if (!buffer->deltaImag) goto error;
-    if (!buffer->deltaBackReal) {
-        buffer->deltaBackReal = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
-    }
-    if (!buffer->deltaBackReal) goto error;
-    if (!buffer->deltaBackImag) {
-        buffer->deltaBackImag = aligned_alloc(64, round_buffer(ladder_len * sizeof(float)));
-    }
-    if (!buffer->deltaBackImag) goto error;
     if (!buffer->fftReal) {
         buffer->fftReal = aligned_alloc(64, round_buffer(params->nufftExternalSizes.fft_len * sizeof(float)));
     }

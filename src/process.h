@@ -11,7 +11,6 @@
 #include "params.h"
 #include "utils/readout.h"
 
-#include "profile.h"
 #include "utils/simd.h"
 #include "utils/strings.h"
 #include "utils/trig.h"
@@ -58,184 +57,7 @@ static inline bool activate_target_nufft_plan(buffer_t *buffer, const parameters
     buffer->activePlanIndex = plan_idx;
     buffer->activeGridLen = entry->gridLen;
     buffer->activeOutputLen = entry->outputLen;
-    buffer->activeLadderLevels = (uint32_t)nufft1_twiddle_ladder_levels(target_nfreq, (int)entry->outputLen);
-    if (buffer->activeLadderLevels > NUFFT_LADDER_LEVEL_CAP) buffer->activeLadderLevels = NUFFT_LADDER_LEVEL_CAP;
-    if (buffer->activeLadderLevels == 0U) buffer->activeLadderLevels = 1U;
     return true;
-}
-
-static inline void fill_complex_input(buffer_t *buffer, double base_freq, double freq_factor) {
-    uint32_t i = 0;
-    for (; i < buffer->n; ++i) {
-        float phase = (float)(buffer->x[i] * base_freq * freq_factor);
-        buffer->inputReal[i] = buffer->wy[i] * cos2pif_tls(phase);
-        buffer->inputImag[i] = buffer->wy[i] * sin2pif_tls(phase);
-    }
-    for (; i < buffer->paddedLen; ++i) {
-        buffer->inputReal[i] = 0.0f;
-        buffer->inputImag[i] = 0.0f;
-    }
-}
-
-static inline void fill_twiddle_ladder(buffer_t *buffer, double fstep, double freq_factor) {
-    for (uint32_t level = 0; level < buffer->activeLadderLevels; ++level) {
-        size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-        double advance = nufft1_twiddle_ladder_advance((int)buffer->activeOutputLen, (int)level);
-        uint32_t i = 0;
-        for (; i < buffer->n; ++i) {
-            float phase = (float)(buffer->x[i] * fstep * freq_factor * advance);
-            buffer->deltaReal[offset + i] = cos2pif_tls(phase);
-            buffer->deltaImag[offset + i] = sin2pif_tls(phase);
-        }
-        for (; i < buffer->paddedLen; ++i) {
-            buffer->deltaReal[offset + i] = 1.0f;
-            buffer->deltaImag[offset + i] = 0.0f;
-        }
-    }
-}
-
-static inline void fill_twiddle_ladder_backward(buffer_t *buffer, double fstep, double freq_factor) {
-    for (uint32_t level = 0; level < buffer->activeLadderLevels; ++level) {
-        size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-        double advance = nufft1_twiddle_ladder_advance((int)buffer->activeOutputLen, (int)level);
-        uint32_t i = 0;
-        for (; i < buffer->n; ++i) {
-            float phase = (float)(buffer->x[i] * fstep * freq_factor * (-advance));
-            buffer->deltaBackReal[offset + i] = cos2pif_tls(phase);
-            buffer->deltaBackImag[offset + i] = sin2pif_tls(phase);
-        }
-        for (; i < buffer->paddedLen; ++i) {
-            buffer->deltaBackReal[offset + i] = 1.0f;
-            buffer->deltaBackImag[offset + i] = 0.0f;
-        }
-    }
-}
-
-// Compute work state at arbitrary block K from pristine input using hierarchical ladder decomposition
-// O(log_R(K) * 7) complex multiplications - bounded error, R = MAX_TWIDDLE_REUSE
-// Each ladder level L is set to the state at the last carry point for that level:
-//   work[L] = input * prod_{j>=L} delta[j]^d[j]  where d[j] are base-R digits of block_idx
-// Digits beyond the ladder-level cap are absorbed by the top level (matching the
-// sequential advance, which applies delta[top] at every multiple of R^top).
-static inline void compute_work_at_block(buffer_t *buffer, size_t block_idx) {
-    // Start with pristine input at level 0
-    memcpy(buffer->workReal, buffer->inputReal, (size_t)buffer->paddedLen * sizeof(float));
-    memcpy(buffer->workImag, buffer->inputImag, (size_t)buffer->paddedLen * sizeof(float));
-
-    if (block_idx == 0) {
-        // Copy to all levels
-        for (uint32_t level = 1; level < buffer->activeLadderLevels; ++level) {
-            size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-            memcpy(buffer->workReal + offset, buffer->inputReal, (size_t)buffer->paddedLen * sizeof(float));
-            memcpy(buffer->workImag + offset, buffer->inputImag, (size_t)buffer->paddedLen * sizeof(float));
-        }
-        return;
-    }
-
-    // Extract base-R digits (R = MAX_TWIDDLE_REUSE, the ladder radix)
-    size_t digits[NUFFT_LADDER_LEVEL_CAP];
-    size_t remaining = block_idx;
-    size_t radix = (size_t)MAX_TWIDDLE_REUSE;
-    uint32_t max_level = 0;
-    for (uint32_t level = 0; level < buffer->activeLadderLevels; ++level) {
-        digits[level] = remaining % radix;
-        remaining /= radix;
-        if (digits[level] > 0) max_level = level;
-    }
-
-    // Absorb digits beyond the cap into the top level: the sequential ladder applies
-    // delta[top] once per multiple of radix^top, i.e. floor(block_idx / radix^top)
-    // times, which equals digits[top] + radix * remaining here.
-    if (remaining > 0U && buffer->activeLadderLevels > 0U) {
-        uint32_t top = buffer->activeLadderLevels - 1U;
-        digits[top] += radix * remaining;
-        if (max_level < top) max_level = top;
-    }
-
-    // Process levels from highest to lowest.
-    // At each level L, multiply work[0] by delta[L]^digits[L],
-    // then save the result to work[L] (the carry-point state for this level).
-    // work[L] = input * prod_{j>=L} delta[j]^d[j]
-    uint32_t i, n_vec;
-    for (int level = (int)max_level; level >= 0; --level) {
-        // Multiply work[0] by delta[level] exactly digits[level] times
-        if (digits[level] > 0) {
-            size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-            for (size_t d = 0; d < digits[level]; ++d) {
-                n_vec = buffer->paddedLen - (buffer->paddedLen % VEC_LEN);
-                for (i = 0; i < n_vec; i += VEC_LEN) {
-                    VEC wr = {.data = *(vecf_data *)(buffer->workReal + i)};
-                    VEC wi = {.data = *(vecf_data *)(buffer->workImag + i)};
-                    VEC dr = {.data = *(vecf_data *)(buffer->deltaReal + offset + i)};
-                    VEC di = {.data = *(vecf_data *)(buffer->deltaImag + offset + i)};
-                    *(vecf_data *)(buffer->workReal + i) = wr.data * dr.data - wi.data * di.data;
-                    *(vecf_data *)(buffer->workImag + i) = wr.data * di.data + wi.data * dr.data;
-                }
-                for (; i < buffer->paddedLen; ++i) {
-                    float wr = buffer->workReal[i];
-                    float wi = buffer->workImag[i];
-                    float dr = buffer->deltaReal[offset + i];
-                    float di = buffer->deltaImag[offset + i];
-                    buffer->workReal[i] = wr * dr - wi * di;
-                    buffer->workImag[i] = wr * di + wi * dr;
-                }
-            }
-        }
-
-        // Save current state to work[level] AFTER multiplication (carry-point state)
-        if (level > 0) {
-            size_t dst_offset = (size_t)level * (size_t)buffer->paddedLen;
-            memcpy(buffer->workReal + dst_offset, buffer->workReal, (size_t)buffer->paddedLen * sizeof(float));
-            memcpy(buffer->workImag + dst_offset, buffer->workImag, (size_t)buffer->paddedLen * sizeof(float));
-        }
-    }
-
-    // Fill any remaining higher levels with input (they have digit=0)
-    for (uint32_t level = max_level + 1; level < buffer->activeLadderLevels; ++level) {
-        size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-        memcpy(buffer->workReal + offset, buffer->inputReal, (size_t)buffer->paddedLen * sizeof(float));
-        memcpy(buffer->workImag + offset, buffer->inputImag, (size_t)buffer->paddedLen * sizeof(float));
-    }
-}
-
-static inline void reset_work_ladder(buffer_t *buffer) {
-    for (uint32_t level = 0; level < buffer->activeLadderLevels; ++level) {
-        size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-        memcpy(buffer->workReal + offset, buffer->inputReal, (size_t)buffer->paddedLen * sizeof(float));
-        memcpy(buffer->workImag + offset, buffer->inputImag, (size_t)buffer->paddedLen * sizeof(float));
-    }
-}
-
-static inline void advance_work_ladder(buffer_t *buffer, size_t next_block) {
-    int level = nufft1_twiddle_ladder_carry_level(next_block, (int)buffer->activeLadderLevels);
-    if (level >= (int)buffer->activeLadderLevels) level = (int)buffer->activeLadderLevels - 1;
-    size_t offset = (size_t)level * (size_t)buffer->paddedLen;
-
-    uint32_t i = 0;
-    uint32_t n_vec = buffer->paddedLen - (buffer->paddedLen % VEC_LEN);
-    for (; i < n_vec; i += VEC_LEN) {
-        VEC wr = {.data = *(vecf_data *)(buffer->workReal + offset + i)};
-        VEC wi = {.data = *(vecf_data *)(buffer->workImag + offset + i)};
-        VEC dr = {.data = *(vecf_data *)(buffer->deltaReal + offset + i)};
-        VEC di = {.data = *(vecf_data *)(buffer->deltaImag + offset + i)};
-        *(vecf_data *)(buffer->workReal + offset + i) = wr.data * dr.data - wi.data * di.data;
-        *(vecf_data *)(buffer->workImag + offset + i) = wr.data * di.data + wi.data * dr.data;
-    }
-    for (; i < buffer->paddedLen; ++i) {
-        float wr = buffer->workReal[offset + i];
-        float wi = buffer->workImag[offset + i];
-        float dr = buffer->deltaReal[offset + i];
-        float di = buffer->deltaImag[offset + i];
-        buffer->workReal[offset + i] = wr * dr - wi * di;
-        buffer->workImag[offset + i] = wr * di + wi * dr;
-    }
-
-    for (int dst_level = level; dst_level > 0; --dst_level) {
-        size_t dst = (size_t)(dst_level - 1) * (size_t)buffer->paddedLen;
-        size_t src = (size_t)dst_level * (size_t)buffer->paddedLen;
-        memcpy(buffer->workReal + dst, buffer->workReal + src, (size_t)buffer->paddedLen * sizeof(float));
-        memcpy(buffer->workImag + dst, buffer->workImag + src, (size_t)buffer->paddedLen * sizeof(float));
-    }
 }
 
 static inline void accumulate_power(buffer_t *buffer, uint32_t base, uint32_t count) {
@@ -284,53 +106,35 @@ static inline bool execute_nufft_sweep(buffer_t *buffer, parameters *params, dou
     if (!(n_inv > 0.0f) || !float_is_finite_bits(n_inv)) n_inv = 0.0f;
     const bool use_corrected = corrected && (n_inv > 0.0f);
 
-    {
-        PROFILE_START(precompute);
-        nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
-        PROFILE_END(precompute, PROFILE_PHASE_PRECOMPUTE);
-    }
+    nufft1_precompute(buffer->nufftWorkspace, buffer->x, (int)buffer->n, fstep);
 
-    size_t num_blocks = ((size_t)nfreq + (size_t)buffer->activeOutputLen - 1U) / (size_t)buffer->activeOutputLen;
-    for (int t = 0; t < buffer->terms; ++t) {
-        double freq_factor = (double)(t + 1);
-        {
-            PROFILE_START(fill_input);
-            fill_complex_input(buffer, fmin, freq_factor);
-            PROFILE_END(fill_input, PROFILE_PHASE_FILL_INPUT);
-        }
-        {
-            PROFILE_START(ladder_setup);
-            fill_twiddle_ladder(buffer, fstep, freq_factor);
-            PROFILE_END(ladder_setup, PROFILE_PHASE_LADDER_SETUP);
-        }
-        {
-            PROFILE_START(reset_ladder);
-            reset_work_ladder(buffer);
-            PROFILE_END(reset_ladder, PROFILE_PHASE_RESET_LADDER);
-        }
+    const size_t num_blocks = ((size_t)nfreq + (size_t)buffer->activeOutputLen - 1U) / (size_t)buffer->activeOutputLen;
+    const size_t block_len = (size_t)buffer->activeOutputLen;
 
+    /* Two-level ladder, one harmonic at a time: the term factor is folded into
+     * the base frequency and the step, so only row 0 is ever live and a buffer
+     * needs just two state plus two step rows.  Every MAX_TWIDDLE_REUSE blocks
+     * the state is rebuilt from an exact double phase (level 1), otherwise it is
+     * advanced by one complex multiply per block (level 0) - no third level. */
+    for (uint32_t t = 0; t < buffer->terms; ++t) {
+        if (ladder_start(&buffer->ladder, buffer->x, (size_t)buffer->n, (size_t)buffer->paddedLen, 1U, buffer->activeOutputLen, num_blocks,
+                         fmin * (double)(t + 1U), fstep * (double)(t + 1U), buffer->wy, NULL, 0.0f) != 0) {
+            return false;
+        }
+        /* Row 0 never moves: hoist the NuFFT input pointers out of the loop. */
+        const float *state_r = NULL;
+        const float *state_i = NULL;
+        ladder_state(&buffer->ladder, 0, &state_r, &state_i);
         for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-            uint32_t base = (uint32_t)(block_idx * (size_t)buffer->activeOutputLen);
-            uint32_t count = buffer->activeOutputLen;
-            if (base + count > nfreq) count = nfreq - base;
-            {
-                PROFILE_START(nufft_execute);
-                nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, t + 1);
-                PROFILE_END(nufft_execute, PROFILE_PHASE_NUFFT_EXECUTE);
-            }
-            {
-                PROFILE_START(power_accumulate);
-                if (use_corrected)
-                    accumulate_power_corrected(buffer, base, count, n_inv);
-                else
-                    accumulate_power(buffer, base, count);
-                PROFILE_END(power_accumulate, PROFILE_PHASE_POWER_ACCUMULATE);
-            }
-            if (block_idx + 1U < num_blocks) {
-                PROFILE_START(ladder_advance);
-                advance_work_ladder(buffer, block_idx + 1U);
-                PROFILE_END(ladder_advance, PROFILE_PHASE_LADDER_ADVANCE);
-            }
+            uint32_t base = (uint32_t)(block_idx * block_len);
+            uint32_t count = (uint32_t)block_len;
+            if ((size_t)base + count > nfreq) count = nfreq - base;
+            if (block_idx > 0U) ladder_advance(&buffer->ladder, block_idx);
+            nufft1_execute(buffer->nufftWorkspace, state_r, state_i, buffer->blockReal, buffer->blockImag, (int)(t + 1U));
+            if (use_corrected)
+                accumulate_power_corrected(buffer, base, count, n_inv);
+            else
+                accumulate_power(buffer, base, count);
         }
     }
     return true;
@@ -338,6 +142,11 @@ static inline bool execute_nufft_sweep(buffer_t *buffer, parameters *params, dou
 
 // ======================== Peak Merge Utilities ========================
 
+/* Three-point parabola over raw grid values.  Callers evaluate it per interior
+ * grid point but only *use* the result for local maxima that clear the detection
+ * threshold (or for the explicit all-local-peaks modes); it is never applied to
+ * the whole grid.  Keep it that way - see the "Peak scan semantics" bullet in
+ * AGENTS.md. */
 static inline bool quadratic_peak_position(double freq, double fstep, float left, float center, float right, float oversampling, double *peak_freq,
                                            float *peak_magnitude) {
     if (!float_is_finite_bits(left) || !float_is_finite_bits(center) || !float_is_finite_bits(right)) return false;
@@ -463,7 +272,6 @@ static inline void freq_slice_ihs_worker(void *data, long i, int thread_id) {
     buf->activePlanIndex = primary->activePlanIndex;
     buf->activeGridLen = primary->activeGridLen;
     buf->activeOutputLen = primary->activeOutputLen;
-    buf->activeLadderLevels = primary->activeLadderLevels;
 
     // Run serial IHS sweep on this worker's frequency sub-range
     double slice_fmin = ctx->fmin + (double)work->freq_start * ctx->fstep;
@@ -664,7 +472,6 @@ static inline void freq_slice_aov_worker(void *data, long i, int thread_id) {
     buf->activePlanIndex = primary->activePlanIndex;
     buf->activeGridLen = primary->activeGridLen;
     buf->activeOutputLen = primary->activeOutputLen;
-    buf->activeLadderLevels = primary->activeLadderLevels;
 
     // Copy precomputed spreading indices/weights from primary (hoisted nufft1_precompute)
     nufft1_workspace_copy_precomputed(buf->nufftWorkspace, primary->nufftWorkspace);
@@ -1105,17 +912,12 @@ static inline bool execute_direct_grid(buffer_t *buffer, parameters *params, con
 }
 
 void process_target(char *in_file, buffer_t *buffer, parameters *params, const bool batch, kt_forpool_t *direct_pool) {
-    PROFILE_COUNT_TARGET();
-    PROFILE_START(read);
     if (has_fits_suffix(in_file)) {
         read_fits(in_file, buffer);
     } else {
         read_dat(in_file, buffer);
     }
-    PROFILE_END(read, PROFILE_PHASE_READ);
-    PROFILE_START(preprocess);
     preprocess_buffer(buffer, params->epsilon, params->detrend_degree, params->detrend_norm);
-    PROFILE_END(preprocess, PROFILE_PHASE_PREPROCESS);
 
     peak_t *peak_base = buffer->peaks;
     peak_t *selected_peaks = peak_base;
@@ -1176,12 +978,11 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         bool direct_grid_evaluated = false;
         if (mode_uses_direct_eval_grid(params->mode)) {
             direct_grid_evaluated = true;
-            PROFILE_START(peak_scan);
             if (!execute_direct_grid(buffer, params, eval_method, direct_pool, fmin, fstep, nfreq, threshold, threshold_valid, df, n, true,
                                      params->spectrum && !spectrum_prewhiten)) {
                 fprintf(stderr, "Direct evaluation grid failed for %s\n", in_file);
             }
-            PROFILE_END(peak_scan, PROFILE_PHASE_PEAK_SCAN);
+
         } else if (!mode_uses_direct_gb_grid(params->mode)) {
             if (use_aov) {
                 if (direct_pool && direct_pool->n_threads > 1 && params->buffers && params->nbuffers >= direct_pool->n_threads) {
@@ -1216,14 +1017,11 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         }
 
         if (spectrum_prewhiten) {
-            PROFILE_START(spectrum);
             if (spectrum_columns < spectrum_capacity) {
                 capture_spectrum_column(buffer, params, eval_method, use_aov, direct_eval_grid, aov_n_eff, fmin, fstep, nfreq, params->nterms, spectrum_matrix,
                                         spectrum_columns++);
             }
-            PROFILE_END(spectrum, PROFILE_PHASE_PEAK_SCAN);
         } else if (params->spectrum && !aov_streamed && !direct_grid_evaluated) {
-            PROFILE_START(spectrum);
             for (uint32_t i = 0; i < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
                 float magnitude;
@@ -1239,11 +1037,9 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                 if (!float_is_finite_bits(magnitude)) magnitude = 0.0f;
                 appendFreq(freq, magnitude, n, params->outputPeriod, &buffer->spectrum, &stringBuff[0]);
             }
-            PROFILE_END(spectrum, PROFILE_PHASE_PEAK_SCAN);
         }
 
         if (!aov_streamed && !direct_grid_evaluated) {
-            PROFILE_START(peak_scan);
             for (uint32_t i = 1; i + 1 < nfreq; ++i) {
                 double freq = fmin + ((double)i * fstep);
                 float magnitude = 0.0f;
@@ -1278,17 +1074,14 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
                     }
                 }
             }
-            PROFILE_END(peak_scan, PROFILE_PHASE_PEAK_SCAN);
         }
 
         int candidate_count = (int)buffer->nPeaks;
-        PROFILE_START(sort);
         if (use_aov && !direct_eval_grid) {
             aov_sort_peaks(buffer->peaks, candidate_count, buffer, params, df);
         } else {
             sortPeaks(buffer->peaks, candidate_count, buffer, params, df);
         }
-        PROFILE_END(sort, PROFILE_PHASE_SORT);
 
         if (!params->prewhiten) break;
         if (candidate_count <= 0 || selected_count >= params->npeaks) break;
@@ -1345,33 +1138,27 @@ void process_target(char *in_file, buffer_t *buffer, parameters *params, const b
         buffer->nPeaks = (uint32_t)selected_count;
     }
 
-    {
-        PROFILE_START(output);
-        if (!batch) {
-            print_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+    if (!batch) {
+        print_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+    } else {
+        append_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+    }
+    if (params->spectrum) {
+        if (spectrum_prewhiten) {
+            write_spectrum_matrix_tsv(in_file, fmin, fstep, nfreq, spectrum_columns, spectrum_matrix, n, params->outputPeriod, stringBuff);
         } else {
-            append_peaks(buffer, params, n, stringBuff, in_file, params->mode, params->gbEvalMode);
+            write_tsv(buffer, in_file);
         }
-        if (params->spectrum) {
-            if (spectrum_prewhiten) {
-                write_spectrum_matrix_tsv(in_file, fmin, fstep, nfreq, spectrum_columns, spectrum_matrix, n, params->outputPeriod, stringBuff);
-            } else {
-                write_tsv(buffer, in_file);
-            }
-        }
-        PROFILE_END(output, PROFILE_PHASE_OUTPUT);
     }
     free(spectrum_matrix);
     buffer->peaks = peak_base;
     buffer->nPeaks = 0;
-    PROFILE_FLUSH_THREAD();
     return;
 
 cleanup:
     free(spectrum_matrix);
     buffer->peaks = peak_base;
     buffer->nPeaks = 0;
-    PROFILE_FLUSH_THREAD();
 }
 
 void process_targets(void *data, long i, int thread_id) {

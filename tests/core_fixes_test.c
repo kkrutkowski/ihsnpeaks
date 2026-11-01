@@ -13,33 +13,8 @@
 
 #include "utils/readout.h"
 
-/* process.h-only helpers referenced by aov.h's streaming code.  The tests
- * below only exercise aov_gls_impl() and the Levinson solver, so these stubs
- * are never called; they only satisfy the header. */
-static inline void fill_twiddle_ladder(buffer_t *buffer, double fstep,
-                                       double freq_factor) {
-  (void)buffer;
-  (void)fstep;
-  (void)freq_factor;
-}
-static inline void compute_work_at_block(buffer_t *buffer, size_t block_idx) {
-  (void)buffer;
-  (void)block_idx;
-}
-static inline void advance_work_ladder(buffer_t *buffer, size_t next_block) {
-  (void)buffer;
-  (void)next_block;
-}
-static inline void appendFreq(double freq, float magnitude, int precision,
-                              bool outputPeriod, sds *buffer,
-                              char *stringBuff) {
-  (void)freq;
-  (void)magnitude;
-  (void)precision;
-  (void)outputPeriod;
-  (void)buffer;
-  (void)stringBuff;
-}
+/* appendFreq()/the ladder come from the headers aov.h now includes itself, so
+ * this translation unit needs no stand-in definitions. */
 
 #include "utils/aov.h"
 

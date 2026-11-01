@@ -195,7 +195,6 @@ int main(int argc, char *argv[]) {
         process_target(kv_A(params.targets, 0).path, &buffer, &params, false, directPool);
         // print_buffer(&buffer);
         // process the data here
-        profile_report(&params);
         if (directPool) kt_forpool_destroy(directPool);
         free_buffer(&buffer);
         if (topo) free_topology(topo);
@@ -258,7 +257,6 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < params.nbuffers; i++) {
                 fprint_buffer(params.buffers[i], &params);
             }
-            profile_report(&params);
             if (batchPool) kt_forpool_destroy(batchPool);
             if (topo) free_topology(topo);
             free_parameters(&params);
@@ -310,7 +308,6 @@ int main(int argc, char *argv[]) {
                     fflush(stdout);
                 }
             }
-            profile_report(&params);
             if (directPool) kt_forpool_destroy(directPool);
             free_topology(topo);
             free_parameters(&params);
@@ -347,8 +344,6 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < params.nbuffers; i++) {
             fprint_buffer(params.buffers[i], &params);
         }
-
-        profile_report(&params);
 
         l3_dispatcher_destroy(disp);
         free_topology(topo);

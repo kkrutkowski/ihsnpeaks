@@ -296,19 +296,23 @@ static bool lc_ihs_sweep_progress(buffer_t *buffer, double fmin, double fstep, u
     }
 
     size_t num_blocks = ((size_t)nfreq + (size_t)buffer->activeOutputLen - 1U) / (size_t)buffer->activeOutputLen;
-    for (int t = 0; t < buffer->terms; ++t) {
-        double freq_factor = (double)(t + 1);
-        fill_complex_input(buffer, fmin, freq_factor);
-        fill_twiddle_ladder(buffer, fstep, freq_factor);
-        reset_work_ladder(buffer);
-
+    /* Two-level ladder, one harmonic per term (term factor folded into the base
+     * frequency and step); exact-phase resync every MAX_TWIDDLE_REUSE blocks. */
+    for (uint32_t t = 0; t < buffer->terms; ++t) {
+        if (ladder_start(&buffer->ladder, buffer->x, (size_t)buffer->n, (size_t)buffer->paddedLen, 1U, buffer->activeOutputLen, num_blocks,
+                         fmin * (double)(t + 1U), fstep * (double)(t + 1U), buffer->wy, NULL, 0.0f) != 0) {
+            return false;
+        }
+        const float *state_r = NULL;
+        const float *state_i = NULL;
         for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
             uint32_t base = (uint32_t)(block_idx * (size_t)buffer->activeOutputLen);
             uint32_t count = buffer->activeOutputLen;
             if (base + count > nfreq) count = nfreq - base;
-            nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, t + 1);
+            if (block_idx > 0U) ladder_advance(&buffer->ladder, block_idx);
+            ladder_state(&buffer->ladder, 0, &state_r, &state_i);
+            nufft1_execute(buffer->nufftWorkspace, state_r, state_i, buffer->blockReal, buffer->blockImag, (int)(t + 1U));
             accumulate_power(buffer, base, count);
-            if (block_idx + 1U < num_blocks) advance_work_ladder(buffer, block_idx + 1U);
             lc_progress_add_done(progress, 1U);
         }
     }
@@ -346,7 +350,6 @@ static void lc_ihs_slice_worker(void *data, long i, int tid) {
     buf->activePlanIndex = primary->activePlanIndex;
     buf->activeGridLen = primary->activeGridLen;
     buf->activeOutputLen = primary->activeOutputLen;
-    buf->activeLadderLevels = primary->activeLadderLevels;
 
     /* Copy precomputed spreading indices/weights from primary (hoisted nufft1_precompute) */
     nufft1_workspace_copy_precomputed(buf->nufftWorkspace, primary->nufftWorkspace);
@@ -426,36 +429,6 @@ static bool lc_execute_ihs_sweep_parallel(buffer_t *buffer, parameters *params, 
 }
 
 
-/* Progress-aware AoV trig-sums ladder (mirrors aov_compute_trig_sums_ladder): computes
- * blocks [block_begin, block_end) with the hierarchical work state at block_begin and
- * sequential advance between blocks. base_offset is the absolute freq index of the
- * start of the output arrays (global base of the current sweep block). */
-static void lc_aov_trig_sums_progress(buffer_t *buffer, double fmin, double fstep, size_t block_begin, size_t block_end, int max_factor, float epsilon,
-                                      float ymean, bool yweighted, float *S, float *C, uint32_t total_count, uint32_t base_offset,
-                                      lc_progress_t *progress) {
-    uint32_t block_len = buffer->activeOutputLen;
-    for (int q = 1; q <= max_factor; ++q) {
-        double freq_factor = (double)q;
-        aov_fill_complex_input(buffer, fmin, freq_factor, epsilon, ymean, yweighted);
-        fill_twiddle_ladder(buffer, fstep, freq_factor);
-        compute_work_at_block(buffer, block_begin);
-
-        for (size_t block_idx = block_begin; block_idx < block_end; ++block_idx) {
-            uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
-            uint32_t count = block_len;
-            if (base + count > base_offset + total_count) count = base_offset + total_count - base;
-            uint32_t rel_base = base - base_offset;
-
-            nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, q);
-            memcpy(C + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockReal, (size_t)count * sizeof(float));
-            memcpy(S + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockImag, (size_t)count * sizeof(float));
-
-            if (block_idx + 1U < block_end) advance_work_ladder(buffer, block_idx + 1U);
-            lc_progress_add_done(progress, 1U);
-        }
-    }
-}
-
 /* Progress-aware serial AoV sweep (mirrors execute_aov_sweep with store_power=true, scan_peaks=false). */
 static int lc_aov_sweep_progress(buffer_t *buffer, parameters *params, double fmin, double fstep, uint32_t nfreq, const aov_reference_t *ref,
                                  lc_progress_t *progress, bool skip_precompute) {
@@ -482,25 +455,33 @@ static int lc_aov_sweep_progress(buffer_t *buffer, parameters *params, double fm
     }
 
     size_t num_blocks = ((size_t)nfreq + (size_t)block_len - 1U) / (size_t)block_len;
+
+    /* Two-level ladder shared by both sum sets (harmonic q = 1..2d unweighted,
+     * q = 1..d y-weighted): one advance per (block, q) instead of a full rebuild
+     * per block and harmonic. */
+    if (ladder_start(&buffer->ladder, buffer->x, (size_t)buffer->n, (size_t)buffer->paddedLen, (uint32_t)max_factor, block_len, num_blocks, fmin, fstep,
+                     NULL, buffer->dy, params->epsilon) != 0) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < block_len; ++i) {
+        Sw[i] = 0.0f; Cw[i] = ref->ws; Syw[i] = 0.0f; Cyw[i] = ref->yws;
+    }
+
     for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
         uint32_t count = block_len;
         if (base + count > nfreq) count = nfreq - base;
 
-        for (uint32_t i = 0; i < count; ++i) {
-            Sw[i] = 0.0f; Cw[i] = ref->ws; Syw[i] = 0.0f; Cyw[i] = ref->yws;
-        }
-
-        lc_aov_trig_sums_progress(buffer, fmin, fstep, block_idx, block_idx + 1U, max_factor, params->epsilon, ref->ymean, false, Sw, Cw, count, base,
-                                  progress);
-        lc_aov_trig_sums_progress(buffer, fmin, fstep, block_idx, block_idx + 1U, degree, params->epsilon, ref->ymean, true, Syw, Cyw, count, base,
-                                  progress);
+        if (block_idx > 0U) ladder_advance(&buffer->ladder, block_idx);
+        ladder_block_sums(&buffer->ladder, buffer->nufftWorkspace, buffer->y, ref->ymean, Sw, Cw, Syw, Cyw, buffer->blockReal, buffer->blockImag, count);
+        for (int q = 0; q < 3 * degree; ++q) lc_progress_add_done(progress, 1U);
 
         float *cond_arr = buffer->aovCondition;
         if (degree == 1) {
             aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref->ws, ref->yws, ref->chi2_ref, power_arr, cond_arr);
         } else {
-            int status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref->chi2_ref, power_arr, cond_arr);
+            int status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref->chi2_ref, power_arr, cond_arr, buffer);
             if (status != 0) return status;
         }
 
@@ -552,7 +533,6 @@ static void lc_aov_slice_worker(void *data, long i, int tid) {
     buf->activePlanIndex = primary->activePlanIndex;
     buf->activeGridLen = primary->activeGridLen;
     buf->activeOutputLen = primary->activeOutputLen;
-    buf->activeLadderLevels = primary->activeLadderLevels;
 
     nufft1_workspace_copy_precomputed(buf->nufftWorkspace, primary->nufftWorkspace);
 

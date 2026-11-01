@@ -8,7 +8,10 @@
 #include <string.h>
 
 #include "common.h"
+#include "ladder.h"
+#include "readout.h"
 #include "simd.h"
+#include "strings.h"
 #include "trig.h"
 
 #ifndef M_SQRT1_2
@@ -23,13 +26,6 @@ typedef struct {
     float yws;
     float chi2_ref;
 } aov_reference_t;
-
-static inline size_t aov_round_alloc(size_t size) { return (size + 63U) & ~(size_t)63U; }
-
-static inline void *aov_aligned_alloc(size_t count, size_t size) {
-    if (count == 0 || size == 0 || count > SIZE_MAX / size) return NULL;
-    return aligned_alloc(64, aov_round_alloc(count * size));
-}
 
 static inline float aov_invalid_value(void) { return NAN; }
 
@@ -366,51 +362,66 @@ static inline float aov_solve_single_from_sums(const float *Sw, const float *Cw,
 }
 
 static inline int aov_solve_periodogram_vec(const float *Sw, const float *Cw, const float *Syw, const float *Cyw, int nfreq, int degree, float chi2_ref,
-                                            float *power, float *condition_out) {
+                                            float *power, float *condition_out, buffer_t *buffer) {
     int norder = (2 * degree) + 1;
-    VEC *Rr = (VEC *)aov_aligned_alloc((size_t)norder + 1U, sizeof(VEC));
-    VEC *Ri = (VEC *)aov_aligned_alloc((size_t)norder + 1U, sizeof(VEC));
-    VEC *Yr = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Yi = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Xr = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Xi = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Ar = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Ai = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Apr = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    VEC *Api = (VEC *)aov_aligned_alloc((size_t)norder, sizeof(VEC));
-    if (!Rr || !Ri || !Yr || !Yi || !Xr || !Xi || !Ar || !Ai || !Apr || !Api) {
-        free(Rr);
-        free(Ri);
-        free(Yr);
-        free(Yi);
-        free(Xr);
-        free(Xi);
-        free(Ar);
-        free(Ai);
-        free(Apr);
-        free(Api);
-        return -1;
-    }
+    if (!buffer_ensure_aov_solver_vec(buffer, degree)) return -1;
+    /* Row scratch lives in the buffer: no per-block allocation in the hot path.
+     * Layout: Rr/Ri (norder+1) then eight norder-long VEC rows. */
+    VEC *rows = (VEC *)buffer->aovSolverVec;
+    if (!rows || buffer->aovSolverVecCap < (size_t)(2 * (norder + 1) + 8 * norder)) return -1;
+    VEC *Rr = rows;
+    VEC *Ri = Rr + (size_t)norder + 1U;
+    VEC *Yr = Ri + (size_t)norder + 1U;
+    VEC *Yi = Yr + (size_t)norder;
+    VEC *Xr = Yi + (size_t)norder;
+    VEC *Xi = Xr + (size_t)norder;
+    VEC *Ar = Xi + (size_t)norder;
+    VEC *Ai = Ar + (size_t)norder;
+    VEC *Apr = Ai + (size_t)norder;
+    VEC *Api = Apr + (size_t)norder;
 
     float inv_chi2_ref = 1.0f / chi2_ref;
     for (int base = 0; base < nfreq; base += VEC_LEN) {
-        for (int k = 0; k < norder; ++k) {
-            int h = k - degree;
-            for (int lane = 0; lane < VEC_LEN; ++lane) {
-                int idx = base + lane;
-                if (idx >= nfreq) idx = nfreq - 1;
-                Rr[k].values[lane] = Cw[(size_t)k * (size_t)nfreq + (size_t)idx];
-                Ri[k].values[lane] = -Sw[(size_t)k * (size_t)nfreq + (size_t)idx];
+        if (base + VEC_LEN <= nfreq) {
+            /* Every sum row is contiguous: one vector load per row instead of
+             * VEC_LEN scalar loads. Same bits, same order. */
+            for (int k = 0; k < norder; ++k) {
+                int h = k - degree;
+                const size_t off = (size_t)k * (size_t)nfreq + (size_t)base;
+                Rr[k].data = load_vecf_u(Cw + off).data;
+                Ri[k].data = -load_vecf_u(Sw + off).data;
                 if (h == 0) {
-                    Yr[k].values[lane] = Cyw[idx];
-                    Yi[k].values[lane] = 0.0f;
+                    Yr[k].data = load_vecf_u(Cyw + base).data;
+                    Yi[k].data = SET_VEC(0.0f).data;
                 } else if (h > 0) {
-                    Yr[k].values[lane] = Cyw[(size_t)h * (size_t)nfreq + (size_t)idx];
-                    Yi[k].values[lane] = -Syw[(size_t)h * (size_t)nfreq + (size_t)idx];
+                    const size_t yoff = (size_t)h * (size_t)nfreq + (size_t)base;
+                    Yr[k].data = load_vecf_u(Cyw + yoff).data;
+                    Yi[k].data = -load_vecf_u(Syw + yoff).data;
                 } else {
-                    int ah = -h;
-                    Yr[k].values[lane] = Cyw[(size_t)ah * (size_t)nfreq + (size_t)idx];
-                    Yi[k].values[lane] = Syw[(size_t)ah * (size_t)nfreq + (size_t)idx];
+                    const size_t yoff = (size_t)(-h) * (size_t)nfreq + (size_t)base;
+                    Yr[k].data = load_vecf_u(Cyw + yoff).data;
+                    Yi[k].data = load_vecf_u(Syw + yoff).data;
+                }
+            }
+        } else {
+            for (int k = 0; k < norder; ++k) {
+                int h = k - degree;
+                for (int lane = 0; lane < VEC_LEN; ++lane) {
+                    int idx = base + lane;
+                    if (idx >= nfreq) idx = nfreq - 1;
+                    Rr[k].values[lane] = Cw[(size_t)k * (size_t)nfreq + (size_t)idx];
+                    Ri[k].values[lane] = -Sw[(size_t)k * (size_t)nfreq + (size_t)idx];
+                    if (h == 0) {
+                        Yr[k].values[lane] = Cyw[idx];
+                        Yi[k].values[lane] = 0.0f;
+                    } else if (h > 0) {
+                        Yr[k].values[lane] = Cyw[(size_t)h * (size_t)nfreq + (size_t)idx];
+                        Yi[k].values[lane] = -Syw[(size_t)h * (size_t)nfreq + (size_t)idx];
+                    } else {
+                        int ah = -h;
+                        Yr[k].values[lane] = Cyw[(size_t)ah * (size_t)nfreq + (size_t)idx];
+                        Yi[k].values[lane] = Syw[(size_t)ah * (size_t)nfreq + (size_t)idx];
+                    }
                 }
             }
         }
@@ -431,74 +442,7 @@ static inline int aov_solve_periodogram_vec(const float *Sw, const float *Cw, co
             power[idx] = aov_clamp_r2(dot * inv_chi2_ref);
         }
     }
-
-    free(Rr);
-    free(Ri);
-    free(Yr);
-    free(Yi);
-    free(Xr);
-    free(Xi);
-    free(Ar);
-    free(Ai);
-    free(Apr);
-    free(Api);
     return 0;
-}
-
-static inline void aov_fill_complex_input(buffer_t *buffer, double base_freq, double freq_factor, float epsilon, float ymean, bool yweighted) {
-    uint32_t i = 0;
-    for (; i < buffer->n; ++i) {
-        float weight = 1.0f / ((buffer->dy[i] * buffer->dy[i]) + epsilon);
-        float value = yweighted ? weight * (buffer->y[i] - ymean) : weight;
-        float phase = (float)(buffer->x[i] * base_freq * freq_factor);
-        buffer->inputReal[i] = value * cos2pif_tls(phase);
-        buffer->inputImag[i] = value * sin2pif_tls(phase);
-    }
-    for (; i < buffer->paddedLen; ++i) {
-        buffer->inputReal[i] = 0.0f;
-        buffer->inputImag[i] = 0.0f;
-    }
-}
-
-static inline void aov_compute_trig_sums_block(buffer_t *buffer, parameters *params, double block_fmin, uint32_t count, int max_factor, float epsilon,
-                                               float ymean, bool yweighted, float *S, float *C) {
-    for (int q = 1; q <= max_factor; ++q) {
-        double freq_factor = (double)q;
-        aov_fill_complex_input(buffer, block_fmin, freq_factor, epsilon, ymean, yweighted);
-        nufft1_execute(buffer->nufftWorkspace, buffer->inputReal, buffer->inputImag, buffer->blockReal, buffer->blockImag, q);
-        memcpy(C + ((size_t)q * (size_t)count), buffer->blockReal, (size_t)count * sizeof(float));
-        memcpy(S + ((size_t)q * (size_t)count), buffer->blockImag, (size_t)count * sizeof(float));
-    }
-}
-
-// Ladder-based trig sum computation: uses twiddle ladders to advance through blocks
-// instead of recomputing sin/cos from scratch for each block.
-// Fills S[q*total_count + rel_idx] and C[q*total_count + rel_idx] for q=1..max_factor.
-// base_offset is the absolute freq index of the start of the output arrays.
-static inline void aov_compute_trig_sums_ladder(buffer_t *buffer, double fmin, double fstep, size_t block_begin, size_t block_end, int max_factor,
-                                                float epsilon, float ymean, bool yweighted, float *S, float *C, uint32_t total_count, uint32_t base_offset) {
-    uint32_t block_len = buffer->activeOutputLen;
-    for (int q = 1; q <= max_factor; ++q) {
-        double freq_factor = (double)q;
-        aov_fill_complex_input(buffer, fmin, freq_factor, epsilon, ymean, yweighted);
-        fill_twiddle_ladder(buffer, fstep, freq_factor);
-        compute_work_at_block(buffer, block_begin);
-
-        for (size_t block_idx = block_begin; block_idx < block_end; ++block_idx) {
-            uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
-            uint32_t count = block_len;
-            if (base + count > base_offset + total_count) count = base_offset + total_count - base;
-            uint32_t rel_base = base - base_offset;
-
-            nufft1_execute(buffer->nufftWorkspace, buffer->workReal, buffer->workImag, buffer->blockReal, buffer->blockImag, q);
-            memcpy(C + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockReal, (size_t)count * sizeof(float));
-            memcpy(S + ((size_t)q * (size_t)total_count) + rel_base, buffer->blockImag, (size_t)count * sizeof(float));
-
-            if (block_idx + 1U < block_end) {
-                advance_work_ladder(buffer, block_idx + 1U);
-            }
-        }
-    }
 }
 
 static inline bool aov_quadratic_peak_position(double freq, double fstep, float left, float center, float right, float oversampling, double *peak_freq,
@@ -637,28 +581,39 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
     int n_eff = periodogram_effective_n(buffer);
     bool is_bayes = (params->statistic == STATISTIC_BAYES);
 
+    // Two-level twiddle ladder shared by both sum sets: harmonic q holds
+    // weight * exp(2*pi*i*x*q*(fmin + fstep*block_len*block)). The unweighted
+    // (q = 1..2d) and y-weighted (q = 1..d) sums therefore advance the twiddle
+    // once per (block, q) instead of rebuilding it for every block and q.
+    if (ladder_start(&buffer->ladder, buffer->x, (size_t)buffer->n, (size_t)buffer->paddedLen, (uint32_t)max_factor, block_len, num_blocks, fmin, fstep, NULL,
+                     buffer->dy, params->epsilon) != 0) {
+        return -1;
+    }
+
+    // Factor-0 terms are constants and are never rewritten by the block passes,
+    // so initialize them once for the whole (at most block_len long) row space.
+    for (uint32_t i = 0; i < block_len; ++i) {
+        Sw[i] = 0.0f;
+        Cw[i] = ref.ws;
+        Syw[i] = 0.0f;
+        Cyw[i] = ref.yws;
+    }
+
     for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
         uint32_t count = block_len;
         if (base + count > nfreq) count = nfreq - base;
 
-        // Factor-0 terms for this block only
-        for (uint32_t i = 0; i < count; ++i) {
-            Sw[i] = 0.0f;
-            Cw[i] = ref.ws;
-            Syw[i] = 0.0f;
-            Cyw[i] = ref.yws;
-        }
+        if (block_idx > 0U) ladder_advance(&buffer->ladder, block_idx);
 
-        // Phase 1: trig sums for this block (single-block ladder calls, stride = count)
-        aov_compute_trig_sums_ladder(buffer, fmin, fstep, block_idx, block_idx + 1U, max_factor, params->epsilon, ref.ymean, false, Sw, Cw, count, base);
-        aov_compute_trig_sums_ladder(buffer, fmin, fstep, block_idx, block_idx + 1U, degree, params->epsilon, ref.ymean, true, Syw, Cyw, count, base);
+        // Phase 1: trig sums for this block (one merged pass, stride = count)
+        ladder_block_sums(&buffer->ladder, buffer->nufftWorkspace, buffer->y, ref.ymean, Sw, Cw, Syw, Cyw, buffer->blockReal, buffer->blockImag, count);
 
         // Phase 2: solve this block
         if (degree == 1) {
             aov_gls_impl(Sw, Cw, Syw, Cyw, (int)count, ref.ws, ref.yws, ref.chi2_ref, power_arr, cond_arr);
         } else {
-            status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref.chi2_ref, power_arr, cond_arr);
+            status = aov_solve_periodogram_vec(Sw, Cw, Syw, Cyw, (int)count, degree, ref.chi2_ref, power_arr, cond_arr, buffer);
             if (status != 0) break;
         }
 
@@ -722,9 +677,12 @@ static inline float aov_get_stat(buffer_t *buffer, const parameters *params, dou
     for (uint32_t i = 0; i < buffer->n; ++i) {
         float weight = 1.0f / ((buffer->dy[i] * buffer->dy[i]) + params->epsilon);
         float yw = weight * (buffer->y[i] - ref.ymean);
-        float phase = (float)(buffer->x[i] * freq);
+        /* Fold the phase in double: at high frequency x*freq reaches far past
+         * float's integer precision, which used to cost ~1e-2 cycles here. */
+        double phase = buffer->x[i] * freq;
+        phase -= (double)(long long)phase;
         for (int k = 1; k <= 2 * degree; ++k) {
-            float kphase = phase * (float)k;
+            float kphase = (float)(phase * (double)k);
             float c = cos2pif_tls(kphase);
             float s = sin2pif_tls(kphase);
             Cw[k] += weight * c;

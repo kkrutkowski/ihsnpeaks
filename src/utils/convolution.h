@@ -756,6 +756,9 @@ static inline void evaluate_peak_at_current_frequency(peak_t* peak, buffer_t* bu
     }
 }
 
+/* Erlang logarithmic correction.  Reporting transform only: applied to retained
+ * peaks (sortPeaks, mode 0) and to spectrum rows, never to the detection grid -
+ * params.h pre-inverts it to obtain the raw-sum detection threshold. */
 static inline double correct_ihs_res(const double sum, const int n) {
     if (!(sum > 0.0) || !double_is_finite_bits(sum)) return 0.0;
 
