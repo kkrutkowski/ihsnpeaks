@@ -599,15 +599,23 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
         Cyw[i] = ref.yws;
     }
 
+    /* Deferred bit reversal: full blocks are transformed in the NuFFT's slot
+     * order and only the per-frequency results (R^2 and, for Bayes, the
+     * condition bound) are bit-reversed into grid order.  The final partial
+     * block stays frequency-ordered, so no system is solved beyond nfreq. */
+    const bool deferred = nufft1_workspace_slots_ok(buffer->nufftWorkspace) != 0;
+
     for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint32_t base = (uint32_t)(block_idx * (size_t)block_len);
         uint32_t count = block_len;
         if (base + count > nfreq) count = nfreq - base;
+        const bool slot_block = deferred && (count == block_len);
 
         if (block_idx > 0U) ladder_advance(&buffer->ladder, block_idx);
 
         // Phase 1: trig sums for this block (one merged pass, stride = count)
-        ladder_block_sums(&buffer->ladder, buffer->nufftWorkspace, buffer->y, ref.ymean, Sw, Cw, Syw, Cyw, buffer->blockReal, buffer->blockImag, count);
+        ladder_block_sums(&buffer->ladder, buffer->nufftWorkspace, buffer->y, ref.ymean, Sw, Cw, Syw, Cyw, buffer->blockReal, buffer->blockImag, count,
+                          slot_block);
 
         // Phase 2: solve this block
         if (degree == 1) {
@@ -617,18 +625,30 @@ static inline int execute_aov_sweep(buffer_t *buffer, parameters *params, double
             if (status != 0) break;
         }
 
+        // Phase 2b: only the results are permuted back into grid order
+        float *power_grid = power_arr;
+        float *cond_grid = cond_arr;
+        if (slot_block) {
+            power_grid = buffer->aovPowerGrid;
+            cond_grid = buffer->aovConditionGrid;
+            if (is_bayes)
+                nufft1_results_to_grid_pair(buffer->nufftWorkspace, power_arr, cond_arr, power_grid, cond_grid, (int)count);
+            else
+                nufft1_results_to_grid(buffer->nufftWorkspace, power_arr, power_grid, (int)count);
+        }
+
         // Phase 3: stream this block with global frequency indices
         float *bayes_arr = Sw;
         if (is_bayes) {
             /* The batch converter expects the (2d+1)*P upper bound and
              * removes the dimensional factor internally. */
-            nll_convert_spectrum_bayes_batch(power_arr, cond_arr, bayes_arr, count, degree, n_eff);
+            nll_convert_spectrum_bayes_batch(power_grid, cond_grid, bayes_arr, count, degree, n_eff);
         }
 
         for (uint32_t i = 0; i < count; ++i) {
             uint32_t idx = base + i;
             double freq = fmin + ((double)idx * fstep);
-            float r2_val = power_arr[i];
+            float r2_val = power_grid[i];
             float stream_val = is_bayes ? bayes_arr[i] : r2_val;
             if (store_power) buffer->power[idx] = stream_val;
             aov_stream_peak_value(&stream, buffer, params, freq, stream_val, r2_val, idx, nfreq, threshold, fstep, df, stringBuff, precision, write_spectrum,

@@ -204,6 +204,9 @@ typedef struct {
     float* aovScratch;
     size_t aovScratchLen;
     float *aovSw, *aovCw, *aovSyw, *aovCyw, *aovPower, *aovCondition;
+    /* Grid-order copies of the AoV results, filled by the deferred bit
+     * reversal (slot order -> frequency order) before the peak stream reads them. */
+    float *aovPowerGrid, *aovConditionGrid;
     size_t aovArrayCap;
     int aovTerms;
     float* aovSolverVec;  // VEC-sized Levinson rows for the vectorized AoV solver

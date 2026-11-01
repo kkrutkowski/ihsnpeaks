@@ -185,6 +185,31 @@ static int pipeline_case(int N, int M) {
          nufft1_plan_len(plan) * 2, M,
          (unsigned long long)hash_floats(out_r, out_i, (size_t)nout),
          best * 1e6);
+
+  /* Deferred bit reversal: the slot-ordered NuFFT output, once the results are
+   * bit-reversed and rotated, must reproduce the frequency-ordered output of
+   * the same call bit for bit.  This is the contract the IHS/AoV sweeps rely on
+   * when they permute only the per-frequency results. */
+  if (nufft1_workspace_slots_ok(ws)) {
+    float *slot_r = (float *)calloc((size_t)nout, sizeof(float));
+    float *slot_i = (float *)calloc((size_t)nout, sizeof(float));
+    int slot_ok = 0;
+    if (slot_r && slot_i) {
+      const size_t bytes = (size_t)nout * sizeof(float);
+      slot_ok = 1;
+      nufft1_execute_slots(ws, yr, yi, slot_r, slot_i, 1);
+      nufft1_results_to_grid(ws, slot_r, slot_r, nout);
+      nufft1_results_to_grid(ws, slot_i, slot_i, nout);
+      if (memcmp(slot_r, out_r, bytes) != 0 || memcmp(slot_i, out_i, bytes) != 0) slot_ok = 0;
+
+      nufft1_execute_slots(ws, yr, yi, slot_r, slot_i, 1);
+      nufft1_results_to_grid_pair(ws, slot_r, slot_i, slot_r, slot_i, nout);
+      if (memcmp(slot_r, out_r, bytes) != 0 || memcmp(slot_i, out_i, bytes) != 0) slot_ok = 0;
+    }
+    printf("CHECK slots N=%d %s\n", N, slot_ok ? "OK" : "FAIL");
+    free(slot_r);
+    free(slot_i);
+  }
   free(x);
   free(yr);
   free(yi);

@@ -48,6 +48,32 @@ void nufft1_precompute(nufft1_workspace *workspace, const double *x, int Mpoints
 void nufft1_workspace_copy_precomputed(nufft1_workspace *dst, const nufft1_workspace *src);
 int nufft1_workspace_get_active_mpoints(const nufft1_workspace *workspace);
 void nufft1_execute(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor);
+
+/* --- Deferred bit reversal -------------------------------------------------
+ *
+ * nufft1_execute_slots() skips the per-call bit reversal and returns the block
+ * in "slot" order: the FFT positions the output window keeps, scaled by the
+ * deconvolution.  Slot s holds the grid value of grid index
+ * nufft1_slot_grid_index(); the ~1/3 of the FFT the window drops is never
+ * stored.  Consumers then bit-reverse the *results* once per block instead of
+ * the complex output per call:
+ *
+ *     nufft1_results_to_grid(ws, slot_r2, r2, count);             // one array
+ *     nufft1_results_to_grid_pair(ws, slot_a, slot_b, a, b, n);   // two, one pass
+ *     nufft1_slots_to_grid(ws, values, count);                    // in place
+ *
+ * The result array is zero-padded back to the FFT length, bit-reversed with the
+ * normal COBRA/COBRAVO kernel and rotated into grid order, so the raw-NLL/Bayes
+ * series is only ever evaluated on the requested grid points.
+ *
+ * The result helpers clobber the workspace FFT buffers (dead between two
+ * nufft1_execute calls) and require nufft1_workspace_slots_ok(); the slot length
+ * they consume is nufft1_output_len(). */
+int nufft1_workspace_slots_ok(const nufft1_workspace *workspace);
+void nufft1_execute_slots(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor);
+void nufft1_results_to_grid(const nufft1_workspace *workspace, const float *slot_values, float *grid_out, int count);
+void nufft1_results_to_grid_pair(const nufft1_workspace *workspace, const float *slot_a, const float *slot_b, float *grid_a, float *grid_b, int count);
+void nufft1_slots_to_grid(const nufft1_workspace *workspace, float *values, int count);
 void nufft1_free_workspace(nufft1_workspace *workspace);
 void nufft1_free_plan(nufft1_plan *plan);
 

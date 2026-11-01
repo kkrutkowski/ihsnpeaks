@@ -292,7 +292,7 @@ static void test_block_sums(int degree) {
         const size_t stride = (size_t)count;
 
         if (block > 0U) ladder_advance(&ladder, block);
-        ladder_block_sums(&ladder, workspace, test_y, ref.ymean, ladder_Sw, ladder_Cw, ladder_Syw, ladder_Cyw, tmp_r, tmp_i, count);
+        ladder_block_sums(&ladder, workspace, test_y, ref.ymean, ladder_Sw, ladder_Cw, ladder_Syw, ladder_Cyw, tmp_r, tmp_i, count, false);
 
         /* Brute-force double-precision sums at the same frequencies. */
         memset(ref_Sw, 0, trig_len * sizeof(float));

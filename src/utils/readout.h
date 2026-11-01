@@ -79,6 +79,10 @@ static inline void free_buffer(buffer_t* buffer) {
     buffer->aovPower = NULL;
     free(buffer->aovCondition);
     buffer->aovCondition = NULL;
+    free(buffer->aovPowerGrid);
+    buffer->aovPowerGrid = NULL;
+    free(buffer->aovConditionGrid);
+    buffer->aovConditionGrid = NULL;
     buffer->aovArrayCap = 0;
     buffer->aovTerms = 0;
     free(buffer->aovSolverVec);
@@ -122,6 +126,10 @@ static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nt
     buffer->aovPower = NULL;
     free(buffer->aovCondition);
     buffer->aovCondition = NULL;
+    free(buffer->aovPowerGrid);
+    buffer->aovPowerGrid = NULL;
+    free(buffer->aovConditionGrid);
+    buffer->aovConditionGrid = NULL;
     buffer->aovArrayCap = 0;
     buffer->aovTerms = 0;
     int max_factor = 2 * nterms;
@@ -133,7 +141,11 @@ static inline bool buffer_ensure_aov_arrays(buffer_t* buffer, size_t cap, int nt
     buffer->aovCyw = aligned_alloc(64, round_buffer(ytrig_len * sizeof(float)));
     buffer->aovPower = aligned_alloc(64, round_buffer(cap * sizeof(float)));
     buffer->aovCondition = aligned_alloc(64, round_buffer(cap * sizeof(float)));
-    if (!buffer->aovSw || !buffer->aovCw || !buffer->aovSyw || !buffer->aovCyw || !buffer->aovPower || !buffer->aovCondition) return false;
+    buffer->aovPowerGrid = aligned_alloc(64, round_buffer(cap * sizeof(float)));
+    buffer->aovConditionGrid = aligned_alloc(64, round_buffer(cap * sizeof(float)));
+    if (!buffer->aovSw || !buffer->aovCw || !buffer->aovSyw || !buffer->aovCyw || !buffer->aovPower || !buffer->aovCondition || !buffer->aovPowerGrid ||
+        !buffer->aovConditionGrid)
+        return false;
     buffer->aovArrayCap = cap;
     buffer->aovTerms = nterms;
     return true;

@@ -288,16 +288,22 @@ static inline int ladder_start(twiddle_ladder *ladder, const double *x, size_t n
  * harmonic sums, written with row stride `count`.  Both share one ladder state
  * and one advance per (block, q); the weighted input is (y - ymean) * state.
  * `tmp_r`/`tmp_i` are block-sized scratch used when the rows are not exactly
- * block_len long (partial last block). */
+ * block_len long (partial last block).
+ *
+ * `slot_order` asks for the deferred bit reversal: the NuFFT hands back the
+ * block in slot order (kept FFT positions only), the rows are block_len long
+ * either way, and the caller turns the *results* into grid order afterwards
+ * with nufft1_results_to_grid()/nufft1_slots_to_grid().  Full blocks only -
+ * a partial last block must stay frequency-ordered. */
 static inline void ladder_block_sums(twiddle_ladder *ladder, nufft1_workspace *workspace, const float *y, float ymean, float *Sw, float *Cw, float *Syw,
-                                     float *Cyw, float *tmp_r, float *tmp_i, uint32_t count) {
+                                     float *Cyw, float *tmp_r, float *tmp_i, uint32_t count, bool slot_order) {
     const size_t n = ladder->n;
     const size_t pad = ladder->pad;
     const size_t n_vec = n - (n % (size_t)VEC_LEN);
-    const size_t stride = (size_t)count;
+    const size_t stride = slot_order ? (size_t)ladder->block_len : (size_t)count;
     const uint32_t weighted_max = ladder->harmonics / 2U;
     const size_t bytes = stride * sizeof(float);
-    const bool direct = (stride == (size_t)ladder->block_len); /* row is exactly block_len long */
+    const bool direct = slot_order || (stride == (size_t)ladder->block_len); /* row is exactly block_len long */
     const VEC ymean_vec = SET_VEC(ymean);
 
     for (uint32_t q = 1; q <= ladder->harmonics; ++q) {
@@ -308,7 +314,10 @@ static inline void ladder_block_sums(twiddle_ladder *ladder, nufft1_workspace *w
         float *sum_c = direct ? Cw + (size_t)q * stride : tmp_r;
         float *sum_s = direct ? Sw + (size_t)q * stride : tmp_i;
 
-        nufft1_execute(workspace, state_r, state_i, sum_c, sum_s, (int)q);
+        if (slot_order)
+            nufft1_execute_slots(workspace, state_r, state_i, sum_c, sum_s, (int)q);
+        else
+            nufft1_execute(workspace, state_r, state_i, sum_c, sum_s, (int)q);
         if (!direct) {
             memcpy(Cw + (size_t)q * stride, tmp_r, bytes);
             memcpy(Sw + (size_t)q * stride, tmp_i, bytes);
@@ -331,7 +340,10 @@ static inline void ladder_block_sums(twiddle_ladder *ladder, nufft1_workspace *w
             }
             float *wy_c = direct ? Cyw + (size_t)q * stride : tmp_r;
             float *wy_s = direct ? Syw + (size_t)q * stride : tmp_i;
-            nufft1_execute(workspace, ladder->yin_r, ladder->yin_i, wy_c, wy_s, (int)q);
+            if (slot_order)
+                nufft1_execute_slots(workspace, ladder->yin_r, ladder->yin_i, wy_c, wy_s, (int)q);
+            else
+                nufft1_execute(workspace, ladder->yin_r, ladder->yin_i, wy_c, wy_s, (int)q);
             if (!direct) {
                 memcpy(Cyw + (size_t)q * stride, tmp_r, bytes);
                 memcpy(Syw + (size_t)q * stride, tmp_i, bytes);

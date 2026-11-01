@@ -111,6 +111,14 @@ static inline bool execute_nufft_sweep(buffer_t *buffer, parameters *params, dou
     const size_t num_blocks = ((size_t)nfreq + (size_t)buffer->activeOutputLen - 1U) / (size_t)buffer->activeOutputLen;
     const size_t block_len = (size_t)buffer->activeOutputLen;
 
+    /* Full blocks run in the NuFFT's slot order and only the per-frequency
+     * power is bit-reversed (once per block, after all harmonics are summed);
+     * the final partial block stays frequency-ordered because it must not
+     * solve beyond nfreq.  A single harmonic is not worth it: the deferred path
+     * then permutes as much as the classic one, so `terms == 1` keeps the
+     * per-call permutation. */
+    const bool deferred = buffer->terms >= 2U && nufft1_workspace_slots_ok(buffer->nufftWorkspace) != 0;
+
     /* Two-level ladder, one harmonic at a time: the term factor is folded into
      * the base frequency and the step, so only row 0 is ever live and a buffer
      * needs just two state plus two step rows.  Every MAX_TWIDDLE_REUSE blocks
@@ -129,12 +137,31 @@ static inline bool execute_nufft_sweep(buffer_t *buffer, parameters *params, dou
             uint32_t base = (uint32_t)(block_idx * block_len);
             uint32_t count = (uint32_t)block_len;
             if ((size_t)base + count > nfreq) count = nfreq - base;
+            const bool slot_block = deferred && (count == block_len);
             if (block_idx > 0U) ladder_advance(&buffer->ladder, block_idx);
-            nufft1_execute(buffer->nufftWorkspace, state_r, state_i, buffer->blockReal, buffer->blockImag, (int)(t + 1U));
+            if (slot_block)
+                nufft1_execute_slots(buffer->nufftWorkspace, state_r, state_i, buffer->blockReal, buffer->blockImag, (int)(t + 1U));
+            else
+                nufft1_execute(buffer->nufftWorkspace, state_r, state_i, buffer->blockReal, buffer->blockImag, (int)(t + 1U));
+            /* The accumulation is elementwise, so it runs in whichever order the
+             * NuFFT produced; the per-block slot -> grid conversion below fixes
+             * the order once, after every harmonic has been added - with the
+             * same per-point operation order as the frequency-ordered path, so
+             * the spectrum stays bit-identical. */
             if (use_corrected)
                 accumulate_power_corrected(buffer, base, count, n_inv);
             else
                 accumulate_power(buffer, base, count);
+        }
+    }
+
+    if (deferred) {
+        /* One bit reversal of the scalar power grid per block, instead of one
+         * permutation of the complex NuFFT output per (harmonic, block). */
+        for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            const uint32_t base = (uint32_t)(block_idx * block_len);
+            if (base + block_len > nfreq) break; /* the partial tail is already ordered */
+            nufft1_slots_to_grid(buffer->nufftWorkspace, buffer->power + base, (int)block_len);
         }
     }
     return true;

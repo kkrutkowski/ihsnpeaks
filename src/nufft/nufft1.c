@@ -783,8 +783,14 @@ static void nufft1_nanofft_destroy_plan(nufft1_nanofft_plan *plan) {
     free(plan);
 }
 
-static void nufft1_nanofft_execute(const nufft1_nanofft_plan *plan, float *real, float *imag, float *cobra_real, float *cobra_imag) {
+/* Sande-Tukey pass only: leaves the spectrum in bit-reversed (slot) order. */
+static void nufft1_nanofft_transform(const nufft1_nanofft_plan *plan, float *real, float *imag) {
     sande_tukey_in_place_fused_r2(real, imag, plan->twiddle_real, plan->twiddle_imag, plan->n);
+}
+
+/* Frequency-ordered spectrum: bit-reverse the slots afterwards. */
+static void nufft1_nanofft_execute(const nufft1_nanofft_plan *plan, float *real, float *imag, float *cobra_real, float *cobra_imag) {
+    nufft1_nanofft_transform(plan, real, imag);
     bit_reverse_permutation(real, imag, plan->n, cobra_real, cobra_imag);
 }
 
@@ -815,6 +821,15 @@ struct nufft1_plan {
     nufft1_mode mode;
     float alpha;
     float *deconv;
+    /* Slot-order (FFT position order) deconvolution table, plus the periodic
+     * kept/dropped position pattern.  Bins the output window never maps - the
+     * NuFFT oversampling padding - get a zero factor. */
+    float *slot_deconv;
+    int slot_len;       /* kept slots per block (= Nout) */
+    int slot_period;    /* position-space period of the kept/dropped pattern */
+    int slot_per_cycle; /* kept positions inside one period */
+    uint8_t slot_offsets[64];
+    int slots_ok; /* plan supports the deferred (result-order) permutation */
     nufft1_nanofft_plan *nanofft_p;
 };
 
@@ -955,6 +970,62 @@ static int initialize_deconv(nufft1_plan *plan) {
     return NUFFT1_UTIL_OK;
 }
 
+/* Build the slot-order deconvolution table and the periodic kept/dropped
+ * position pattern that the deferred permutations rely on.  Slot p is FFT
+ * position p, which holds bin bitrev(p); only the bins the output window maps
+ * are non-zero, so the padding slots come out exactly zero. */
+static int initialize_slot_tables(nufft1_plan *plan) {
+    const uint32_t log_nfft = intlog2((uint32_t)plan->Nfft);
+    const int first_bin = plan->Nfft - plan->output_shift;
+    const int tail = plan->Nout - plan->output_shift;
+    plan->slot_len = plan->Nout;
+    plan->slot_deconv = alloc_aligned_float((size_t)plan->Nfft);
+    if (!plan->slot_deconv) return NUFFT1_UTIL_ERR_ALLOC;
+    for (int p = 0; p < plan->Nfft; ++p) {
+        const int bin = (int)reverse_bits((uint32_t)p, log_nfft);
+        if (bin >= first_bin) {
+            plan->slot_deconv[p] = plan->deconv[bin - first_bin];
+        } else if (bin < tail) {
+            plan->slot_deconv[p] = plan->deconv[bin + plan->output_shift];
+        } else {
+            plan->slot_deconv[p] = 0.0f; /* NuFFT padding: never mapped to a grid point */
+        }
+    }
+
+    int period = 0;
+    for (int candidate = 1; candidate <= (int)sizeof(plan->slot_offsets) && candidate <= plan->Nfft; candidate <<= 1) {
+        bool uniform = true;
+        for (int p = candidate; p < plan->Nfft && uniform; ++p) {
+            const bool here = plan->slot_deconv[p] != 0.0f;
+            const bool folded = plan->slot_deconv[p % candidate] != 0.0f;
+            uniform = (here == folded);
+        }
+        if (uniform) {
+            period = candidate;
+            break;
+        }
+    }
+    if (period == 0) {
+        plan->slots_ok = 0; /* no small period: keep the frequency-ordered path */
+        return NUFFT1_UTIL_OK;
+    }
+    plan->slot_period = period;
+    plan->slot_per_cycle = 0;
+    for (int r = 0; r < period; ++r) {
+        if (plan->slot_deconv[r] != 0.0f) plan->slot_offsets[plan->slot_per_cycle++] = (uint8_t)r;
+    }
+    if ((int64_t)plan->slot_per_cycle * (int64_t)(plan->Nfft / period) != (int64_t)plan->slot_len) {
+        plan->slot_period = 0;
+        plan->slot_per_cycle = 0;
+        plan->slots_ok = 0;
+        return NUFFT1_UTIL_OK;
+    }
+    /* Only worth it when the padding is a minority of the block; PSWF21 keeps
+     * N of a 2N transform (50 % padding) and stays on the classic path. */
+    plan->slots_ok = (plan->Nout * 4 >= plan->Nfft * 3);
+    return NUFFT1_UTIL_OK;
+}
+
 static nufft1_plan *nufft1_initialize_shared_impl(int Mpoints, int N, int freq_factor, nufft1_mode mode, float *twiddle_real, float *twiddle_imag,
                                                   bool precomputed_twiddles) {
     if (Mpoints <= 0 || N <= 0 || freq_factor <= 0) return NULL;
@@ -979,7 +1050,7 @@ static nufft1_plan *nufft1_initialize_shared_impl(int Mpoints, int N, int freq_f
 
     plan->deconv = alloc_aligned_float((size_t)plan->Nout);
     plan->nanofft_p = nufft1_nanofft_make_plan((uint32_t)plan->Nfft, twiddle_real, twiddle_imag, precomputed_twiddles);
-    if (!plan->deconv || !plan->nanofft_p || initialize_deconv(plan) != NUFFT1_UTIL_OK) {
+    if (!plan->deconv || !plan->nanofft_p || initialize_deconv(plan) != NUFFT1_UTIL_OK || initialize_slot_tables(plan) != NUFFT1_UTIL_OK) {
         nufft1_free_plan(plan);
         return NULL;
     }
@@ -1097,7 +1168,13 @@ int nufft1_workspace_get_active_mpoints(const nufft1_workspace *workspace) {
     return workspace->active_mpoints;
 }
 
-void nufft1_execute(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor) {
+/* `slot_mode == false` writes the frequency-ordered spectrum (bit reversal +
+ * rotation + deconvolution), which is the classic contract of nufft1_execute().
+ * `slot_mode == true` skips the bit reversal and writes only the FFT positions
+ * the output window keeps, scaled by the slot-order deconvolution table, so a
+ * consumer can bit-reverse the results once per block instead. */
+static void nufft1_execute_impl(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor,
+                                bool slot_mode) {
     if (!workspace || !workspace->plan || !y_real || !y_imag || !out_real || !out_imag) return;
     const nufft1_plan *plan = workspace->plan;
     int f_idx = freq_factor - 1;
@@ -1142,6 +1219,62 @@ void nufft1_execute(const nufft1_workspace *workspace, const float *y_real, cons
         workspace->fft_imag[dst] += workspace->fft_imag[src];
     }
 
+    if (slot_mode) {
+        nufft1_nanofft_transform(plan->nanofft_p, workspace->fft_real, workspace->fft_imag);
+        const int period = plan->slot_period;
+        const int nvalid = plan->slot_per_cycle;
+        int s = 0;
+        /* The two layouts a plan can produce have fixed kept offsets; spelling
+         * them out lets the compiler unroll the inner loop. */
+        if (period == 8 && nvalid == 6) {
+            for (int base = 0; base < plan->Nfft; base += 8) {
+                const float *fr = workspace->fft_real + base;
+                const float *fi = workspace->fft_imag + base;
+                const float *sd = plan->slot_deconv + base;
+                /* clang-format off */
+                { const float t = sd[0]; out_real[s + 0] = fr[0] * t; out_imag[s + 0] = fi[0] * t; }
+                { const float t = sd[2]; out_real[s + 1] = fr[2] * t; out_imag[s + 1] = fi[2] * t; }
+                { const float t = sd[3]; out_real[s + 2] = fr[3] * t; out_imag[s + 2] = fi[3] * t; }
+                { const float t = sd[4]; out_real[s + 3] = fr[4] * t; out_imag[s + 3] = fi[4] * t; }
+                { const float t = sd[5]; out_real[s + 4] = fr[5] * t; out_imag[s + 4] = fi[5] * t; }
+                { const float t = sd[7]; out_real[s + 5] = fr[7] * t; out_imag[s + 5] = fi[7] * t; }
+                /* clang-format on */
+                s += 6;
+            }
+        } else if (period == 4 && nvalid == 2) {
+            for (int base = 0; base < plan->Nfft; base += 4) {
+                const float *fr = workspace->fft_real + base;
+                const float *fi = workspace->fft_imag + base;
+                const float *sd = plan->slot_deconv + base;
+                {
+                    const float t = sd[0];
+                    out_real[s] = fr[0] * t;
+                    out_imag[s] = fi[0] * t;
+                }
+                {
+                    const float t = sd[3];
+                    out_real[s + 1] = fr[3] * t;
+                    out_imag[s + 1] = fi[3] * t;
+                }
+                s += 2;
+            }
+        } else {
+            for (int base = 0; base < plan->Nfft; base += period) {
+                const float *fr = workspace->fft_real + base;
+                const float *fi = workspace->fft_imag + base;
+                const float *sd = plan->slot_deconv + base;
+                for (int k = 0; k < nvalid; ++k) {
+                    const int src = (int)plan->slot_offsets[k];
+                    const float t = sd[src];
+                    out_real[s] = fr[src] * t;
+                    out_imag[s] = fi[src] * t;
+                    ++s;
+                }
+            }
+        }
+        return;
+    }
+
     nufft1_nanofft_execute(plan->nanofft_p, workspace->fft_real, workspace->fft_imag, workspace->cobra_real, workspace->cobra_imag);
 
     int split = plan->output_shift;
@@ -1182,6 +1315,72 @@ void nufft1_execute(const nufft1_workspace *workspace, const float *y_real, cons
     }
 }
 
+void nufft1_execute(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor) {
+    nufft1_execute_impl(workspace, y_real, y_imag, out_real, out_imag, freq_factor, false);
+}
+
+int nufft1_workspace_slots_ok(const nufft1_workspace *workspace) { return (workspace && workspace->plan) ? workspace->plan->slots_ok : 0; }
+
+void nufft1_execute_slots(const nufft1_workspace *workspace, const float *y_real, const float *y_imag, float *out_real, float *out_imag, int freq_factor) {
+    nufft1_execute_impl(workspace, y_real, y_imag, out_real, out_imag, freq_factor, true);
+}
+
+/* Expand a compact (kept slots only, Nout entries) result array back into the
+ * zero-padded slot layout (Nfft entries) so that the result permutation is a
+ * plain power-of-two bit reversal. */
+static void nufft1_expand_slots(const nufft1_plan *plan, const float *compact, float *padded) {
+    memset(padded, 0, (size_t)plan->Nfft * sizeof(float));
+    int s = 0;
+    for (int base = 0; base < plan->Nfft; base += plan->slot_period) {
+        for (int k = 0; k < plan->slot_per_cycle; ++k) padded[base + (int)plan->slot_offsets[k]] = compact[s++];
+    }
+}
+
+/* Bin order -> grid order for the first `count` grid points: the rotation the
+ * frequency-ordered output applies by its two-run read, applied to results. */
+static void nufft1_rotate_to_grid(const nufft1_plan *plan, const float *bin_order, float *dst, int count) {
+    const int split = plan->output_shift;
+    const int first_bin = plan->Nfft - split;
+    int first = count < split ? count : split;
+    for (int k = 0; k < first; ++k) dst[k] = bin_order[first_bin + k];
+    for (int k = first; k < count; ++k) dst[k] = bin_order[k - split];
+}
+
+void nufft1_results_to_grid(const nufft1_workspace *workspace, const float *slot_values, float *grid_out, int count) {
+    if (!workspace || !workspace->plan || !slot_values || !grid_out || count <= 0) return;
+    const nufft1_plan *plan = workspace->plan;
+    if (!plan->slots_ok || count > plan->slot_len) return;
+    float *padded = workspace->fft_real; /* dead between two execute calls */
+    float *dummy = workspace->fft_imag;
+    nufft1_expand_slots(plan, slot_values, padded);
+    bit_reverse_permutation(padded, dummy, (uint32_t)plan->Nfft, workspace->cobra_real, workspace->cobra_imag);
+    nufft1_rotate_to_grid(plan, padded, grid_out, count);
+}
+
+void nufft1_results_to_grid_pair(const nufft1_workspace *workspace, const float *slot_a, const float *slot_b, float *grid_a, float *grid_b, int count) {
+    if (!workspace || !workspace->plan || !slot_a || !slot_b || !grid_a || !grid_b || count <= 0) return;
+    const nufft1_plan *plan = workspace->plan;
+    if (!plan->slots_ok || count > plan->slot_len) return;
+    float *padded_a = workspace->fft_real;
+    float *padded_b = workspace->fft_imag;
+    nufft1_expand_slots(plan, slot_a, padded_a);
+    nufft1_expand_slots(plan, slot_b, padded_b);
+    bit_reverse_permutation(padded_a, padded_b, (uint32_t)plan->Nfft, workspace->cobra_real, workspace->cobra_imag);
+    nufft1_rotate_to_grid(plan, padded_a, grid_a, count);
+    nufft1_rotate_to_grid(plan, padded_b, grid_b, count);
+}
+
+void nufft1_slots_to_grid(const nufft1_workspace *workspace, float *values, int count) {
+    if (!workspace || !workspace->plan || !values || count <= 0) return;
+    const nufft1_plan *plan = workspace->plan;
+    if (!plan->slots_ok || count > plan->slot_len) return;
+    float *padded = workspace->fft_real; /* dead between two execute calls */
+    float *dummy = workspace->fft_imag;
+    nufft1_expand_slots(plan, values, padded);
+    bit_reverse_permutation(padded, dummy, (uint32_t)plan->Nfft, workspace->cobra_real, workspace->cobra_imag);
+    nufft1_rotate_to_grid(plan, padded, values, count);
+}
+
 void nufft1_free_workspace(nufft1_workspace *workspace) {
     if (!workspace) return;
     free(workspace->spread_base_idx);
@@ -1194,6 +1393,7 @@ void nufft1_free_workspace(nufft1_workspace *workspace) {
 void nufft1_free_plan(nufft1_plan *plan) {
     if (!plan) return;
     free(plan->deconv);
+    free(plan->slot_deconv);
     nufft1_nanofft_destroy_plan(plan->nanofft_p);
     free(plan);
 }
